@@ -68,7 +68,7 @@ No special types for:
 
 All computations are either:
 
-- Unary transformations (Operator)
+- Unary transformations (Transformer)
 - Multi-input transformations (Composer)
 
 ---
@@ -109,7 +109,7 @@ Represents:
 
 ---
 
-### 4.2 Operator
+### 4.2 Transformer
 
 Unary transformation:
 
@@ -217,7 +217,7 @@ Researchers can swap components without rewriting pipelines.
 
 - Panel-based computation system
 - DAG execution engine
-- Operator system
+- Transformer system
 - Composer system
 - Backtesting framework
 - Visualization tools
@@ -249,7 +249,7 @@ The long-term goal is to evolve BagelQuant into a unified research operating sys
 BagelQuant Core proposes a unified computational model for quantitative research based on:
 
 - Panels (data abstraction)
-- Operators (unary transformations)
+- Transformers (unary transformations)
 - Composers (multi-input transformations)
 - Graphs (dependency structure)
 

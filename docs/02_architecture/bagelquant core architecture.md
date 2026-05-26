@@ -17,7 +17,7 @@ into a single computational framework.
 At the core of the system are three primitives:
 
 - **Panel**: state container (Time × Assets)
-- **Operator**: unary transformation (P → P)
+- **Transformer**: unary transformation (P → P)
 - **Composer**: multi-input transformation (Pⁿ → P)
 
 All computation is expressed as a Graph of these primitives.
@@ -69,7 +69,7 @@ The Graph consists of three node types:
 #### Panel Node
 Stores data state.
 
-#### Operator Node
+#### Transformer Node
 Unary transformation:
 
 ```text
@@ -117,7 +117,7 @@ Graph is stored as:
 ```python
 Node {
     id: str
-    type: Panel | Operator | Composer
+    type: Panel | Transformer | Composer
     inputs: list[node_id]
     outputs: list[node_id]
     metadata: dict
@@ -136,7 +136,7 @@ The graph must satisfy:
 - All inputs must exist
 - Type compatibility must be valid
 - Composer must have ≥ 1 inputs
-- Operator must have exactly 1 input
+- Transformer must have exactly 1 input
 
 ---
 
@@ -192,7 +192,7 @@ Execution order:
 
 Each node executes as:
 
-- Operator: `f(P)`
+- Transformer: `f(P)`
 - Composer: `f(P1, P2, ..., Pn)`
 
 Output is always a Panel.
@@ -217,7 +217,7 @@ The runtime is responsible for actual computation.
 
 ### 6.1 Responsibilities
 
-- executing operators/composers
+- executing Transformers/composers
 - managing intermediate results
 - handling parallel execution
 - caching results
@@ -302,14 +302,14 @@ No in-place mutation is allowed.
 
 ---
 
-## 9. Operator & Composer Dispatch
+## 9. Transformer & Composer Dispatch
 
 ### 9.1 Registry System
 
-Operators and Composers are registered:
+Transformers and Composers are registered:
 
 ```python
-operator_registry.register("zscore", ZScoreOperator)
+Transformer_registry.register("zscore", ZScoreTransformer)
 composer_registry.register("divide", DivideComposer)
 ```
 
@@ -371,7 +371,7 @@ Initial implementation should support:
 ### Core Features
 
 - Panel abstraction
-- Operator execution
+- Transformer execution
 - Composer execution
 - DAG construction
 - Topological execution
@@ -442,7 +442,7 @@ Engine is independent of domain logic.
 BagelQuant Core architecture defines a unified system for quantitative research based on:
 
 - Panels (data abstraction)
-- Operators (unary transformations)
+- Transformers (unary transformations)
 - Composers (multi-input transformations)
 - Graph (dependency structure)
 - Runtime (execution engine)

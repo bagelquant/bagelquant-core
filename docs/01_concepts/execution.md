@@ -6,7 +6,7 @@ The Execution Model defines how a BagelQuant Graph is computed.
 
 While the Graph defines **what to compute**, the Execution Model defines **how to compute it**.
 
-Execution transforms a declarative DAG into a deterministic sequence of computations over Panels, Operators, and Composers.
+Execution transforms a declarative DAG into a deterministic sequence of computations over Panels, Transformers, and Composers.
 
 ---
 
@@ -46,7 +46,7 @@ Caching
 
 ## Step 1: Graph Construction
 
-Users define a graph using Panels, Operators, and Composers.
+Users define a graph using Panels, Transformers, and Composers.
 
 Example:
 
@@ -152,10 +152,10 @@ Factor B ─┘
 
 Each node is evaluated:
 
-### Operator execution
+### Transformer execution
 
 ```text
-Panel → Operator → Panel
+Panel → Transformer → Panel
 ```
 
 Example:
@@ -427,6 +427,6 @@ Execution logic is independent of graph definition
 
 The Execution Model transforms a BagelQuant Graph into a deterministic computation process.
 
-It ensures that Panels, Operators, and Composers are evaluated in the correct order, efficiently, and reproducibly.
+It ensures that Panels, Transformers, and Composers are evaluated in the correct order, efficiently, and reproducibly.
 
 Through dependency resolution, topological sorting, caching, and incremental computation, BagelQuant enables scalable and modular quantitative research execution.

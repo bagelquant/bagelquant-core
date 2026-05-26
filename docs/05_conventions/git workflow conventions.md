@@ -35,7 +35,7 @@ feature/<short-description>
 ### Examples:
 
 - `feature/panel-core`
-- `feature/operator-system`
+- `feature/Transformer-system`
 - `feature/dag-composer`
 - `feature/execution-engine`
 
@@ -74,7 +74,7 @@ refactor/<short-description>
 ### Examples:
 
 - `refactor/expression-tree`
-- `refactor/operator-api`
+- `refactor/Transformer-api`
 
 ### Rules:
 
@@ -115,7 +115,7 @@ docs/<short-description>
 ### Examples:
 
 - `docs/dag-design`
-- `docs/operator-guide`
+- `docs/Transformer-guide`
 - `docs/composer-tutorial`
 
 # 3. Commit Convention
@@ -143,7 +143,7 @@ We follow **Conventional Commits**:
 ```plaintext
 feat: add DAG-based composer engine
 fix: handle missing panel input
-refactor: simplify operator interface
+refactor: simplify Transformer interface
 docs: update DAG design explanation
 ```
 
@@ -169,7 +169,7 @@ docs: update DAG design explanation
 
 - `[FEAT] Add DAG-based expression system`
 - `[FIX] Resolve panel alignment bug`
-- `[REFACTOR] Simplify operator abstraction`
+- `[REFACTOR] Simplify Transformer abstraction`
 
 ---
 
@@ -218,7 +218,7 @@ A PR must satisfy:
 ### Good:
 
 - DAG node system only
-- Operator abstraction only
+- Transformer abstraction only
 
 ### Bad:
 
@@ -283,9 +283,9 @@ Bad:
 ## 6.2 Be concept-based, not file-based
 
 Good:
-- `feature/operator-system`
+- `feature/Transformer-system`
 Bad:
-- `feature/operator.py-update`
+- `feature/Transformer.py-update`
 
 ---
 

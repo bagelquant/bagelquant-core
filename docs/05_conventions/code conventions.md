@@ -14,7 +14,7 @@ The goal is:
 - Avoid one-liners that hide intent
 
 ## 1.2 Composition-first design
-- Everything should be composable (Panel → Operator → Composer → DAG)
+- Everything should be composable (Panel → Transformer → Composer → DAG)
 - Avoid tightly coupled logic
 
 ## 1.3 Functional mindset (where possible)
@@ -29,7 +29,7 @@ The goal is:
 bagel_factor/
   core/
     panel/
-    operator/
+    Transformer/
     composer/
     dag/
   execution/
@@ -95,7 +95,7 @@ factor()
 Good:
 ```python
 Panel
-Operator
+Transformer
 Composer
 ExpressionNode
 DAGEngine
@@ -120,7 +120,7 @@ class Panel:
 
 ---
 
-## 4.2 Operator (transformation unit)
+## 4.2 Transformer (transformation unit)
 
 Rules:
 - Takes one or more Panels
@@ -128,7 +128,7 @@ Rules:
 - Must be stateless
 
 ```python
-class Operator:
+class Transformer:
     def compute(self, *inputs: Panel) -> Panel:
         raise NotImplementedError
 ```
@@ -138,7 +138,7 @@ class Operator:
 ## 4.3 Composer (composition layer)
 
 Rules:
-- Combines operators into DAG structure
+- Combines Transformers into DAG structure
 - No numeric computation logic inside
 - Only structure definition
 
@@ -147,7 +147,7 @@ Rules:
 ## 4.4 DAG (execution graph)
 
 Rules:
-- Nodes = operators
+- Nodes = Transformers
 - Edges = dependencies
 - Must be acyclic
 
@@ -256,7 +256,7 @@ Rules:
 # 9. Testing Convention
 
 ## 9.1 Unit tests required for:
-- Operator logic
+- Transformer logic
 - DAG execution correctness
 - Evaluation metrics (IC, returns)
 
@@ -264,11 +264,11 @@ Rules:
 ```python
 test_compute_ic_basic()
 test_dag_topological_order()
-test_operator_missing_input()
+test_Transformer_missing_input()
 ```
 
 ## 9.3 Golden rule:
-> Every operator must have at least one test case.
+> Every Transformer must have at least one test case.
 
 ---
 

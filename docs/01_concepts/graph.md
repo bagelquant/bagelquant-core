@@ -7,7 +7,7 @@ A Graph is the core computational structure of BagelQuant.
 Every quantitative workflow in BagelQuant is represented as a Directed Acyclic Graph (DAG) composed of three node types:
 
 - Panel
-- Operator
+- Transformer
 - Composer
 
 The Graph defines:
@@ -133,7 +133,7 @@ They store results.
 
 ---
 
-### Operator
+### Transformer
 
 Unary transformation.
 
@@ -174,7 +174,7 @@ Optimizer
 
 ## Graph Structure
 
-A graph is formed by connecting Panels, Operators, and Composers.
+A graph is formed by connecting Panels, Transformers, and Composers.
 
 Example:
 
@@ -187,7 +187,7 @@ Price (Panel)       |
                     ↓
             BM Ratio (Panel)
                     ↓
-            ZScore (Operator)
+            ZScore (Transformer)
                     ↓
             BM Factor (Panel)
 ```
@@ -231,7 +231,7 @@ Predictions can be converted into portfolio weights.
 ```text
 Prediction (Panel)
       ↓
- Normalize (Operator)
+ Normalize (Transformer)
       ↓
  Portfolio Weights (Panel)
 ```
@@ -253,7 +253,7 @@ Price (Panel)       |
                     ↓
             BM Ratio (Panel)
                     ↓
-            ZScore (Operator)
+            ZScore (Transformer)
                     ↓
             BM Factor (Panel)
                     \
@@ -265,7 +265,7 @@ Price (Panel)       |
                                     ↓
                                 Prediction (Panel)
                                     ↓
-                                Normalize (Operator)
+                                Normalize (Transformer)
                                     ↓
                             Portfolio Weights (Panel)
 ```
@@ -500,7 +500,7 @@ Graphs support incremental and distributed execution.
 
 A Graph is the computational backbone of BagelQuant.
 
-It connects Panels, Operators, and Composers into a Directed Acyclic Graph that represents quantitative research workflows.
+It connects Panels, Transformers, and Composers into a Directed Acyclic Graph that represents quantitative research workflows.
 
 By expressing factors, prediction models, portfolio construction processes, and entire investment strategies as graphs, BagelQuant provides a unified, modular, and reproducible framework for quantitative research.
 

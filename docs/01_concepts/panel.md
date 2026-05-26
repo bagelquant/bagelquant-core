@@ -334,7 +334,7 @@ Panels can be reused across multiple graph branches.
 
 ### Composability
 
-Panels can flow through arbitrary Operators and Composers.
+Panels can flow through arbitrary Transformers and Composers.
 
 ---
 

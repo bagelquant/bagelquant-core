@@ -10,7 +10,7 @@ A Composer combines one or more input Panels into a single output Panel.
 
 Composers represent relationships, interactions, and combinations between Panels.
 
-While Operators perform unary transformations on a single Panel, Composers are responsible for merging information from multiple Panels.
+While Transformers perform unary transformations on a single Panel, Composers are responsible for merging information from multiple Panels.
 
 Composers are used throughout the quantitative investment process:
 
@@ -413,7 +413,7 @@ is a Composer.
 ZScore
 ```
 
-is an Operator.
+is an Transformer.
 
 ---
 
@@ -445,19 +445,19 @@ is a Composer.
 Normalize
 ```
 
-is an Operator.
+is an Transformer.
 
 ---
 
-## Composer vs Operator
+## Composer vs Transformer
 
 A common design question is:
 
-> Should this be an Operator or a Composer?
+> Should this be an Transformer or a Composer?
 
 Rule:
 
-### Operator
+### Transformer
 
 Uses one input Panel.
 
@@ -685,4 +685,4 @@ Composers are multi-input Panel transformations.
 
 They are responsible for combining information, modeling relationships, and constructing higher-level signals from multiple Panels.
 
-Together with Panels and Operators, Composers form the three fundamental primitives of BagelQuant's computational graph model.
+Together with Panels and Transformers, Composers form the three fundamental primitives of BagelQuant's computational graph model.

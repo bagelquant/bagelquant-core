@@ -51,7 +51,7 @@ Panels can represent:
 
 Transformations are represented by two primitives:
 
-#### Operator
+#### Transformer
 
 Unary transformation:
 
@@ -102,10 +102,10 @@ Price (Panel) ───────┘
                     BM Ratio (Panel)
                            │
                            ▼
-                  Z-Score (Operator)
+                  Z-Score (Transformer)
                            │
                            ▼
-               Industry Neutralize (Operator)
+               Industry Neutralize (Transformer)
                            │
                            ▼
                     BM Factor (Panel)
@@ -131,7 +131,7 @@ Quality Factor (Panel) ─────────┤
                       Prediction (Panel)
                                 │
                                 ▼
-                Cap-Weighted Transform (Operator)
+                Cap-Weighted Transform (Transformer)
                                 │
                                 ▼
                   Portfolio Weights (Panel)
@@ -153,7 +153,7 @@ Price (Panel)       |
                     ↓
             BM Ratio (Panel)
                     ↓
-            ZScore (Operator)
+            ZScore (Transformer)
                     ↓
             BM Factor (Panel)
                     \
@@ -165,7 +165,7 @@ Price (Panel)       |
                                     ↓
                                 Prediction (Panel)
                                     ↓
-                                Normalize (Operator)
+                                Normalize (Transformer)
                                     ↓
                             Portfolio Weights (Panel)
 ```
@@ -178,14 +178,14 @@ This unified representation enables:
 - Experiment reproducibility
 - Modular strategy development
 
-> In BagelQuant, factors, predictions, portfolio weights, and even backtest outputs are all Panels connected by Operators and Composers in a single computational graph. Build your research workflow like LEGO bricks, where each component can be reused, recomputed, and reconfigured with ease.
+> In BagelQuant, factors, predictions, portfolio weights, and even backtest outputs are all Panels connected by Transformers and Composers in a single computational graph. Build your research workflow like LEGO bricks, where each component can be reused, recomputed, and reconfigured with ease.
 
 ## Core concepts
 
 You can find core concepts in the documentation:
 
 - [Panel](./docs/01_concepts/panel.md)
-- [Operator](./docs/01_concepts/operator.md)
+- [Transformer](./docs/01_concepts/Transformer.md)
 - [Composer](./docs/01_concepts/composer.md)
 - [Graph](./docs/01_concepts/graph.md)
 - [Execution](./docs/01_concepts/execution.md)
@@ -235,7 +235,7 @@ Current focus:
 
 - Panel abstraction
 - DAG engine
-- Operator system
+- Transformer system
 - Composer system
 - Runtime execution engine
 

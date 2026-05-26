@@ -1,18 +1,18 @@
-# Operator
+# Transformer
 
 ## Overview
 
-An Operator is a unary transformation on a Panel.
+An Transformer is a unary transformation on a Panel.
 
 ```text
-Panel → Operator → Panel
+Panel → Transformer → Panel
 ```
 
-Operators are the fundamental computational building blocks in BagelQuant.
+Transformers are the fundamental computational building blocks in BagelQuant.
 
 They transform a single input Panel into a single output Panel while preserving the Panel abstraction.
 
-Every Operator consumes exactly one Panel and produces exactly one Panel.
+Every Transformer consumes exactly one Panel and produces exactly one Panel.
 
 ---
 
@@ -21,7 +21,7 @@ Every Operator consumes exactly one Panel and produces exactly one Panel.
 Mathematically:
 
 ```text
-Operator : P → P
+Transformer : P → P
 ```
 
 where:
@@ -30,24 +30,24 @@ where:
 P = Panel
 ```
 
-An Operator can be viewed as a function:
+An Transformer can be viewed as a function:
 
 ```python
-output_panel = operator(input_panel)
+output_panel = Transformer(input_panel)
 ```
 
 ---
 
 ## Philosophy
 
-Operators should be:
+Transformers should be:
 
 - Small
 - Reusable
 - Deterministic
 - Composable
 
-Rather than creating large monolithic transformations, complex workflows should be constructed by chaining simple Operators together.
+Rather than creating large monolithic transformations, complex workflows should be constructed by chaining simple Transformers together.
 
 Preferred:
 
@@ -67,7 +67,7 @@ Not preferred:
 FactorNormalizationPipeline
 ```
 
-Small Operators improve:
+Small Transformers improve:
 
 - Transparency
 - Reusability
@@ -79,16 +79,16 @@ Small Operators improve:
 
 ## Characteristics
 
-Every Operator must satisfy the following properties.
+Every Transformer must satisfy the following properties.
 
 ### Single Input
 
-An Operator accepts exactly one input Panel.
+An Transformer accepts exactly one input Panel.
 
 ```text
 Input Panel
       ↓
-   Operator
+   Transformer
       ↓
 Output Panel
 ```
@@ -97,7 +97,7 @@ Output Panel
 
 ### Single Output
 
-An Operator produces exactly one output Panel.
+An Transformer produces exactly one output Panel.
 
 ```text
 Panel → Panel
@@ -107,12 +107,12 @@ Panel → Panel
 
 ### Stateless
 
-Operators should not maintain internal state between executions.
+Transformers should not maintain internal state between executions.
 
 Given the same input:
 
 ```python
-operator(panel)
+Transformer(panel)
 ```
 
 the output should always be identical.
@@ -139,12 +139,12 @@ This property is critical for:
 
 ### Immutable
 
-Operators never modify input Panels.
+Transformers never modify input Panels.
 
 Instead:
 
 ```python
-output_panel = operator(input_panel)
+output_panel = Transformer(input_panel)
 ```
 
 Input Panels remain unchanged.
@@ -237,13 +237,13 @@ Ensures portfolio weights satisfy constraints.
 
 ---
 
-## Operator Categories
+## Transformer Categories
 
-Operators can be grouped into several categories.
+Transformers can be grouped into several categories.
 
 ---
 
-### Time-Series Operators
+### Time-Series Transformers
 
 Operate along the time dimension.
 
@@ -268,7 +268,7 @@ Returns
 
 ---
 
-### Cross-Sectional Operators
+### Cross-Sectional Transformers
 
 Operate across assets at a given timestamp.
 
@@ -291,7 +291,7 @@ Rank
 
 ---
 
-### Statistical Operators
+### Statistical Transformers
 
 Perform statistical transformations.
 
@@ -306,7 +306,7 @@ Transform
 
 ---
 
-### Portfolio Operators
+### Portfolio Transformers
 
 Transform predictions into investable signals.
 
@@ -331,9 +331,9 @@ Weights
 
 ---
 
-## Operator Chains
+## Transformer Chains
 
-Operators are designed to be chained together.
+Transformers are designed to be chained together.
 
 Example:
 
@@ -353,15 +353,15 @@ Each step remains visible and independently testable.
 
 ---
 
-## Operator vs Composer
+## Transformer vs Composer
 
 A common design question is:
 
-> Should this be an Operator or a Composer?
+> Should this be an Transformer or a Composer?
 
 Rule:
 
-### Operator
+### Transformer
 
 Uses exactly one Panel.
 
@@ -402,7 +402,7 @@ Optimizer
 
 ## Dependency Behavior
 
-Operators create edges within the graph.
+Transformers create edges within the graph.
 
 Example:
 
@@ -432,7 +432,7 @@ only downstream nodes are recomputed.
 
 ## Caching
 
-Operators are pure transformations.
+Transformers are pure transformations.
 
 Therefore:
 
@@ -452,7 +452,7 @@ Benefits:
 
 ## Design Guidelines
 
-When creating a new Operator:
+When creating a new Transformer:
 
 ### Keep It Small
 
@@ -478,7 +478,7 @@ Avoid hidden randomness.
 
 ### Keep It Reusable
 
-Operators should solve a single transformation problem.
+Transformers should solve a single transformation problem.
 
 ---
 
@@ -544,7 +544,7 @@ Prediction
 
 ## Summary
 
-Operators are unary Panel transformations.
+Transformers are unary Panel transformations.
 
 ```text
 Panel → Panel
@@ -552,7 +552,7 @@ Panel → Panel
 
 They represent the smallest reusable computational unit in BagelQuant.
 
-Operators are deterministic, stateless, immutable, and composable.
+Transformers are deterministic, stateless, immutable, and composable.
 
-By chaining simple Operators together, complex quantitative research workflows can be expressed as transparent and reusable DAGs.
+By chaining simple Transformers together, complex quantitative research workflows can be expressed as transparent and reusable DAGs.
 

@@ -180,12 +180,49 @@ This unified representation enables:
 
 > In BagelQuant, factors, predictions, portfolio weights, and even backtest outputs are all Panels connected by Transformers and Composers in a single computational graph. Build your research workflow like LEGO bricks, where each component can be reused, recomputed, and reconfigured with ease.
 
+## Quick start
+
+```python
+import pandas as pd
+
+from bagelquant_core import (
+    Div,
+    ExecutionEngine,
+    Graph,
+    Panel,
+    Rank,
+    WeightedSum,
+    ZScore,
+)
+
+price = Panel("price", pd.DataFrame(...))
+book = Panel("book", pd.DataFrame(...))
+quality = Panel("quality", pd.DataFrame(...))
+
+bm_ratio = Div(book, price, name="bm_ratio")
+bm_factor = Rank(ZScore(bm_ratio), name="bm_factor")
+quality_factor = Rank(ZScore(quality), name="quality_factor")
+
+prediction = WeightedSum(bm_factor, quality_factor, weights=[0.5, 0.5], name="prediction")
+signal = Rank(prediction, name="signal")
+
+engine = ExecutionEngine()
+graph = Graph(outputs=[signal])
+result = engine.run(graph)[signal.name]
+```
+
+Run the full example:
+
+```bash
+uv run python -m bagelquant_core.example
+```
+
 ## Core concepts
 
 You can find core concepts in the documentation:
 
 - [Panel](./docs/01_concepts/panel.md)
-- [Transformer](./docs/01_concepts/Transformer.md)
+- [Transformer](./docs/01_concepts/transformer.md)
 - [Composer](./docs/01_concepts/composer.md)
 - [Graph](./docs/01_concepts/graph.md)
 - [Execution](./docs/01_concepts/execution.md)

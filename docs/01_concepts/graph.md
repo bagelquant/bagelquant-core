@@ -496,6 +496,21 @@ Graphs support incremental and distributed execution.
 
 ---
 
+## Graph API (v1)
+
+The reference `Graph` implementation:
+
+- Accepts one or more output nodes
+- Validates cycles and node arity
+- Provides a deterministic topological ordering
+- Exposes a `Graph.spec()` for reproducible metadata
+
+```python
+graph = Graph(outputs=[signal, normalized_signal])
+order = graph.topological_sort()
+spec = graph.spec()
+```
+
 ## Summary
 
 A Graph is the computational backbone of BagelQuant.
@@ -503,4 +518,3 @@ A Graph is the computational backbone of BagelQuant.
 It connects Panels, Transformers, and Composers into a Directed Acyclic Graph that represents quantitative research workflows.
 
 By expressing factors, prediction models, portfolio construction processes, and entire investment strategies as graphs, BagelQuant provides a unified, modular, and reproducible framework for quantitative research.
-

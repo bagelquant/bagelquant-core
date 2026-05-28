@@ -389,6 +389,15 @@ Execution is procedural.
 
 ---
 
+## Execution Engine API (v1)
+
+The reference implementation provides an `ExecutionEngine` that can run a
+single node or a full `Graph`. It executes nodes in topological order,
+aligns multi-input frames with `Panel.align_frames`, and caches results
+using a deterministic node signature + input hashes.
+
+Scheduling in v1 is sequential; parallel scheduling is a future extension.
+
 ## Design Goals
 
 The execution system is designed to achieve:

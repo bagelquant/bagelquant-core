@@ -309,8 +309,8 @@ No in-place mutation is allowed.
 Transformers and Composers are registered:
 
 ```python
-Transformer_registry.register("zscore", ZScoreTransformer)
-composer_registry.register("divide", DivideComposer)
+TRANSFORMER_REGISTRY.add("zscore", ZScore)
+COMPOSER_REGISTRY.add("divide", Div)
 ```
 
 ---

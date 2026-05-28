@@ -272,6 +272,15 @@ The system must resolve:
 
 before computation.
 
+In the reference implementation, alignment is handled via:
+
+```python
+Panel.align_frames(...)
+```
+
+By default, inputs are aligned on the intersection of index and columns
+(`join="inner"`).
+
 ---
 
 ## Invariants

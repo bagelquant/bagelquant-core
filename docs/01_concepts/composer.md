@@ -39,4 +39,5 @@ def average(*frames: pd.DataFrame) -> pd.DataFrame:
 combined = average(value, quality, momentum, name="combined")
 ```
 
-The engine aligns input panel data before executing a composer.
+The internal execution runtime aligns input panel data before executing a
+composer.

@@ -11,8 +11,6 @@ construction, and backtesting.
 - `Graph`: a lazy logic chain that transforms or combines panels.
 - Transformer function: unary logic, `Panel | Graph -> Graph`.
 - Composer function: multi-input logic, `(Panel | Graph, ...) -> Graph`.
-- `ExecutionEngine`: evaluates graphs, caches panels, and populates
-  `Graph.output`.
 
 Raw data enters the system as a `Panel`. Derived objects such as factors,
 predictions, and portfolio weights are graphs until execution materializes
@@ -85,20 +83,10 @@ prediction_panel = prediction.output
 signal_panel = signal.output
 ```
 
-Use an explicit engine to reuse the same cache across related runs:
-
-```python
-from bagelquant_core import ExecutionEngine
-
-engine = ExecutionEngine()
-signal.compute(engine)
-another_signal.compute(engine)
-```
-
 Run the complete example:
 
 ```bash
-uv run python -m bagelquant_core.example
+uv run python example.py
 ```
 
 ## Documentation

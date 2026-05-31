@@ -42,7 +42,7 @@ Operation configuration must be deterministic and serializable.
 Panel inputs
     -> operation functions
     -> Graph logic nodes
-    -> execution engine
+    -> internal execution runtime
     -> cached Panel outputs
 ```
 

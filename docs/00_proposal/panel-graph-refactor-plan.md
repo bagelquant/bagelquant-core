@@ -14,7 +14,7 @@ factor_panel = some_factor.output
 ## Public Boundary
 
 ```python
-from bagelquant_core import ExecutionEngine, Graph, Panel
+from bagelquant_core import Graph, Panel
 from bagelquant_core.composer import composer
 from bagelquant_core.transformer import transformer
 ```
@@ -22,7 +22,7 @@ from bagelquant_core.transformer import transformer
 - `Panel` is the explicit data input and output object.
 - `Graph` stores lazy logic chains.
 - Decorated transformer and composer functions build graphs.
-- `ExecutionEngine` evaluates graphs and caches output panels.
+- `Graph.compute()` evaluates graphs and materializes output panels.
 
 ## Completed Refactor
 
@@ -47,10 +47,9 @@ from bagelquant_core.transformer import transformer
 
 ### Runtime Cache
 
-- The engine caches computed panels.
+- The internal execution runtime caches computed panels during a run.
 - Computing a downstream graph populates outputs for evaluated intermediate
   graphs.
-- A shared engine reuses cached panels across related runs.
 
 ## Future Work
 

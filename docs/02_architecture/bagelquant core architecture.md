@@ -14,7 +14,7 @@ Transformer and Composer functions
 Graph logic chains
     |
     v
-ExecutionEngine
+Internal execution runtime
     |
     v
 Cached Panel outputs
@@ -91,13 +91,12 @@ Users do not construct internal nodes directly.
 
 ## Execution
 
-The engine recursively evaluates dependencies, aligns multi-input frames,
-computes deterministic cache keys, caches output panels, and updates node
-outputs.
+Calling `Graph.compute()` invokes an internal runtime that recursively
+evaluates dependencies, aligns multi-input frames, computes deterministic
+cache keys, caches output panels during execution, and updates node outputs.
 
 ```python
-engine = ExecutionEngine()
-signal.compute(engine)
+signal.compute()
 panel = signal.output
 ```
 

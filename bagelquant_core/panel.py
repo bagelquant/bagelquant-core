@@ -17,14 +17,17 @@ from .node import Node
 class Panel(Node):
     """
     Immutable data container and leaf node in the DAG.
+
+    Panels are the explicit data boundary of BagelQuant. Users create Panels
+    from DataFrames and graph execution also produces Panels.
     """
 
     node_type = "panel"
 
     def __init__(
         self,
-        name: str,
         data: pd.DataFrame,
+        name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(name=name, metadata=metadata)
@@ -37,6 +40,10 @@ class Panel(Node):
 
     def compute(self) -> pd.DataFrame:
         return self._data
+
+    @property
+    def output(self) -> "Panel":
+        return self
 
     @property
     def data(self) -> pd.DataFrame:

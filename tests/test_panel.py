@@ -2,27 +2,27 @@ import pandas as pd
 import pytest
 
 from bagelquant_core import Panel
+from bagelquant_core.composer import add
 
 
 def test_panel_rejects_non_numeric_data() -> None:
     data = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
     with pytest.raises(TypeError):
-        Panel("bad", data)
+        Panel(data, name="bad")
 
 
-def test_panel_align_inner() -> None:
-    left = pd.DataFrame(
-        {"a": [1, 2], "b": [3, 4]},
-        index=pd.Index([1, 2], name="date"),
+def test_composer_aligns_panel_inputs_on_intersection() -> None:
+    left = Panel(
+        pd.DataFrame({"a": [1, 2], "b": [3, 4]}, index=[1, 2]),
+        name="left",
     )
-    right = pd.DataFrame(
-        {"b": [5, 6], "c": [7, 8]},
-        index=pd.Index([2, 3], name="date"),
+    right = Panel(
+        pd.DataFrame({"b": [5, 6], "c": [7, 8]}, index=[2, 3]),
+        name="right",
     )
 
-    aligned_left, aligned_right = Panel.align_frames(left, right, join="inner")
+    result = add(left, right).compute()
 
-    assert list(aligned_left.index) == [2]
-    assert list(aligned_left.columns) == ["b"]
-    assert list(aligned_right.index) == [2]
-    assert list(aligned_right.columns) == ["b"]
+    assert list(result.data.index) == [2]
+    assert list(result.data.columns) == ["b"]
+    assert result.data.loc[2, "b"] == 9

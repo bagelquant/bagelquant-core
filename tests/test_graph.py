@@ -1,10 +1,11 @@
 import pandas as pd
 import pytest
 
-from bagelquant_core.graph import Graph, GraphValidationError
+from bagelquant_core import ExecutionEngine, Graph, Panel
+from bagelquant_core.composer import composer
+from bagelquant_core.graph import GraphValidationError
 from bagelquant_core.node import Node
-from bagelquant_core.panel import Panel
-from bagelquant_core.transformer import Rank
+from bagelquant_core.transformer import rank, transformer, zscore
 
 
 class DummyNode(Node):
@@ -22,15 +23,29 @@ class DummyNode(Node):
         return pd.DataFrame()
 
 
-def test_graph_topological_sort() -> None:
-    data = pd.DataFrame({"a": [1, 2]})
-    panel = Panel("price", data)
-    node = Rank(panel, name="ranked")
-    graph = Graph(outputs=[node])
+@transformer
+def double(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame * 2
 
-    ordered = graph.topological_sort()
-    assert ordered[0] is panel
-    assert ordered[-1] is node
+
+@transformer
+def scale(frame: pd.DataFrame, *, factor: int) -> pd.DataFrame:
+    return frame * factor
+
+
+@composer
+def sum_frames(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
+    return lhs + rhs
+
+
+def test_graph_topological_sort() -> None:
+    price = Panel(pd.DataFrame({"a": [1, 2]}), name="price")
+    ranked = rank(price, name="ranked")
+
+    ordered = ranked.topological_sort()
+
+    assert ordered[0] is price
+    assert ordered[-1].name == "ranked"
 
 
 def test_graph_detects_cycle() -> None:
@@ -39,4 +54,44 @@ def test_graph_detects_cycle() -> None:
     node_a._parent = node_b
 
     with pytest.raises(GraphValidationError):
-        Graph(outputs=[node_a])
+        Graph._from_nodes((node_a,))
+
+
+def test_graph_supports_user_defined_function_operations() -> None:
+    left = Panel(pd.DataFrame({"a": [1, 2]}), name="left")
+    right = Panel(pd.DataFrame({"a": [10, 20]}), name="right")
+
+    doubled = double(left, name="doubled")
+    combined = sum_frames(doubled, right, name="combined")
+
+    assert combined.compute().data["a"].tolist() == [12, 24]
+
+
+def test_user_defined_transformer_config_is_in_graph_spec() -> None:
+    price = Panel(pd.DataFrame({"a": [1, 2]}), name="price")
+
+    scaled = scale(price, factor=3, name="scaled")
+
+    assert scaled.spec().nodes[-1].config["factor"] == 3
+
+
+def test_zscore_constant_cross_section_does_not_return_infinity() -> None:
+    constant = Panel(pd.DataFrame({"a": [1.0], "b": [1.0]}), name="constant")
+
+    result = zscore(constant).compute()
+
+    assert result.data.isna().all(axis=None)
+
+
+def test_execution_populates_intermediate_graph_outputs() -> None:
+    price = Panel(pd.DataFrame({"a": [1, 2]}), name="price")
+    doubled = double(price, name="doubled")
+    final = scale(doubled, factor=3, name="final")
+
+    with pytest.raises(RuntimeError):
+        _ = doubled.output
+
+    final.compute(ExecutionEngine())
+
+    assert doubled.output.data["a"].tolist() == [2, 4]
+    assert final.output.data["a"].tolist() == [6, 12]

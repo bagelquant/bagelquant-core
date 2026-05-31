@@ -1,7 +1,7 @@
 [project]
 name = "bagelquant-core"
 version = "0.1.0"
-description = "Add your description here"
+description = "Composable panel data and graph logic for quantitative research"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

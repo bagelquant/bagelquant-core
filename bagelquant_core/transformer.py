@@ -1,81 +1,142 @@
 """
-Transformer Module
+Unary graph transformations.
 
-Key concept in bagelquant-core, see docs/01_concepts/transformer.md for more details.
+Use ``@transformer`` to turn a DataFrame function into a public function that
+accepts a Panel or Graph and returns a lazy Graph.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Any, Mapping
+from collections.abc import Callable
+from functools import update_wrapper
+from itertools import count
+from typing import TYPE_CHECKING, Any, Mapping
 
 import pandas as pd
 
 from .node import Node
+from .panel import Panel
 from .registry import Registry
 
-TRANSFORMER_REGISTRY: Registry["Transformer"] = Registry("transformer")
+if TYPE_CHECKING:
+    from .graph import Graph
+
+TRANSFORMER_REGISTRY: Registry["TransformerFunction"] = Registry("transformer")
 
 
-class Transformer(Node, ABC):
-    """
-    Unary transformations of panels.
+class TransformerFunction:
+    """Callable graph builder created by the ``@transformer`` decorator."""
 
-    1 input -> 1 output
-    """
+    def __init__(
+        self,
+        operation: Callable[..., pd.DataFrame],
+        *,
+        registry_name: str | None = None,
+    ) -> None:
+        self.operation = operation
+        self.registry_name = registry_name or _operation_name(operation)
+        self.display_name = operation.__name__
+        self._counter = count(1)
+        update_wrapper(self, operation)
 
+    def __call__(
+        self,
+        source: "Panel | Graph",
+        *,
+        name: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        **config: Any,
+    ) -> "Graph":
+        from .graph import Graph
+
+        return Graph._from_nodes(
+            (
+                _TransformerNode(
+                    parent=_as_node(source),
+                    operation=self,
+                    config=config,
+                    name=name or f"{self.display_name}_{next(self._counter)}",
+                    metadata=metadata,
+                ),
+            )
+        )
+
+
+class _TransformerNode(Node):
     node_type = "transformer"
 
     def __init__(
         self,
         parent: Node,
-        name: str | None = None,
+        operation: TransformerFunction,
+        config: Mapping[str, Any],
+        name: str,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(name=name, metadata=metadata)
         self._parent = parent
+        self._operation = operation
+        self._config = dict(config)
 
     @property
     def parents(self) -> tuple[Node, ...]:
         return (self._parent,)
 
-    @abstractmethod
-    def compute(self, x: pd.DataFrame) -> pd.DataFrame:
-        ...
-
-
-@TRANSFORMER_REGISTRY.register("rank")
-class Rank(Transformer):
-    def compute(self, x: pd.DataFrame) -> pd.DataFrame:
-        return x.rank(axis=1, pct=True)
-
-
-@TRANSFORMER_REGISTRY.register("zscore")
-class ZScore(Transformer):
-    def compute(self, x: pd.DataFrame) -> pd.DataFrame:
-        mean = x.mean(axis=1)
-        std = x.std(axis=1)
-        return x.sub(mean, axis=0).div(std, axis=0)
-
-
-@TRANSFORMER_REGISTRY.register("winsorize")
-class Winsorize(Transformer):
-    def __init__(
-        self,
-        parent: Node,
-        lower: float = 0.01,
-        upper: float = 0.99,
-        name: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        super().__init__(parent=parent, name=name, metadata=metadata)
-        self.lower = lower
-        self.upper = upper
-
-    def compute(self, x: pd.DataFrame) -> pd.DataFrame:
-        lower = x.quantile(self.lower, axis=1)
-        upper = x.quantile(self.upper, axis=1)
-        return x.clip(lower=lower, upper=upper, axis=0)
+    def compute(self, frame: pd.DataFrame) -> pd.DataFrame:
+        return self._operation.operation(frame, **self._config)
 
     def config(self) -> Mapping[str, Any]:
-        return {"lower": self.lower, "upper": self.upper}
+        return {
+            "transformer": _operation_name(self._operation.operation),
+            **self._config,
+        }
+
+
+def transformer(
+    operation: Callable[..., pd.DataFrame],
+) -> TransformerFunction:
+    """Decorate a DataFrame function as a graph-building transformer."""
+
+    wrapped = TransformerFunction(operation)
+    TRANSFORMER_REGISTRY.add(wrapped.registry_name, wrapped)
+    return wrapped
+
+
+def _as_node(source: "Panel | Graph") -> Node:
+    from .graph import Graph
+
+    if isinstance(source, Panel):
+        return source
+    if isinstance(source, Graph):
+        return source._single_output()
+    raise TypeError("Transformer expects a Panel or Graph")
+
+
+def _operation_name(operation: Callable[..., Any]) -> str:
+    module = getattr(operation, "__module__", "")
+    qualname = getattr(operation, "__qualname__", repr(operation))
+    return f"{module}.{qualname}" if module else qualname
+
+
+@transformer
+def rank(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame.rank(axis=1, pct=True)
+
+
+@transformer
+def zscore(frame: pd.DataFrame) -> pd.DataFrame:
+    mean = frame.mean(axis=1)
+    std = frame.std(axis=1).replace(0, float("nan"))
+    return frame.sub(mean, axis=0).div(std, axis=0)
+
+
+@transformer
+def winsorize(
+    frame: pd.DataFrame,
+    *,
+    lower: float = 0.01,
+    upper: float = 0.99,
+) -> pd.DataFrame:
+    lower_bound = frame.quantile(lower, axis=1)
+    upper_bound = frame.quantile(upper, axis=1)
+    return frame.clip(lower=lower_bound, upper=upper_bound, axis=0)

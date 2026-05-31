@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from .node import Node, NodeSpec
+
+if TYPE_CHECKING:
+    from .execution import ExecutionEngine
+    from .panel import Panel
 
 
 class GraphValidationError(ValueError):
@@ -17,12 +21,39 @@ class GraphSpec:
 
 
 class Graph:
-    def __init__(self, outputs: Sequence[Node]) -> None:
-        if not outputs:
-            raise ValueError("Graph requires at least one output node")
-        self._outputs = tuple(outputs)
+    """
+    Public graph expression API.
+
+    Graphs represent lazy logic chains. Panels are explicit data inputs and
+    execution outputs.
+    """
+
+    def __init__(
+        self,
+        *,
+        outputs: Sequence["Graph"] | None = None,
+        _nodes: Sequence[Node] | None = None,
+    ) -> None:
+        sources = sum(value is not None for value in (outputs, _nodes))
+        if sources != 1:
+            raise ValueError("Graph requires exactly one of outputs or _nodes")
+
+        if outputs is not None:
+            if not outputs:
+                raise ValueError("Graph requires at least one output")
+            self._outputs = tuple(graph._single_output() for graph in outputs)
+        else:
+            assert _nodes is not None
+            if not _nodes:
+                raise ValueError("Graph requires at least one output")
+            self._outputs = tuple(_nodes)
+
         self._nodes = self._collect_nodes(self._outputs)
         self.validate()
+
+    @classmethod
+    def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph":
+        return cls(_nodes=nodes)
 
     @property
     def outputs(self) -> tuple[Node, ...]:
@@ -31,6 +62,31 @@ class Graph:
     @property
     def nodes(self) -> tuple[Node, ...]:
         return self._nodes
+
+    @property
+    def name(self) -> str:
+        return self._single_output().name
+
+    @property
+    def output(self) -> "Panel | Mapping[str, Panel]":
+        if len(self._outputs) == 1:
+            return self._outputs[0].output
+        return {node.name: node.output for node in self._outputs}
+
+    def compute(
+        self,
+        engine: "ExecutionEngine | None" = None,
+    ) -> "Panel | Mapping[str, Panel]":
+        if engine is None:
+            from .execution import ExecutionEngine
+
+            engine = ExecutionEngine()
+        return engine.run(self)
+
+    def _single_output(self) -> Node:
+        if len(self._outputs) != 1:
+            raise ValueError("Operation requires a Graph with exactly one output")
+        return self._outputs[0]
 
     def _collect_nodes(self, outputs: Iterable[Node]) -> tuple[Node, ...]:
         seen: set[int] = set()

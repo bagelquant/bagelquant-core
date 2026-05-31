@@ -3,11 +3,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from itertools import count
-from typing import Any, ClassVar, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 import pandas as pd
 
 from .hashing import hash_mapping
+
+if TYPE_CHECKING:
+    from .panel import Panel
 
 _NAME_COUNTERS: dict[type, count] = {}
 
@@ -36,6 +39,7 @@ class Node(ABC):
     ) -> None:
         self.name = name or _next_default_name(self.__class__)
         self.metadata = dict(metadata or {})
+        self._output: Panel | None = None
 
     @property
     @abstractmethod
@@ -48,6 +52,15 @@ class Node(ABC):
 
     def config(self) -> Mapping[str, Any]:
         return {}
+
+    @property
+    def output(self) -> "Panel":
+        if self._output is None:
+            raise RuntimeError(f"Node '{self.name}' has not been executed")
+        return self._output
+
+    def set_output(self, output: "Panel") -> None:
+        self._output = output
 
     def signature(self) -> str:
         payload = {

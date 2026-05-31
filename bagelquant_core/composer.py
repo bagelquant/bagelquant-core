@@ -1,116 +1,150 @@
 """
-Composer Module
+Multi-input graph compositions.
 
-Key concept in bagelquant-core, see docs/01_concepts/composer.md for more details.
+Use ``@composer`` to turn a DataFrame function into a public function that
+accepts Panel or Graph inputs and returns a lazy Graph.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Any, Mapping, Sequence
+from collections.abc import Callable, Sequence
+from functools import update_wrapper
+from itertools import count
+from typing import TYPE_CHECKING, Any, Mapping
 
 import pandas as pd
 
 from .node import Node
+from .panel import Panel
 from .registry import Registry
 
-COMPOSER_REGISTRY: Registry["Composer"] = Registry("composer")
+if TYPE_CHECKING:
+    from .graph import Graph
+
+COMPOSER_REGISTRY: Registry["ComposerFunction"] = Registry("composer")
 
 
-class Composer(Node, ABC):
-    """
-    Multi-input combination.
-
-    N inputs -> 1 output (N >= 2)
-    """
-
-    node_type = "composer"
-    arity: int | None = None
+class ComposerFunction:
+    """Callable graph builder created by the ``@composer`` decorator."""
 
     def __init__(
         self,
-        *parents: Node,
+        operation: Callable[..., pd.DataFrame],
+        *,
+        registry_name: str | None = None,
+    ) -> None:
+        self.operation = operation
+        self.registry_name = registry_name or _operation_name(operation)
+        self.display_name = operation.__name__
+        self._counter = count(1)
+        update_wrapper(self, operation)
+
+    def __call__(
+        self,
+        *sources: "Panel | Graph",
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        if len(parents) < 1:
-            raise ValueError("Composer requires at least one parent")
-        if self.arity is not None and len(parents) != self.arity:
-            raise ValueError(
-                f"{self.__class__.__name__} expects {self.arity} parents, "
-                f"got {len(parents)}"
-            )
+        **config: Any,
+    ) -> "Graph":
+        from .graph import Graph
 
+        if not sources:
+            raise ValueError("Composer requires at least one Panel or Graph")
+        return Graph._from_nodes(
+            (
+                _ComposerNode(
+                    parents=tuple(_as_node(source) for source in sources),
+                    operation=self,
+                    config=config,
+                    name=name or f"{self.display_name}_{next(self._counter)}",
+                    metadata=metadata,
+                ),
+            )
+        )
+
+
+class _ComposerNode(Node):
+    node_type = "composer"
+
+    def __init__(
+        self,
+        parents: tuple[Node, ...],
+        operation: ComposerFunction,
+        config: Mapping[str, Any],
+        name: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(name=name, metadata=metadata)
-        self._parents = tuple(parents)
+        self._parents = parents
+        self._operation = operation
+        self._config = dict(config)
 
     @property
     def parents(self) -> tuple[Node, ...]:
         return self._parents
 
-    @abstractmethod
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        ...
-
-
-@COMPOSER_REGISTRY.register("add")
-class Add(Composer):
-    arity = 2
-
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        lhs, rhs = inputs
-        return lhs + rhs
-
-
-@COMPOSER_REGISTRY.register("sub")
-class Sub(Composer):
-    arity = 2
-
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        lhs, rhs = inputs
-        return lhs - rhs
-
-
-@COMPOSER_REGISTRY.register("mul")
-class Mul(Composer):
-    arity = 2
-
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        lhs, rhs = inputs
-        return lhs * rhs
-
-
-@COMPOSER_REGISTRY.register("div")
-class Div(Composer):
-    arity = 2
-
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        lhs, rhs = inputs
-        return lhs / rhs
-
-
-@COMPOSER_REGISTRY.register("weighted_sum")
-class WeightedSum(Composer):
-    arity = None  # dynamic arity
-
-    def __init__(
-        self,
-        *parents: Node,
-        weights: Sequence[float],
-        name: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        self.weights = tuple(weights)
-        super().__init__(*parents, name=name, metadata=metadata)
-
-        if len(self.weights) != len(self._parents):
-            raise ValueError("weights mismatch")
-
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        output = pd.DataFrame(0, index=inputs[0].index, columns=inputs[0].columns)
-        for input_frame, weight in zip(inputs, self.weights):
-            output += input_frame * weight
-        return output
+    def compute(self, *frames: pd.DataFrame) -> pd.DataFrame:
+        return self._operation.operation(*frames, **self._config)
 
     def config(self) -> Mapping[str, Any]:
-        return {"weights": list(self.weights)}
+        return {
+            "composer": _operation_name(self._operation.operation),
+            **self._config,
+        }
+
+
+def composer(operation: Callable[..., pd.DataFrame]) -> ComposerFunction:
+    """Decorate a DataFrame function as a graph-building composer."""
+
+    wrapped = ComposerFunction(operation)
+    COMPOSER_REGISTRY.add(wrapped.registry_name, wrapped)
+    return wrapped
+
+
+def _as_node(source: "Panel | Graph") -> Node:
+    from .graph import Graph
+
+    if isinstance(source, Panel):
+        return source
+    if isinstance(source, Graph):
+        return source._single_output()
+    raise TypeError("Composer expects Panel or Graph inputs")
+
+
+def _operation_name(operation: Callable[..., Any]) -> str:
+    module = getattr(operation, "__module__", "")
+    qualname = getattr(operation, "__qualname__", repr(operation))
+    return f"{module}.{qualname}" if module else qualname
+
+
+@composer
+def add(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
+    return lhs + rhs
+
+
+@composer
+def sub(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
+    return lhs - rhs
+
+
+@composer
+def mul(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
+    return lhs * rhs
+
+
+@composer
+def div(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
+    return lhs / rhs
+
+
+@composer
+def weighted_sum(
+    *frames: pd.DataFrame,
+    weights: Sequence[float],
+) -> pd.DataFrame:
+    if len(weights) != len(frames):
+        raise ValueError("weights mismatch")
+    output = pd.DataFrame(0, index=frames[0].index, columns=frames[0].columns)
+    for frame, weight in zip(frames, weights):
+        output += frame * weight
+    return output

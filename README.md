@@ -1,286 +1,116 @@
-# BagelQuant 
+# BagelQuant
 
-> Build quantitative research systems like LEGO bricks.
+> Build quantitative research systems from panels and reusable graph logic.
 
-BagelQuant is a composable framework for quantitative research, portfolio construction, and backtesting.
+BagelQuant is a composable framework for quantitative research, portfolio
+construction, and backtesting.
 
-It provides a unified way to represent data, features, alpha signals, predictions, and portfolio weights as reusable building blocks that can be composed into directed acyclic graphs (DAGs).
+## Core Model
 
-Instead of treating factor research, signal generation, portfolio construction, and backtesting as separate workflows, BagelQuant models them as a single computational graph.
+- `Panel`: immutable numeric data indexed by time and asset.
+- `Graph`: a lazy logic chain that transforms or combines panels.
+- Transformer function: unary logic, `Panel | Graph -> Graph`.
+- Composer function: multi-input logic, `(Panel | Graph, ...) -> Graph`.
+- `ExecutionEngine`: evaluates graphs, caches panels, and populates
+  `Graph.output`.
 
-## Why BagelQuant?
+Raw data enters the system as a `Panel`. Derived objects such as factors,
+predictions, and portfolio weights are graphs until execution materializes
+their output panels.
 
-Quantitative research workflows are often fragmented.
-
-A typical pipeline may involve:
-
-- Market data processing
-- Feature engineering
-- Alpha research
-- Signal generation
-- Portfolio construction
-- Backtesting
-- Performance analysis
-
-These stages are usually implemented as disconnected scripts, notebooks, and libraries.
-
-BagelQuant aims to unify them into a single composable framework.
-
-## Core Philosophy
-
-Three principles drive the design:
-
-### 1. Everything is a Panel
-
-A Panel is a two-dimensional matrix:
-
-- Index → Time
-- Columns → Assets
-- Values → Numeric data
-
-Panels can represent:
-
-- Prices
-- Returns
-- Features
-- Factors/Alphas
-- Predictions
-- Portfolio weights
-
-### 2. Everything is a Transformation
-
-Transformations are represented by two primitives:
-
-#### Transformer
-
-Unary transformation:
-
-```text
-Panel → Panel
-```
-
-Examples:
-
-- Rank
-- Z-score
-- Rolling Mean
-- Demean
-- Volatility Scaling
-
-#### Composer
-
-Multi-input transformation:
-
-```text
-(Panel₁, Panel₂, ..., Panelₙ) → Panel
-```
-
-Examples:
-
-- Linear models
-- Machine learning models
-- Alpha combination
-- Portfolio optimization
-- Signal aggregation
-
-### 3. Everything is a DAG
-
-BagelQuant represents quantitative workflows as directed acyclic graphs (DAGs).
-
-A DAG is not limited to feature engineering. The same abstraction can be used for factor construction, alpha modeling, portfolio construction, and backtesting.
-
-#### Example 1: Factor Construction
-
-Book-to-Market (BM) factor can be represented as a DAG:
-
-```text
-Book Value (Panel) ──┐
-                     ├── Divide (Composer)
-Price (Panel) ───────┘
-                           │
-                           ▼
-                    BM Ratio (Panel)
-                           │
-                           ▼
-                  Z-Score (Transformer)
-                           │
-                           ▼
-               Industry Neutralize (Transformer)
-                           │
-                           ▼
-                    BM Factor (Panel)
-```
-
-
-This workflow combines raw accounting and market data into a normalized cross-sectional factor.
-
-### Example 2: Portfolio Construction
-
-Portfolio construction can be represented using exactly the same DAG abstraction:
-
-
-```text
-BM Factor (Panel) ──────────────┐
-ROE Factor (Panel) ─────────────┤
-Momentum Factor (Panel) ────────┤
-Quality Factor (Panel) ─────────┤
-                                ▼
-                     Neural Network (Composer)
-                                │
-                                ▼
-                      Prediction (Panel)
-                                │
-                                ▼
-                Cap-Weighted Transform (Transformer)
-                                │
-                                ▼
-                  Portfolio Weights (Panel)
-```
-
-Here, multiple factors are combined into a prediction model and transformed into investable portfolio weights.
-
-
-### Example 3: End-to-End Research Pipeline
-
-Entire quantitative research pipelines can be represented as a single graph:
-
-```text
-Book Value (Panel)
-          \
-           Divide (Composer)
-          /         |
-Price (Panel)       |
-                    ↓
-            BM Ratio (Panel)
-                    ↓
-            ZScore (Transformer)
-                    ↓
-            BM Factor (Panel)
-                    \
-                     \
-  ROE Factor (Panel)────────────── OLS (Composer)
-                     /              |
-                    /               |
-  Momentum Factor (Panel)           |
-                                    ↓
-                                Prediction (Panel)
-                                    ↓
-                                Normalize (Transformer)
-                                    ↓
-                            Portfolio Weights (Panel)
-```
-
-This unified representation enables:
-
-- Reusable research components
-- Dependency tracking
-- Incremental recomputation
-- Experiment reproducibility
-- Modular strategy development
-
-> In BagelQuant, factors, predictions, portfolio weights, and even backtest outputs are all Panels connected by Transformers and Composers in a single computational graph. Build your research workflow like LEGO bricks, where each component can be reused, recomputed, and reconfigured with ease.
-
-## Quick start
+## Quick Start
 
 ```python
 import pandas as pd
 
-from bagelquant_core import (
-    Div,
-    ExecutionEngine,
-    Graph,
-    Panel,
-    Rank,
-    WeightedSum,
-    ZScore,
+from bagelquant_core import Panel
+from bagelquant_core.composer import div, weighted_sum
+from bagelquant_core.transformer import rank, winsorize, zscore
+
+price = Panel(pd.DataFrame(...), name="price")
+book = Panel(pd.DataFrame(...), name="book")
+quality = Panel(pd.DataFrame(...), name="quality")
+
+bm_ratio = div(book, price, name="bm_ratio")
+bm_factor = rank(zscore(winsorize(bm_ratio)), name="bm_factor")
+quality_factor = rank(zscore(quality), name="quality_factor")
+
+prediction = weighted_sum(
+    bm_factor,
+    quality_factor,
+    weights=[0.5, 0.5],
+    name="prediction",
 )
+signal = rank(prediction, name="signal")
 
-price = Panel("price", pd.DataFrame(...))
-book = Panel("book", pd.DataFrame(...))
-quality = Panel("quality", pd.DataFrame(...))
-
-bm_ratio = Div(book, price, name="bm_ratio")
-bm_factor = Rank(ZScore(bm_ratio), name="bm_factor")
-quality_factor = Rank(ZScore(quality), name="quality_factor")
-
-prediction = WeightedSum(bm_factor, quality_factor, weights=[0.5, 0.5], name="prediction")
-signal = Rank(prediction, name="signal")
-
-engine = ExecutionEngine()
-graph = Graph(outputs=[signal])
-result = engine.run(graph)[signal.name]
+signal.compute()
+result = signal.output
 ```
 
-Run the full example:
+`result` is a `Panel`. Its underlying frame is available as `result.data`.
+
+## Custom Operations
+
+Users can define function-style operations in their own modules:
+
+```python
+import pandas as pd
+
+from bagelquant_core.composer import composer
+from bagelquant_core.transformer import transformer
+
+
+@transformer
+def rolling_mean(frame: pd.DataFrame, *, window: int) -> pd.DataFrame:
+    return frame.rolling(window).mean()
+
+
+@composer
+def average(*frames: pd.DataFrame) -> pd.DataFrame:
+    return sum(frames) / len(frames)
+
+
+smoothed_price = rolling_mean(price, window=20, name="smoothed_price")
+combined = average(bm_factor, quality_factor, name="combined")
+```
+
+## Cached Outputs
+
+Computing a downstream graph materializes outputs for its intermediate graphs:
+
+```python
+signal.compute()
+
+prediction_panel = prediction.output
+signal_panel = signal.output
+```
+
+Use an explicit engine to reuse the same cache across related runs:
+
+```python
+from bagelquant_core import ExecutionEngine
+
+engine = ExecutionEngine()
+signal.compute(engine)
+another_signal.compute(engine)
+```
+
+Run the complete example:
 
 ```bash
 uv run python -m bagelquant_core.example
 ```
 
-## Core concepts
+## Documentation
 
-You can find core concepts in the documentation:
-
+- [Proposal](./docs/00_proposal/proposal.md)
+- [Refactor plan](./docs/00_proposal/panel-graph-refactor-plan.md)
+- [Architecture](./docs/02_architecture/bagelquant%20core%20architecture.md)
 - [Panel](./docs/01_concepts/panel.md)
+- [Graph](./docs/01_concepts/graph.md)
 - [Transformer](./docs/01_concepts/transformer.md)
 - [Composer](./docs/01_concepts/composer.md)
-- [Graph](./docs/01_concepts/graph.md)
 - [Execution](./docs/01_concepts/execution.md)
-
-
-
-## Project Scope
-
-BagelQuant Core is designed to support:
-
-### Data Processing
-
-- Data ingestion
-- Data alignment
-- Feature generation
-
-### Alpha Research
-
-- Cross-sectional factors
-- Time-series factors
-- Multi-factor models
-
-### Portfolio Construction
-
-- Signal combination
-- Portfolio optimization
-- Risk constraints
-
-### Backtesting
-
-- Portfolio simulation
-- Transaction costs
-- Performance analytics
-
-### Visualization
-
-- Time series analysis
-- Distribution analysis
-- Diagnostics
-
-
-## Project Status
-
-BagelQuant Core is currently under active development.
-
-Current focus:
-
-- Panel abstraction
-- DAG engine
-- Transformer system
-- Composer system
-- Runtime execution engine
-
-## Vision
-
-BagelQuant Core is not intended to be another factor library.
-
-The goal is to provide a modular computation operating system for quantitative research, where complex research workflows can be assembled from simple, reusable building blocks.
 
 ## License
 

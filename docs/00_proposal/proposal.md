@@ -36,7 +36,7 @@ many operations without expanding the graph core.
 ### Graphs define dependencies
 
 Graphs describe logic chains. The runtime determines evaluation order,
-alignment, cache reuse, and output materialization.
+alignment, caching, and output materialization.
 
 ## Vision
 

@@ -20,7 +20,7 @@ Panels are:
 - Raw input data
 - DAG leaf nodes
 - Materialized graph outputs
-- Cache values stored by the execution engine
+- Cache values stored by the internal execution runtime
 
 Factors, predictions, and portfolio weights are normally represented as lazy
 graphs until their output panels are needed.

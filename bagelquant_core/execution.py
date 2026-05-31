@@ -1,5 +1,5 @@
 """
-Execution engine for the computational graph.
+Internal execution runtime for computational graphs.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from .panel import Panel
 logger = logging.getLogger(__name__)
 
 
-class ExecutionEngine:
+class _ExecutionRuntime:
     """
     Deterministic executor with memoization cache.
     """
@@ -28,14 +28,14 @@ class ExecutionEngine:
 
     def run(self, graph: Graph) -> Panel | Mapping[str, Panel]:
         if not isinstance(graph, Graph):
-            raise TypeError("ExecutionEngine.run expects a Graph")
-        if len(graph.outputs) == 1:
-            return self._run_node(graph.outputs[0])
+            raise TypeError("_ExecutionRuntime.run expects a Graph")
+        if len(graph._outputs) == 1:
+            return self._run_node(graph._outputs[0])
         return self._run_graph(graph)
 
     def _run_graph(self, graph: Graph) -> Mapping[str, Panel]:
         results: dict[str, Panel] = {}
-        for node in graph.outputs:
+        for node in graph._outputs:
             results[node.name] = self._run_node(node)
         return results
 

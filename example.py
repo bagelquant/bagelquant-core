@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from bagelquant_core import ExecutionEngine, Graph, Panel
+from bagelquant_core import Panel
 from bagelquant_core.composer import div, weighted_sum
 from bagelquant_core.transformer import rank, winsorize, zscore
 
@@ -38,9 +38,8 @@ def main() -> None:
     signal = rank(prediction, name="signal")
     normalized_signal = zscore(prediction, name="normalized_signal")
 
-    strategy = Graph(outputs=[signal, normalized_signal])
-    engine = ExecutionEngine()
-    strategy.compute(engine)
+    signal.compute()
+    normalized_signal.compute()
 
     print(signal.output.data)
     print(normalized_signal.output.data)

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from bagelquant_core import ExecutionEngine, Graph, Panel
+from bagelquant_core import Graph, Panel
 from bagelquant_core.composer import composer
 from bagelquant_core.graph import GraphValidationError
 from bagelquant_core.node import Node
@@ -91,7 +91,7 @@ def test_execution_populates_intermediate_graph_outputs() -> None:
     with pytest.raises(RuntimeError):
         _ = doubled.output
 
-    final.compute(ExecutionEngine())
+    final.compute()
 
     assert doubled.output.data["a"].tolist() == [2, 4]
     assert final.output.data["a"].tolist() == [6, 12]

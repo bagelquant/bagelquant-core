@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 from .node import Node, NodeSpec
 
 if TYPE_CHECKING:
-    from .execution import ExecutionEngine
     from .panel import Panel
 
 
@@ -56,10 +55,6 @@ class Graph:
         return cls(_nodes=nodes)
 
     @property
-    def outputs(self) -> tuple[Node, ...]:
-        return self._outputs
-
-    @property
     def nodes(self) -> tuple[Node, ...]:
         return self._nodes
 
@@ -73,15 +68,10 @@ class Graph:
             return self._outputs[0].output
         return {node.name: node.output for node in self._outputs}
 
-    def compute(
-        self,
-        engine: "ExecutionEngine | None" = None,
-    ) -> "Panel | Mapping[str, Panel]":
-        if engine is None:
-            from .execution import ExecutionEngine
+    def compute(self) -> "Panel | Mapping[str, Panel]":
+        from .execution import _ExecutionRuntime
 
-            engine = ExecutionEngine()
-        return engine.run(self)
+        return _ExecutionRuntime().run(self)
 
     def _single_output(self) -> Node:
         if len(self._outputs) != 1:

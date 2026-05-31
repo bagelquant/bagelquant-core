@@ -2,8 +2,8 @@
 
 ## Overview
 
-Graphs define what should be computed. `ExecutionEngine` materializes output
-panels and caches them.
+Graphs define what should be computed. Calling `Graph.compute()` materializes
+output panels and caches intermediate results during execution.
 
 ```python
 signal.compute()
@@ -23,23 +23,13 @@ Graph construction
     -> Graph.output population
 ```
 
-## Cache Reuse
-
-Pass an explicit engine when related runs should share cached panels:
-
-```python
-engine = ExecutionEngine()
-signal.compute(engine)
-another_signal.compute(engine)
-```
-
 ## Intermediate Outputs
 
 Executing a downstream graph evaluates its dependencies. Every evaluated
-derived node receives a cached panel output:
+derived node receives a panel output:
 
 ```python
-signal.compute(engine)
+signal.compute()
 prediction_panel = prediction.output
 signal_panel = signal.output
 ```
@@ -49,7 +39,7 @@ signal_panel = signal.output
 - Execution is deterministic.
 - Panels are treated as immutable.
 - Multi-input frames align on intersecting indexes and columns by default.
-- Cache values are panels.
+- Intermediate cache values are panels.
 - Scheduling is sequential.
 
 Parallel scheduling, persisted caches, and explicit invalidation remain future

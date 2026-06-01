@@ -11,6 +11,7 @@ from bagelquant_core.transformer import (
     log1p,
     min_max_scale,
     negate,
+    pct_change,
     power,
     rolling_max,
     rolling_mean,
@@ -50,6 +51,15 @@ def test_diff_runs_over_time_and_stores_periods_in_graph_spec() -> None:
     assert changed.compute().data["a"].iloc[:2].isna().all()
     assert changed.compute().data.loc[2, "a"] == 9.0
     assert changed.spec().nodes[-1].config["periods"] == 2
+
+
+def test_pct_change_calculates_returns_from_values() -> None:
+    source = panel({"a": [100.0, 110.0, 99.0]})
+
+    returns = pct_change(source).compute().data["a"]
+
+    assert np.isnan(returns.iloc[0])
+    assert returns.iloc[1:].tolist() == pytest.approx([0.1, -0.1])
 
 
 @pytest.mark.parametrize(

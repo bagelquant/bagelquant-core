@@ -28,7 +28,7 @@ Built-ins are grouped by behavior:
 
 | Family | Transformers |
 | --- | --- |
-| Basic | `identity`, `abs_value`, `negate`, `diff` |
+| Basic | `identity`, `abs_value`, `negate`, `diff`, `pct_change` |
 | Rolling | `rolling_mean`, `rolling_std`, `rolling_min`, `rolling_max`, `rolling_sum` |
 | Power | `power`, `signed_power`, `sqrt` |
 | Logarithmic | `log`, `log1p`, `signed_log1p` |

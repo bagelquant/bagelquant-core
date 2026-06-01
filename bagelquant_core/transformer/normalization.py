@@ -1,0 +1,48 @@
+"""Cross-sectional normalization transformers."""
+
+from __future__ import annotations
+
+import pandas as pd
+
+from .core import transformer
+
+
+@transformer
+def rank(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return percentile ranks across assets for each row."""
+
+    return frame.rank(axis=1, pct=True)
+
+
+@transformer
+def zscore(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return z-scores across assets for each row."""
+
+    mean = frame.mean(axis=1)
+    std = frame.std(axis=1).replace(0, float("nan"))
+    return frame.sub(mean, axis=0).div(std, axis=0)
+
+
+@transformer
+def winsorize(
+    frame: pd.DataFrame,
+    *,
+    lower: float = 0.01,
+    upper: float = 0.99,
+) -> pd.DataFrame:
+    """Clip each row to its lower and upper quantiles."""
+
+    if not 0 <= lower <= upper <= 1:
+        raise ValueError("winsorize requires 0 <= lower <= upper <= 1")
+    lower_bound = frame.quantile(lower, axis=1)
+    upper_bound = frame.quantile(upper, axis=1)
+    return frame.clip(lower=lower_bound, upper=upper_bound, axis=0)
+
+
+@transformer
+def min_max_scale(frame: pd.DataFrame) -> pd.DataFrame:
+    """Scale each row to [0, 1], using NaN for constant rows."""
+
+    minimum = frame.min(axis=1)
+    spread = frame.max(axis=1).sub(minimum).replace(0, float("nan"))
+    return frame.sub(minimum, axis=0).div(spread, axis=0)

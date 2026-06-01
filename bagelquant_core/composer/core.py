@@ -1,5 +1,5 @@
 """
-Multi-input graph compositions.
+Core graph-building machinery for multi-input compositions.
 
 Use ``@composer`` to turn a DataFrame function into a public function that
 accepts Panel or Graph inputs and returns a lazy Graph.
@@ -7,19 +7,20 @@ accepts Panel or Graph inputs and returns a lazy Graph.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from functools import update_wrapper
 from itertools import count
 from typing import TYPE_CHECKING, Any, Mapping
 
 import pandas as pd
 
-from ._operation import as_node, operation_name
-from .node import Node
-from .registry import Registry
+from .._operation import as_node, operation_name
+from ..node import Node
+from ..registry import Registry
 
 if TYPE_CHECKING:
-    from .graph import Graph
+    from ..graph import Graph
+    from ..panel import Panel
 
 COMPOSER_REGISTRY: Registry["ComposerFunction"] = Registry("composer")
 
@@ -46,7 +47,7 @@ class ComposerFunction:
         metadata: Mapping[str, Any] | None = None,
         **config: Any,
     ) -> "Graph":
-        from .graph import Graph
+        from ..graph import Graph
 
         if not sources:
             raise ValueError("Composer requires at least one Panel or Graph")
@@ -101,39 +102,3 @@ def composer(operation: Callable[..., pd.DataFrame]) -> ComposerFunction:
     wrapped = ComposerFunction(operation)
     COMPOSER_REGISTRY.add(wrapped.registry_name, wrapped)
     return wrapped
-
-
-@composer
-def add(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs + rhs
-
-
-@composer
-def sub(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs - rhs
-
-
-@composer
-def mul(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs * rhs
-
-
-@composer
-def div(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs / rhs
-
-
-@composer
-def weighted_sum(
-    *frames: pd.DataFrame,
-    weights: Sequence[float],
-) -> pd.DataFrame:
-    if len(weights) != len(frames):
-        raise ValueError("weighted_sum requires one weight per frame")
-    if not frames:
-        raise ValueError("weighted_sum requires at least one frame")
-
-    output = frames[0] * weights[0]
-    for frame, weight in zip(frames[1:], weights[1:]):
-        output = output.add(frame * weight)
-    return output

@@ -21,7 +21,8 @@ bm_factor = rank(zscore(div(book, price)), name="bm_factor")
 ### Data is a Panel
 
 Raw inputs and computed outputs are immutable panels indexed by time and
-asset.
+asset. Panels copy incoming frames and return defensive copies through their
+public data access.
 
 ### Derived research objects are Graphs
 

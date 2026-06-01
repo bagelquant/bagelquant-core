@@ -40,4 +40,7 @@ combined = average(value, quality, momentum, name="combined")
 ```
 
 The internal execution runtime aligns input panel data before executing a
-composer.
+composer. Already-aligned inputs are reused internally.
+
+`weighted_sum(...)` requires one weight per input frame and computes a new
+frame without mutating its inputs.

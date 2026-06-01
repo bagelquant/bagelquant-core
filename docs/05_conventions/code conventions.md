@@ -8,6 +8,7 @@
 - Prefer function-style APIs.
 - Keep operations deterministic and stateless.
 - Do not mutate input frames in place.
+- Keep `Panel` immutable at the public boundary.
 
 ## Public API Rule
 
@@ -64,5 +65,6 @@ Add focused tests for:
 - DAG validation
 - Alignment
 - Cache reuse
+- Hash reuse for already-aligned inputs
 - Intermediate `Graph.output` population
 - Graph specification stability

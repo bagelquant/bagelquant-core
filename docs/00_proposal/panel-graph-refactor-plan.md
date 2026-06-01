@@ -30,7 +30,8 @@ from bagelquant_core.transformer import transformer
 
 - Users create raw inputs with `Panel(dataframe, name=...)`.
 - Execution results are `Panel` objects.
-- Panels validate numeric two-dimensional data and are treated as immutable.
+- Panels validate numeric two-dimensional data.
+- Panels copy input data and return defensive copies through `Panel.data`.
 
 ### Function-Style Operations
 
@@ -50,6 +51,8 @@ from bagelquant_core.transformer import transformer
 - The internal execution runtime caches computed panels during a run.
 - Computing a downstream graph populates outputs for evaluated intermediate
   graphs.
+- Shared DAG nodes are evaluated once per runtime invocation.
+- Already-aligned input panels reuse their stored hashes.
 
 ## Future Work
 

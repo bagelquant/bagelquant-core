@@ -33,9 +33,11 @@ Panels:
 - Have one-dimensional unique columns
 - Contain only numeric values
 - Copy input data at construction
-- Are treated as immutable
+- Return a defensive copy when data is accessed through `Panel.data`
+- Are immutable from the public API
 
 ## Alignment
 
 Multi-input composer functions align panel data across time and assets before
 computation. The default join is the intersection of indexes and columns.
+Already-aligned frames are reused internally, avoiding unnecessary copies.

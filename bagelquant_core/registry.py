@@ -12,9 +12,7 @@ class Registry(Generic[T]):
 
     def register(self, name: str) -> Callable[[T], T]:
         def decorator(item: T) -> T:
-            if name in self._items:
-                raise ValueError(f"{self._kind} '{name}' already registered")
-            self._items[name] = item
+            self.add(name, item)
             return item
 
         return decorator

@@ -39,7 +39,7 @@ class Panel(Node):
         return ()
 
     def compute(self) -> pd.DataFrame:
-        return self._data
+        return self._data.copy(deep=True)
 
     @property
     def output(self) -> "Panel":
@@ -47,7 +47,7 @@ class Panel(Node):
 
     @property
     def data(self) -> pd.DataFrame:
-        return self._data
+        return self._data.copy(deep=True)
 
     def config(self) -> Mapping[str, Any]:
         return {"data_hash": self._data_hash}
@@ -72,7 +72,12 @@ class Panel(Node):
                 index = index.union(frame.index)
                 columns = columns.union(frame.columns)
 
-        return tuple(frame.reindex(index=index, columns=columns) for frame in frames)
+        return tuple(
+            frame
+            if frame.index.equals(index) and frame.columns.equals(columns)
+            else frame.reindex(index=index, columns=columns)
+            for frame in frames
+        )
 
     @staticmethod
     def _validate_data(data: pd.DataFrame) -> pd.DataFrame:

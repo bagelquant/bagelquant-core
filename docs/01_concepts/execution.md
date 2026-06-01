@@ -37,9 +37,11 @@ signal_panel = signal.output
 ## Current Semantics
 
 - Execution is deterministic.
-- Panels are treated as immutable.
+- Panels are immutable from the public API.
 - Multi-input frames align on intersecting indexes and columns by default.
 - Intermediate cache values are panels.
+- Shared DAG nodes are evaluated once per runtime invocation.
+- Stored panel hashes are reused when alignment does not change an input frame.
 - Scheduling is sequential.
 
 Parallel scheduling, persisted caches, and explicit invalidation remain future

@@ -57,6 +57,14 @@ def test_graph_detects_cycle() -> None:
         Graph._from_nodes((node_a,))
 
 
+def test_graph_rejects_invalid_parent_type() -> None:
+    node = DummyNode(name="invalid_parent")
+    node._parent = "not a node"  # type: ignore[assignment]
+
+    with pytest.raises(GraphValidationError, match="Invalid parent type"):
+        Graph._from_nodes((node,))
+
+
 def test_graph_supports_user_defined_function_operations() -> None:
     left = Panel(pd.DataFrame({"a": [1, 2]}), name="left")
     right = Panel(pd.DataFrame({"a": [10, 20]}), name="right")

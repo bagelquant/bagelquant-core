@@ -1,6 +1,7 @@
 import pandas as pd
 
 from bagelquant_core import Graph, Panel
+from bagelquant_core.composer import add
 from bagelquant_core.execution import _ExecutionRuntime
 from bagelquant_core.transformer import rank, zscore
 
@@ -40,3 +41,15 @@ def test_multi_output_graph_returns_named_panels() -> None:
 
     assert set(results) == {"ranked", "zscore"}
     assert all(isinstance(panel, Panel) for panel in results.values())
+
+
+def test_execution_reuses_hashes_for_already_aligned_inputs(monkeypatch) -> None:
+    def fail_on_hash(_: pd.DataFrame) -> str:
+        raise AssertionError("execution should reuse stored panel hashes")
+
+    monkeypatch.setattr("bagelquant_core.execution.hash_dataframe", fail_on_hash)
+
+    left = Panel(pd.DataFrame({"a": [1, 2]}), name="left")
+    right = Panel(pd.DataFrame({"a": [10, 20]}), name="right")
+
+    assert add(left, right).compute().data["a"].tolist() == [11, 22]

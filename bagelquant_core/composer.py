@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 import pandas as pd
 
+from ._operation import as_node, operation_name
 from .node import Node
-from .panel import Panel
 from .registry import Registry
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ class ComposerFunction:
         registry_name: str | None = None,
     ) -> None:
         self.operation = operation
-        self.registry_name = registry_name or _operation_name(operation)
+        self.registry_name = registry_name or operation_name(operation)
         self.display_name = operation.__name__
         self._counter = count(1)
         update_wrapper(self, operation)
@@ -53,7 +53,9 @@ class ComposerFunction:
         return Graph._from_nodes(
             (
                 _ComposerNode(
-                    parents=tuple(_as_node(source) for source in sources),
+                    parents=tuple(
+                        as_node(source, kind="Composer") for source in sources
+                    ),
                     operation=self,
                     config=config,
                     name=name or f"{self.display_name}_{next(self._counter)}",
@@ -88,7 +90,7 @@ class _ComposerNode(Node):
 
     def config(self) -> Mapping[str, Any]:
         return {
-            "composer": _operation_name(self._operation.operation),
+            "composer": operation_name(self._operation.operation),
             **self._config,
         }
 
@@ -99,22 +101,6 @@ def composer(operation: Callable[..., pd.DataFrame]) -> ComposerFunction:
     wrapped = ComposerFunction(operation)
     COMPOSER_REGISTRY.add(wrapped.registry_name, wrapped)
     return wrapped
-
-
-def _as_node(source: "Panel | Graph") -> Node:
-    from .graph import Graph
-
-    if isinstance(source, Panel):
-        return source
-    if isinstance(source, Graph):
-        return source._single_output()
-    raise TypeError("Composer expects Panel or Graph inputs")
-
-
-def _operation_name(operation: Callable[..., Any]) -> str:
-    module = getattr(operation, "__module__", "")
-    qualname = getattr(operation, "__qualname__", repr(operation))
-    return f"{module}.{qualname}" if module else qualname
 
 
 @composer
@@ -143,8 +129,11 @@ def weighted_sum(
     weights: Sequence[float],
 ) -> pd.DataFrame:
     if len(weights) != len(frames):
-        raise ValueError("weights mismatch")
-    output = pd.DataFrame(0, index=frames[0].index, columns=frames[0].columns)
-    for frame, weight in zip(frames, weights):
-        output += frame * weight
+        raise ValueError("weighted_sum requires one weight per frame")
+    if not frames:
+        raise ValueError("weighted_sum requires at least one frame")
+
+    output = frames[0] * weights[0]
+    for frame, weight in zip(frames[1:], weights[1:]):
+        output = output.add(frame * weight)
     return output

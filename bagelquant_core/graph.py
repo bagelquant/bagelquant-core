@@ -88,6 +88,10 @@ class Graph:
                 return
             seen.add(node_id)
             for parent in node.parents:
+                if not isinstance(parent, Node):
+                    raise GraphValidationError(
+                        f"Invalid parent type on {node.name}: {type(parent)}"
+                    )
                 visit(parent)
             ordered.append(node)
 

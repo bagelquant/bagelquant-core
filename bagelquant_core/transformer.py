@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 import pandas as pd
 
+from ._operation import as_node, operation_name
 from .node import Node
-from .panel import Panel
 from .registry import Registry
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ class TransformerFunction:
         registry_name: str | None = None,
     ) -> None:
         self.operation = operation
-        self.registry_name = registry_name or _operation_name(operation)
+        self.registry_name = registry_name or operation_name(operation)
         self.display_name = operation.__name__
         self._counter = count(1)
         update_wrapper(self, operation)
@@ -52,7 +52,7 @@ class TransformerFunction:
         return Graph._from_nodes(
             (
                 _TransformerNode(
-                    parent=_as_node(source),
+                    parent=as_node(source, kind="Transformer"),
                     operation=self,
                     config=config,
                     name=name or f"{self.display_name}_{next(self._counter)}",
@@ -87,7 +87,7 @@ class _TransformerNode(Node):
 
     def config(self) -> Mapping[str, Any]:
         return {
-            "transformer": _operation_name(self._operation.operation),
+            "transformer": operation_name(self._operation.operation),
             **self._config,
         }
 
@@ -100,22 +100,6 @@ def transformer(
     wrapped = TransformerFunction(operation)
     TRANSFORMER_REGISTRY.add(wrapped.registry_name, wrapped)
     return wrapped
-
-
-def _as_node(source: "Panel | Graph") -> Node:
-    from .graph import Graph
-
-    if isinstance(source, Panel):
-        return source
-    if isinstance(source, Graph):
-        return source._single_output()
-    raise TypeError("Transformer expects a Panel or Graph")
-
-
-def _operation_name(operation: Callable[..., Any]) -> str:
-    module = getattr(operation, "__module__", "")
-    qualname = getattr(operation, "__qualname__", repr(operation))
-    return f"{module}.{qualname}" if module else qualname
 
 
 @transformer

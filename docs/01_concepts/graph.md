@@ -23,6 +23,9 @@ Graph manages:
 - Runtime delegation
 - Materialized output access
 
+Validation rejects cycles, duplicate node names, invalid parent types, and
+operation nodes with an invalid number of parents.
+
 Graph does not store raw input frames and does not contain domain-specific
 operation methods.
 

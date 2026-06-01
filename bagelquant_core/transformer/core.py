@@ -1,5 +1,5 @@
 """
-Unary graph transformations.
+Core graph-building machinery for unary transformations.
 
 Use ``@transformer`` to turn a DataFrame function into a public function that
 accepts a Panel or Graph and returns a lazy Graph.
@@ -14,12 +14,13 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 import pandas as pd
 
-from ._operation import as_node, operation_name
-from .node import Node
-from .registry import Registry
+from .._operation import as_node, operation_name
+from ..node import Node
+from ..registry import Registry
 
 if TYPE_CHECKING:
-    from .graph import Graph
+    from ..graph import Graph
+    from ..panel import Panel
 
 TRANSFORMER_REGISTRY: Registry["TransformerFunction"] = Registry("transformer")
 
@@ -47,7 +48,7 @@ class TransformerFunction:
         metadata: Mapping[str, Any] | None = None,
         **config: Any,
     ) -> "Graph":
-        from .graph import Graph
+        from ..graph import Graph
 
         return Graph._from_nodes(
             (
@@ -100,27 +101,3 @@ def transformer(
     wrapped = TransformerFunction(operation)
     TRANSFORMER_REGISTRY.add(wrapped.registry_name, wrapped)
     return wrapped
-
-
-@transformer
-def rank(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.rank(axis=1, pct=True)
-
-
-@transformer
-def zscore(frame: pd.DataFrame) -> pd.DataFrame:
-    mean = frame.mean(axis=1)
-    std = frame.std(axis=1).replace(0, float("nan"))
-    return frame.sub(mean, axis=0).div(std, axis=0)
-
-
-@transformer
-def winsorize(
-    frame: pd.DataFrame,
-    *,
-    lower: float = 0.01,
-    upper: float = 0.99,
-) -> pd.DataFrame:
-    lower_bound = frame.quantile(lower, axis=1)
-    upper_bound = frame.quantile(upper, axis=1)
-    return frame.clip(lower=lower_bound, upper=upper_bound, axis=0)

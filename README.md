@@ -23,7 +23,7 @@ import pandas as pd
 
 from bagelquant_core import Panel
 from bagelquant_core.composer import div, weighted_sum
-from bagelquant_core.transformer import rank, winsorize, zscore
+from bagelquant_core.transformer import rank, rolling_mean, winsorize, zscore
 
 price = Panel(pd.DataFrame(...), name="price")
 book = Panel(pd.DataFrame(...), name="book")
@@ -40,9 +40,10 @@ prediction = weighted_sum(
     name="prediction",
 )
 signal = rank(prediction, name="signal")
+smoothed_signal = rolling_mean(signal, window=20, name="smoothed_signal")
 
-signal.compute()
-result = signal.output
+smoothed_signal.compute()
+result = smoothed_signal.output
 ```
 
 `result` is a `Panel`. Its underlying frame is available as `result.data`.
@@ -59,8 +60,8 @@ from bagelquant_core.transformer import transformer
 
 
 @transformer
-def rolling_mean(frame: pd.DataFrame, *, window: int) -> pd.DataFrame:
-    return frame.rolling(window).mean()
+def demean(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame.sub(frame.mean(axis=1), axis=0)
 
 
 @composer
@@ -68,7 +69,7 @@ def average(*frames: pd.DataFrame) -> pd.DataFrame:
     return sum(frames) / len(frames)
 
 
-smoothed_price = rolling_mean(price, window=20, name="smoothed_price")
+centered_price = demean(price, name="centered_price")
 combined = average(bm_factor, quality_factor, name="combined")
 ```
 

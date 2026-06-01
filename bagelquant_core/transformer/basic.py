@@ -37,3 +37,14 @@ def diff(frame: pd.DataFrame, *, periods: int = 1) -> pd.DataFrame:
     if periods == 0:
         raise ValueError("diff periods must not be zero")
     return frame.diff(periods=periods)
+
+
+@transformer
+def pct_change(frame: pd.DataFrame, *, periods: int = 1) -> pd.DataFrame:
+    """Return fractional changes over a number of rows."""
+
+    if not isinstance(periods, int) or isinstance(periods, bool):
+        raise TypeError("pct_change periods must be an integer")
+    if periods == 0:
+        raise ValueError("pct_change periods must not be zero")
+    return frame.pct_change(periods=periods)

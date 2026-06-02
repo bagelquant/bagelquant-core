@@ -5,6 +5,8 @@ description = "Composable panel data and graph logic for quantitative research"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "exchange-calendars>=4.13.2",
+    "matplotlib>=3.10.9",
     "numpy>=2.4.6",
     "pandas>=3.0.3",
 ]

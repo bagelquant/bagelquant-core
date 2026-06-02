@@ -27,11 +27,12 @@ Subtract each asset's category mean within each row.
 ```python
 import pandas as pd
 
-from bagelquant_core import CategoryPanel, Panel
+from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.transformer import category_demean
 
-factor = Panel(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [8.0]}))
-industry = CategoryPanel(pd.DataFrame({"a": ["tech"], "b": ["tech"], "c": ["bank"]}))
+domain = Domain(region="US", universe=["a", "b", "c"], start_date="2024-01-02", end_date="2024-01-02")
+factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [8.0]}, index=domain.sessions), domain)
+industry = CategoryPanel.from_domain(pd.DataFrame({"a": ["tech"], "b": ["tech"], "c": ["bank"]}, index=domain.sessions), domain)
 
 result = category_demean(factor, industry).compute().data
 print(result)

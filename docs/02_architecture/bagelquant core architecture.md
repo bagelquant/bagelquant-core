@@ -22,11 +22,12 @@ Cached Panel outputs
 
 ## Panel
 
-A `Panel` is an immutable numeric frame indexed by time and asset. It copies
-input data at construction and returns a defensive copy through `Panel.data`.
+A `Panel` is an immutable numeric frame indexed by time and asset. Every input
+is normalized through a `Domain`, which owns its trading sessions and asset
+membership. Panels return a defensive copy through `Panel.data`.
 
 ```python
-price = Panel(price_df, name="price")
+price = Panel.from_domain(price_df, domain, name="price")
 ```
 
 Panels are DAG leaves and execution outputs.
@@ -93,8 +94,9 @@ Users do not construct internal nodes directly.
 ## Execution
 
 Calling `Graph.compute()` invokes an internal runtime that recursively
-evaluates dependencies, aligns multi-input frames, computes deterministic
-cache keys, caches output panels during execution, and updates node outputs.
+evaluates dependencies, checks multi-input Domain compatibility, computes
+deterministic cache keys, caches output panels during execution, and updates
+node outputs. Dynamic membership masks are reapplied to derived outputs.
 Within one runtime invocation, shared DAG nodes are evaluated once. When
 composer inputs are already aligned, the runtime reuses the existing frames
 and their stored hashes.

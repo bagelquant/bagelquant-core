@@ -37,10 +37,11 @@ from bagelquant_core.transformer import (
     sqrt,
     winsorize,
 )
+from tests.helpers import make_category_panel, make_panel
 
 
 def panel(values: dict[str, list[float]]) -> Panel:
-    return Panel(pd.DataFrame(values), name="input")
+    return make_panel(pd.DataFrame(values), name="input")
 
 
 def test_basic_transformers() -> None:
@@ -63,7 +64,7 @@ def test_diff_runs_over_time_and_stores_periods_in_graph_spec() -> None:
     changed = diff(source, periods=2)
 
     assert changed.compute().data["a"].iloc[:2].isna().all()
-    assert changed.compute().data.loc[2, "a"] == 9.0
+    assert changed.compute().data.iloc[2]["a"] == 9.0
     assert changed.spec().nodes[-1].config["periods"] == 2
 
 
@@ -137,9 +138,9 @@ def test_cross_sectional_normalizers() -> None:
     scaled = min_max_scale(source).compute().data
     clipped = winsorize(source, lower=0.25, upper=0.75).compute().data
 
-    assert scaled.loc[0].tolist() == [0.0, 0.5, 1.0]
-    assert scaled.loc[1].isna().all()
-    assert clipped.loc[0].tolist() == [1.5, 2.0, 2.5]
+    assert scaled.iloc[0].tolist() == [0.0, 0.5, 1.0]
+    assert scaled.iloc[1].isna().all()
+    assert clipped.iloc[0].tolist() == [1.5, 2.0, 2.5]
 
 
 def test_winsorize_rejects_invalid_quantile_range() -> None:
@@ -162,8 +163,8 @@ def test_missing_value_transformers() -> None:
         [0.0, 2.0],
         [0.0, 0.0],
     ]
-    assert ffill(source).compute().data.loc[2].tolist() == [1.0, 2.0]
-    assert bfill(source).compute().data.loc[0].tolist() == [1.0, 2.0]
+    assert ffill(source).compute().data.iloc[2].tolist() == [1.0, 2.0]
+    assert bfill(source).compute().data.iloc[0].tolist() == [1.0, 2.0]
 
 
 def test_replacement_transformers_preserve_missing_values() -> None:
@@ -173,10 +174,10 @@ def test_replacement_transformers_preserve_missing_values() -> None:
     ones = non_nan_to_one(source).compute().data
     zeros = non_nan_to_zero(source).compute().data
 
-    assert replaced.loc[0].tolist() == [7.0, 7.0]
-    assert np.isnan(replaced.loc[1, "a"])
-    assert ones.loc[0].tolist() == [1.0, 1.0]
-    assert zeros.loc[0].tolist() == [0.0, 0.0]
+    assert replaced.iloc[0].tolist() == [7.0, 7.0]
+    assert np.isnan(replaced.iloc[1]["a"])
+    assert ones.iloc[0].tolist() == [1.0, 1.0]
+    assert zeros.iloc[0].tolist() == [0.0, 0.0]
 
 
 def test_ewm_transformers_match_pandas_methods() -> None:
@@ -203,12 +204,12 @@ def test_ewm_requires_exactly_one_decay_argument() -> None:
 
 
 def test_category_panel_supports_string_labels() -> None:
-    categories = CategoryPanel(
+    categories = make_category_panel(
         pd.DataFrame({"a": ["tech"], "b": ["finance"]}),
         name="industry",
     )
 
-    assert categories.data.loc[0].tolist() == ["tech", "finance"]
+    assert categories.data.iloc[0].tolist() == ["tech", "finance"]
 
 
 def test_category_transformers_operate_within_each_row_group() -> None:
@@ -220,7 +221,7 @@ def test_category_transformers_operate_within_each_row_group() -> None:
             "d": [14.0, 6.0],
         }
     )
-    categories = CategoryPanel(
+    categories = make_category_panel(
         pd.DataFrame(
             {
                 "a": ["tech", "tech"],
@@ -237,9 +238,9 @@ def test_category_transformers_operate_within_each_row_group() -> None:
     ranked = category_rank(source, categories).compute().data
     scored = category_zscore(source, categories).compute().data
 
-    assert demeaned.loc[0].tolist() == [-1.0, 1.0, -2.0, 2.0]
-    assert grouped_mean.loc[0].tolist() == [2.0, 2.0, 12.0, 12.0]
-    assert ranked.loc[0].tolist() == [0.5, 1.0, 0.5, 1.0]
-    assert scored.loc[0].tolist() == pytest.approx(
+    assert demeaned.iloc[0].tolist() == [-1.0, 1.0, -2.0, 2.0]
+    assert grouped_mean.iloc[0].tolist() == [2.0, 2.0, 12.0, 12.0]
+    assert ranked.iloc[0].tolist() == [0.5, 1.0, 0.5, 1.0]
+    assert scored.iloc[0].tolist() == pytest.approx(
         [-np.sqrt(0.5), np.sqrt(0.5), -np.sqrt(0.5), np.sqrt(0.5)]
     )

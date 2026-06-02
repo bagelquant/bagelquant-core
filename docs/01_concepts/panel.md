@@ -41,3 +41,23 @@ Panels:
 Multi-input composer functions align panel data across time and assets before
 computation. The default join is the intersection of indexes and columns.
 Already-aligned frames are reused internally, avoiding unnecessary copies.
+
+## Category Panels
+
+`CategoryPanel` is an immutable leaf node for labels such as industry, sector,
+or country. It follows the same time-by-asset shape as `Panel` but accepts
+string labels:
+
+```python
+import pandas as pd
+
+from bagelquant_core import CategoryPanel
+
+industry = CategoryPanel(
+    pd.DataFrame(...),
+    name="industry",
+)
+```
+
+Use category panels with the category operations exported from
+`bagelquant_core.transformer`.

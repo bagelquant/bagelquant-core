@@ -97,3 +97,27 @@ class Panel(Node):
         if hasattr(values, "flags"):
             values.flags.writeable = False
         return validated
+
+
+class CategoryPanel(Panel):
+    """
+    Immutable categorical data container and leaf node in the DAG.
+
+    Category panels match numeric panels by time and asset but may contain
+    labels such as industry, sector, or country names.
+    """
+
+    @staticmethod
+    def _validate_data(data: pd.DataFrame) -> pd.DataFrame:
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError("CategoryPanel data must be a pandas DataFrame")
+        if data.index.nlevels != 1 or data.columns.nlevels != 1:
+            raise ValueError("CategoryPanel data must have 1D index and columns")
+        if data.index.has_duplicates or data.columns.has_duplicates:
+            raise ValueError("CategoryPanel index and columns must be unique")
+
+        validated = data.copy(deep=True)
+        values = validated.to_numpy(copy=False)
+        if hasattr(values, "flags"):
+            values.flags.writeable = False
+        return validated

@@ -5,7 +5,7 @@
 Separate data from logic:
 
 ```python
-some_input = Panel(dataframe, name="some_input")
+some_input = Panel.from_domain(dataframe, domain, name="some_input")
 some_factor = rank(zscore(some_input), name="some_factor")
 some_factor.compute()
 factor_panel = some_factor.output
@@ -28,7 +28,7 @@ from bagelquant_core.transformer import transformer
 
 ### Panel Data Boundary
 
-- Users create raw inputs with `Panel(dataframe, name=...)`.
+- Users create raw inputs with `Panel.from_domain(dataframe, domain, name=...)`.
 - Execution results are `Panel` objects.
 - Panels validate numeric two-dimensional data.
 - Panels copy input data and return defensive copies through `Panel.data`.

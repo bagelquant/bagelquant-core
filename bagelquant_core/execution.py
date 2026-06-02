@@ -12,7 +12,7 @@ import pandas as pd
 from .graph import Graph
 from .hashing import hash_dataframe
 from .node import Node
-from .panel import Panel
+from .panel import Domain, Panel
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class _ExecutionRuntime:
     """
 
     def __init__(self, alignment: str = "inner") -> None:
-        self.cache: dict[tuple[str, tuple[str, ...]], Panel] = {}
+        self.cache: dict[tuple[str, tuple[str, ...], str], Panel] = {}
         self._alignment = alignment
 
     def run(self, graph: Graph) -> Panel | Mapping[str, Panel]:
@@ -53,6 +53,7 @@ class _ExecutionRuntime:
             return node
 
         inputs = [self._run_node(parent, evaluated) for parent in node.parents]
+        domain = self._resolve_domain(inputs)
         if len(inputs) > 1:
             frames = Panel.align_frames(
                 *(panel._data for panel in inputs),
@@ -67,7 +68,7 @@ class _ExecutionRuntime:
         else:
             frames = tuple(panel._data for panel in inputs)
             input_hashes = tuple(panel._data_hash for panel in inputs)
-        cache_key = (node.signature(), input_hashes)
+        cache_key = (node.signature(), input_hashes, domain.signature)
 
         if cache_key in self.cache:
             logger.debug("Cache hit: %s", node.name)
@@ -82,7 +83,12 @@ class _ExecutionRuntime:
                 f"Node '{node.name}' returned {type(result)}; expected DataFrame"
             )
 
-        output = Panel(result, name=node.name, metadata=node.metadata)
+        output = Panel._materialize(
+            result,
+            domain=domain,
+            name=node.name,
+            metadata=node.metadata,
+        )
         self.cache[cache_key] = output
         node.set_output(output)
         evaluated[node_id] = output
@@ -94,3 +100,12 @@ class _ExecutionRuntime:
 
     def clear_cache(self) -> None:
         self.cache.clear()
+
+    @staticmethod
+    def _resolve_domain(inputs: list[Panel]) -> Domain:
+        if not inputs:
+            raise ValueError("Derived nodes require at least one panel input")
+        domain = inputs[0].domain
+        if any(not domain.equivalent_to(panel.domain) for panel in inputs[1:]):
+            raise ValueError("Composer inputs must use equivalent Domains")
+        return domain

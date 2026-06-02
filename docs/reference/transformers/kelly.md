@@ -27,10 +27,11 @@ Estimate Kelly weights as rolling mean return divided by variance.
 ```python
 import pandas as pd
 
-from bagelquant_core import Panel
+from bagelquant_core import Domain, Panel
 from bagelquant_core.transformer import kelly
 
-source = Panel(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}))
+domain = Domain(region="US", universe=["a", "b"], start_date="2024-01-02", end_date="2024-01-04")
+source = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
 
 result = kelly(source, window=2).compute().data
 print(result)

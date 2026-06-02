@@ -6,6 +6,7 @@ from bagelquant_core.composer import composer
 from bagelquant_core.graph import GraphValidationError
 from bagelquant_core.node import Node
 from bagelquant_core.transformer import rank, transformer, zscore
+from tests.helpers import make_panel
 
 
 class DummyNode(Node):
@@ -39,7 +40,7 @@ def sum_frames(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
 
 
 def test_graph_topological_sort() -> None:
-    price = Panel(pd.DataFrame({"a": [1, 2]}), name="price")
+    price = make_panel(pd.DataFrame({"a": [1, 2]}), name="price")
     ranked = rank(price, name="ranked")
 
     ordered = ranked.topological_sort()
@@ -66,8 +67,8 @@ def test_graph_rejects_invalid_parent_type() -> None:
 
 
 def test_graph_supports_user_defined_function_operations() -> None:
-    left = Panel(pd.DataFrame({"a": [1, 2]}), name="left")
-    right = Panel(pd.DataFrame({"a": [10, 20]}), name="right")
+    left = make_panel(pd.DataFrame({"a": [1, 2]}), name="left")
+    right = make_panel(pd.DataFrame({"a": [10, 20]}), name="right")
 
     doubled = double(left, name="doubled")
     combined = sum_frames(doubled, right, name="combined")
@@ -76,7 +77,7 @@ def test_graph_supports_user_defined_function_operations() -> None:
 
 
 def test_user_defined_transformer_config_is_in_graph_spec() -> None:
-    price = Panel(pd.DataFrame({"a": [1, 2]}), name="price")
+    price = make_panel(pd.DataFrame({"a": [1, 2]}), name="price")
 
     scaled = scale(price, factor=3, name="scaled")
 
@@ -84,7 +85,7 @@ def test_user_defined_transformer_config_is_in_graph_spec() -> None:
 
 
 def test_zscore_constant_cross_section_does_not_return_infinity() -> None:
-    constant = Panel(pd.DataFrame({"a": [1.0], "b": [1.0]}), name="constant")
+    constant = make_panel(pd.DataFrame({"a": [1.0], "b": [1.0]}), name="constant")
 
     result = zscore(constant).compute()
 
@@ -92,7 +93,7 @@ def test_zscore_constant_cross_section_does_not_return_infinity() -> None:
 
 
 def test_execution_populates_intermediate_graph_outputs() -> None:
-    price = Panel(pd.DataFrame({"a": [1, 2]}), name="price")
+    price = make_panel(pd.DataFrame({"a": [1, 2]}), name="price")
     doubled = double(price, name="doubled")
     final = scale(doubled, factor=3, name="final")
 

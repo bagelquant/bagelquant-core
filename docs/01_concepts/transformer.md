@@ -154,8 +154,9 @@ import pandas as pd
 from bagelquant_core import CategoryPanel
 from bagelquant_core.transformer import category_demean, category_rank
 
-industry = CategoryPanel(
+industry = CategoryPanel.from_domain(
     pd.DataFrame(...),
+    domain,
     name="industry",
 )
 

@@ -15,10 +15,11 @@ from bagelquant_core.composer import (
     weighted_mean,
     weighted_sum,
 )
+from tests.helpers import make_panel
 
 
 def panel(values: list[float], *, name: str) -> Panel:
-    return Panel(pd.DataFrame({"a": values}), name=name)
+    return make_panel(pd.DataFrame({"a": values}), name=name)
 
 
 def test_arithmetic_composers() -> None:

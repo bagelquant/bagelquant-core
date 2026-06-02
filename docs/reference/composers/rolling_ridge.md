@@ -31,11 +31,12 @@ Return prior-window ridge-regression predictions.
 ```python
 import pandas as pd
 
-from bagelquant_core import Panel
+from bagelquant_core import Domain, Panel
 from bagelquant_core.composer import rolling_ridge
 
-left = Panel(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}))
-right = Panel(pd.DataFrame({"a": [1.0, 1.0, 2.0], "b": [1.0, 2.0, 4.0]}))
+domain = Domain(region="US", universe=["a", "b"], start_date="2024-01-02", end_date="2024-01-04")
+left = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
+right = Panel.from_domain(pd.DataFrame({"a": [1.0, 1.0, 2.0], "b": [1.0, 2.0, 4.0]}, index=domain.sessions), domain)
 
 result = rolling_ridge(left, right, window=2).compute().data
 print(result)

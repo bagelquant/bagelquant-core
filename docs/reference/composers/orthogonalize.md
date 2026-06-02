@@ -27,11 +27,12 @@ Return row-wise residuals after projecting values onto factors.
 ```python
 import pandas as pd
 
-from bagelquant_core import Panel
+from bagelquant_core import Domain, Panel
 from bagelquant_core.composer import orthogonalize
 
-factor = Panel(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [5.0]}))
-size = Panel(pd.DataFrame({"a": [0.0], "b": [1.0], "c": [2.0]}))
+domain = Domain(region="US", universe=["a", "b", "c"], start_date="2024-01-02", end_date="2024-01-02")
+factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [5.0]}, index=domain.sessions), domain)
+size = Panel.from_domain(pd.DataFrame({"a": [0.0], "b": [1.0], "c": [2.0]}, index=domain.sessions), domain)
 
 result = orthogonalize(factor, size).compute().data
 print(result)

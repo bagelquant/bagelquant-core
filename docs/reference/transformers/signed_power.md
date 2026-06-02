@@ -27,10 +27,11 @@ Raise absolute values to an exponent while preserving signs.
 ```python
 import pandas as pd
 
-from bagelquant_core import Panel
+from bagelquant_core import Domain, Panel
 from bagelquant_core.transformer import signed_power
 
-source = Panel(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}))
+domain = Domain(region="US", universe=["a", "b"], start_date="2024-01-02", end_date="2024-01-04")
+source = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
 
 result = signed_power(source, exponent=0.5).compute().data
 print(result)

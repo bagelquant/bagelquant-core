@@ -11,8 +11,8 @@ dependencies and makes experiments difficult to reproduce.
 BagelQuant uses an explicit data boundary and a lazy graph model:
 
 ```python
-price = Panel(price_df, name="price")
-book = Panel(book_df, name="book")
+price = Panel.from_domain(price_df, domain, name="price")
+book = Panel.from_domain(book_df, domain, name="book")
 bm_factor = rank(zscore(div(book, price)), name="bm_factor")
 ```
 

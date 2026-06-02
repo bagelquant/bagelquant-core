@@ -5,7 +5,7 @@
 `Graph` represents a lazy chain of research logic.
 
 ```python
-price = Panel(price_df, name="price")
+price = Panel.from_domain(price_df, domain, name="price")
 signal = rank(zscore(price), name="signal")
 ```
 

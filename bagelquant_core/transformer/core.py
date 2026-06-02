@@ -42,12 +42,12 @@ class TransformerFunction:
 
     def __call__(
         self,
-        source: "Panel | Graph",
+        source: "Panel | Graph[Panel]",
         *,
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         **config: Any,
-    ) -> "Graph":
+    ) -> "Graph[Panel]":
         from ..graph import Graph
 
         return Graph._from_nodes(
@@ -83,7 +83,10 @@ class _TransformerNode(Node):
     def parents(self) -> tuple[Node, ...]:
         return (self._parent,)
 
-    def compute(self, frame: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
+        if len(inputs) != 1:
+            raise ValueError("Transformer node requires exactly one input")
+        frame = inputs[0]
         return self._operation.operation(frame, **self._config)
 
     def config(self) -> Mapping[str, Any]:

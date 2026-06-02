@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from numbers import Real
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,7 @@ def signed_power(frame: pd.DataFrame, *, exponent: Real) -> pd.DataFrame:
     """Raise absolute values to an exponent while preserving signs."""
 
     _validate_exponent(exponent)
-    return np.sign(frame) * frame.abs().pow(exponent)
+    return cast(pd.DataFrame, np.sign(frame) * frame.abs().pow(exponent))
 
 
 @transformer

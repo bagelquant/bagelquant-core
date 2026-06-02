@@ -69,7 +69,11 @@ def minimum(*frames: pd.DataFrame) -> pd.DataFrame:
     _validate_frames(frames, operation="minimum")
     output = frames[0].copy()
     for frame in frames[1:]:
-        output = output.combine(frame, np.minimum)
+        output = pd.DataFrame(
+            np.minimum(output.to_numpy(), frame.to_numpy()),
+            index=output.index,
+            columns=output.columns,
+        )
     return output
 
 
@@ -80,7 +84,11 @@ def maximum(*frames: pd.DataFrame) -> pd.DataFrame:
     _validate_frames(frames, operation="maximum")
     output = frames[0].copy()
     for frame in frames[1:]:
-        output = output.combine(frame, np.maximum)
+        output = pd.DataFrame(
+            np.maximum(output.to_numpy(), frame.to_numpy()),
+            index=output.index,
+            columns=output.columns,
+        )
     return output
 
 
@@ -110,3 +118,7 @@ def weighted_mean(
     if total_weight == 0:
         raise ValueError("weighted_mean weights must not sum to zero")
     return weighted_sum.operation(*frames, weights=weights).div(total_weight)
+
+
+min = minimum
+max = maximum

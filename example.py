@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Mapping
+
 import numpy as np
 import pandas as pd
 
@@ -115,7 +117,9 @@ def main() -> None:
     )
     signal = zscore(rank(smoothed_prediction), name="signal")
 
-    strategy = Graph(outputs=[signal, prediction, volatility])
+    strategy: Graph[Mapping[str, Panel]] = Graph(
+        outputs=[signal, prediction, volatility]
+    )
     outputs = strategy.compute()
 
     print(f"Computed {len(strategy.nodes)} graph nodes")

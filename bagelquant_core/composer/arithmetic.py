@@ -33,3 +33,8 @@ def div(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
     """Divide the first frame by the second."""
 
     return lhs / rhs
+
+
+subtract = sub
+multiply = mul
+divide = div

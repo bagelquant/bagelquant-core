@@ -38,7 +38,9 @@ class Panel(Node):
     def parents(self) -> tuple[Node, ...]:
         return ()
 
-    def compute(self) -> pd.DataFrame:
+    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
+        if inputs:
+            raise ValueError("Panel does not accept inputs")
         return self._data.copy(deep=True)
 
     @property

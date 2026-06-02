@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Generic, Iterable, Mapping, Sequence, TypeVar, cast
 
 from .node import Node, NodeSpec
 
@@ -19,7 +19,10 @@ class GraphSpec:
     nodes: tuple[NodeSpec, ...]
 
 
-class Graph:
+OutputT = TypeVar("OutputT", covariant=True)
+
+
+class Graph(Generic[OutputT]):
     """
     Public graph expression API.
 
@@ -30,7 +33,7 @@ class Graph:
     def __init__(
         self,
         *,
-        outputs: Sequence["Graph"] | None = None,
+        outputs: Sequence["Graph[Panel]"] | None = None,
         _nodes: Sequence[Node] | None = None,
     ) -> None:
         sources = sum(value is not None for value in (outputs, _nodes))
@@ -51,8 +54,8 @@ class Graph:
         self.validate()
 
     @classmethod
-    def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph":
-        return cls(_nodes=nodes)
+    def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph[Panel]":
+        return Graph(_nodes=nodes)
 
     @property
     def nodes(self) -> tuple[Node, ...]:
@@ -63,15 +66,15 @@ class Graph:
         return self._single_output().name
 
     @property
-    def output(self) -> "Panel | Mapping[str, Panel]":
+    def output(self) -> OutputT:
         if len(self._outputs) == 1:
-            return self._outputs[0].output
-        return {node.name: node.output for node in self._outputs}
+            return cast(OutputT, self._outputs[0].output)
+        return cast(OutputT, {node.name: node.output for node in self._outputs})
 
-    def compute(self) -> "Panel | Mapping[str, Panel]":
+    def compute(self) -> OutputT:
         from .execution import _ExecutionRuntime
 
-        return _ExecutionRuntime().run(self)
+        return cast(OutputT, _ExecutionRuntime().run(self))
 
     def _single_output(self) -> Node:
         if len(self._outputs) != 1:

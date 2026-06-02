@@ -8,6 +8,9 @@ A transformer is a unary function-style operation:
 Panel | Graph -> Graph
 ```
 
+For signatures, parameter descriptions, and examples for every public
+operation, see the [transformer reference](../reference/transformers/index.md).
+
 ## Built-In Transformers
 
 ```python
@@ -36,6 +39,13 @@ Built-ins are grouped by behavior:
 | Logarithmic | `log`, `log1p`, `signed_log1p` |
 | Normalization | `rank`, `zscore`, `winsorize`, `min_max_scale` |
 | Category | `category_demean`, `category_mean`, `category_rank`, `category_zscore` |
+| General | `nonnans`, `notnan`, `denoise`, `posonly`, `negonly`, `lag`, `delta`, `rate_of_change`, `remove_repeated`, `date_age_constraint`, `constant`, `replace_inf` |
+| Translation | `demean`, `translate_to_pos` |
+| Rank | `rankpct`, `nrank`, `logrank` |
+| Outliers | `truncate`, `trim`, `trim_quantile` |
+| Variance stabilization | `boxcox`, `anscombe`, `freeman`, `fisher` |
+| Trigonometric | `sin`, `cos`, `arcsin`, `arccos`, `trig`, `arctanh`, `arctan` |
+| Kelly criterion | `kelly`, `kelly_nonan_standardize`, `kelly_rank_boxcox`, `kelly_rescaling_weight` |
 
 ## Basic
 
@@ -119,8 +129,18 @@ Normalization operations run across columns, which represent assets:
 | `zscore(source)` | Calculate z-scores for each row. |
 | `winsorize(source, lower=0.01, upper=0.99)` | Clip each row to its quantile bounds. |
 | `min_max_scale(source)` | Scale each row to `[0, 1]`. |
+| `normalize(source)` | Scale each row to `[-1, 1]`. |
+| `net_scale(source)` | Scale positive and negative values independently by their row sums. |
 
 Constant rows produce `NaN` values where normalization is undefined.
+
+## Extended Rolling Operations
+
+The rolling family also includes `rolling_var`, `rolling_skew`, `rolling_kurt`,
+`rolling_median`, `rolling_rank`, `rolling_percentile`, and `rolling_zscore`.
+`rolling_ewm` and `rolling_ew_std` are half-life-compatible aliases for the
+general EWM operations, while `rolling_ewm_fw` exposes expanding exponentially
+weighted means.
 
 ## Category
 

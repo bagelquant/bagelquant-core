@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pandas as pd
 
 from .core import transformer
@@ -12,7 +14,7 @@ def _rolling(
     *,
     window: int,
     min_periods: int | None,
-) -> "pd.core.window.rolling.Rolling":
+) -> Any:
     if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
         raise ValueError("rolling window must be a positive integer")
     if min_periods is not None and (
@@ -87,6 +89,93 @@ def rolling_sum(
     return _rolling(frame, window=window, min_periods=min_periods).sum()
 
 
+@transformer
+def rolling_var(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+    ddof: int = 1,
+) -> pd.DataFrame:
+    """Return rolling variances over time."""
+
+    return _rolling(frame, window=window, min_periods=min_periods).var(ddof=ddof)
+
+
+@transformer
+def rolling_skew(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """Return rolling skewness over time."""
+
+    return _rolling(frame, window=window, min_periods=min_periods).skew()
+
+
+@transformer
+def rolling_kurt(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """Return rolling kurtosis over time."""
+
+    return _rolling(frame, window=window, min_periods=min_periods).kurt()
+
+
+@transformer
+def rolling_median(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """Return rolling medians over time."""
+
+    return _rolling(frame, window=window, min_periods=min_periods).median()
+
+
+@transformer
+def rolling_percentile(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """Return each value's percentile rank within its trailing window."""
+
+    return _rolling(frame, window=window, min_periods=min_periods).rank(pct=True)
+
+
+@transformer
+def rolling_rank(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """Return each value's rank within its trailing window."""
+
+    return _rolling(frame, window=window, min_periods=min_periods).rank()
+
+
+@transformer
+def rolling_zscore(
+    frame: pd.DataFrame,
+    *,
+    window: int,
+    min_periods: int | None = None,
+    ddof: int = 1,
+) -> pd.DataFrame:
+    """Return trailing-window z-scores for each current value."""
+
+    rolling = _rolling(frame, window=window, min_periods=min_periods)
+    return frame.sub(rolling.mean()).div(rolling.std(ddof=ddof).replace(0, float("nan")))
+
+
 def _ewm(
     frame: pd.DataFrame,
     *,
@@ -97,7 +186,7 @@ def _ewm(
     min_periods: int,
     adjust: bool,
     ignore_na: bool,
-) -> "pd.core.window.ewm.ExponentialMovingWindow":
+) -> Any:
     decay_arguments = (com, span, halflife, alpha)
     if sum(value is not None for value in decay_arguments) != 1:
         raise ValueError("ewm requires exactly one of com, span, halflife, or alpha")
@@ -190,3 +279,22 @@ def ewm_var(
         adjust=adjust,
         ignore_na=ignore_na,
     ).var(bias=bias)
+
+
+rolling_ewm = ewm_mean
+rolling_ew_std = ewm_std
+
+
+@transformer
+def rolling_ewm_fw(
+    frame: pd.DataFrame,
+    *,
+    halflife: float,
+    min_periods: int = 0,
+) -> pd.DataFrame:
+    """Return expanding exponentially weighted means with a half-life."""
+
+    return cast(
+        pd.DataFrame,
+        frame.ewm(halflife=halflife, min_periods=min_periods, adjust=True).mean(),
+    )

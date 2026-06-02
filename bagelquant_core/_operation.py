@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .graph import Graph
 
 
-def as_node(source: "Panel | Graph", *, kind: str) -> Node:
+def as_node(source: "Panel | Graph[Panel]", *, kind: str) -> Node:
     from .graph import Graph
 
     if isinstance(source, Panel):

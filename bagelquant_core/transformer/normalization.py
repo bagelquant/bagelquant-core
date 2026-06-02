@@ -46,3 +46,24 @@ def min_max_scale(frame: pd.DataFrame) -> pd.DataFrame:
     minimum = frame.min(axis=1)
     spread = frame.max(axis=1).sub(minimum).replace(0, float("nan"))
     return frame.sub(minimum, axis=0).div(spread, axis=0)
+
+
+@transformer
+def normalize(frame: pd.DataFrame) -> pd.DataFrame:
+    """Scale each row linearly to [-1, 1]."""
+
+    return min_max_scale.operation(frame).mul(2).sub(1)
+
+
+@transformer
+def net_scale(frame: pd.DataFrame) -> pd.DataFrame:
+    """Scale positive and negative row values independently by their sums."""
+
+    positive = frame.clip(lower=0)
+    negative = frame.clip(upper=0)
+    positive_sum = positive.sum(axis=1).replace(0, float("nan"))
+    negative_sum = negative.abs().sum(axis=1).replace(0, float("nan"))
+    output = positive.div(positive_sum, axis=0).fillna(0) + negative.div(
+        negative_sum, axis=0
+    ).fillna(0)
+    return output.where(frame.notna())

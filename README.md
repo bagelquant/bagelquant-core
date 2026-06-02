@@ -100,6 +100,9 @@ uv run python example.py
 - [Transformer](./docs/01_concepts/transformer.md)
 - [Composer](./docs/01_concepts/composer.md)
 - [Execution](./docs/01_concepts/execution.md)
+- [API reference](./docs/reference/index.md)
+- [Transformer reference](./docs/reference/transformers/index.md)
+- [Composer reference](./docs/reference/composers/index.md)
 
 ## License
 

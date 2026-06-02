@@ -8,6 +8,9 @@ A composer is a multi-input function-style operation:
 (Panel | Graph, ...) -> Graph
 ```
 
+For signatures, parameter descriptions, and examples for every public
+operation, see the [composer reference](../reference/composers/index.md).
+
 ## Built-In Composers
 
 ```python
@@ -30,6 +33,11 @@ Built-ins are grouped by behavior:
 | --- | --- |
 | Arithmetic | `add`, `sub`, `mul`, `div` |
 | Aggregation | `sum_frames`, `mean`, `product`, `minimum`, `maximum`, `weighted_sum`, `weighted_mean` |
+| General | `project`, `mask`, `coalesce` |
+| Scaling | `vol_scale` |
+| Math | `power`, `power_df`, `and_`, `or_`, `not_`, `xand`, `xor`, `greater`, `greater_equal`, `less`, `less_equal`, `equal` |
+| Rolling | `rolling_corr`, `rolling_cov`, `rolling_ols`, `rolling_lasso`, `rolling_ridge`, `rolling_elastic_net` |
+| Cross-sectional | `orthogonalize`, `group_rank`, `group_mean`, `group_max`, `group_min`, `group_median`, `group_std`, `group_demean`, `group_zscore`, `group_rankpct`, `group_percentile` |
 
 ## User-Defined Composers
 
@@ -53,3 +61,12 @@ composer. Already-aligned inputs are reused internally.
 Weighted composers require one numeric weight per input frame and compute a
 new frame without mutating their inputs. `weighted_mean(...)` also requires a
 non-zero total weight.
+
+Rolling regressions use `rolling_ols(y, *factors, window=...)` and the same
+input order for regularized variants. They fit on prior rows only, then predict
+the current row.
+
+Comparison and logical composers return numeric `1.0` and `0.0` panels so their
+outputs remain valid graph inputs. `minimum` and `maximum` are also exported as
+`min` and `max`; `sub`, `mul`, and `div` are exported as `subtract`,
+`multiply`, and `divide`.

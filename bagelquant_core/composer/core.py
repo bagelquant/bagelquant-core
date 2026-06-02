@@ -42,11 +42,11 @@ class ComposerFunction:
 
     def __call__(
         self,
-        *sources: "Panel | Graph",
+        *sources: "Panel | Graph[Panel]",
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         **config: Any,
-    ) -> "Graph":
+    ) -> "Graph[Panel]":
         from ..graph import Graph
 
         if not sources:

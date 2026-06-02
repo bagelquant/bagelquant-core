@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from numbers import Real
-
 import pandas as pd
 
 from .core import transformer
 
 
 @transformer
-def fillna(frame: pd.DataFrame, *, value: Real = 0) -> pd.DataFrame:
+def fillna(frame: pd.DataFrame, *, value: float = 0) -> pd.DataFrame:
     """Fill missing values with a numeric scalar."""
 
-    if not isinstance(value, Real) or isinstance(value, bool):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise TypeError("fillna value must be a real number")
     return frame.fillna(value)
 

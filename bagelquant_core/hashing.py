@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import numpy as np
 import pandas as pd
+from pandas.util import hash_pandas_object as _hash_pandas_object
+
+hash_pandas_object = cast(Any, _hash_pandas_object)
 
 
 def _normalize_value(value: Any) -> Any:
@@ -27,8 +30,8 @@ def hash_mapping(payload: Mapping[str, Any]) -> str:
 
 
 def hash_dataframe(frame: pd.DataFrame) -> str:
-    row_hash = pd.util.hash_pandas_object(frame, index=True).to_numpy()
-    col_hash = pd.util.hash_pandas_object(pd.Index(frame.columns)).to_numpy()
+    row_hash = hash_pandas_object(frame, index=True).to_numpy()
+    col_hash = hash_pandas_object(pd.Index(frame.columns)).to_numpy()
     digest = hashlib.sha256()
     digest.update(row_hash.tobytes())
     digest.update(col_hash.tobytes())

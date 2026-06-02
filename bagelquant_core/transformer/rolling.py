@@ -85,3 +85,108 @@ def rolling_sum(
     """Return rolling sums over time."""
 
     return _rolling(frame, window=window, min_periods=min_periods).sum()
+
+
+def _ewm(
+    frame: pd.DataFrame,
+    *,
+    com: float | None,
+    span: float | None,
+    halflife: float | None,
+    alpha: float | None,
+    min_periods: int,
+    adjust: bool,
+    ignore_na: bool,
+) -> "pd.core.window.ewm.ExponentialMovingWindow":
+    decay_arguments = (com, span, halflife, alpha)
+    if sum(value is not None for value in decay_arguments) != 1:
+        raise ValueError("ewm requires exactly one of com, span, halflife, or alpha")
+    return frame.ewm(
+        com=com,
+        span=span,
+        halflife=halflife,
+        alpha=alpha,
+        min_periods=min_periods,
+        adjust=adjust,
+        ignore_na=ignore_na,
+    )
+
+
+@transformer
+def ewm_mean(
+    frame: pd.DataFrame,
+    *,
+    com: float | None = None,
+    span: float | None = None,
+    halflife: float | None = None,
+    alpha: float | None = None,
+    min_periods: int = 0,
+    adjust: bool = True,
+    ignore_na: bool = False,
+) -> pd.DataFrame:
+    """Return pandas exponentially weighted means over time."""
+
+    return _ewm(
+        frame,
+        com=com,
+        span=span,
+        halflife=halflife,
+        alpha=alpha,
+        min_periods=min_periods,
+        adjust=adjust,
+        ignore_na=ignore_na,
+    ).mean()
+
+
+@transformer
+def ewm_std(
+    frame: pd.DataFrame,
+    *,
+    com: float | None = None,
+    span: float | None = None,
+    halflife: float | None = None,
+    alpha: float | None = None,
+    min_periods: int = 0,
+    adjust: bool = True,
+    ignore_na: bool = False,
+    bias: bool = False,
+) -> pd.DataFrame:
+    """Return pandas exponentially weighted standard deviations over time."""
+
+    return _ewm(
+        frame,
+        com=com,
+        span=span,
+        halflife=halflife,
+        alpha=alpha,
+        min_periods=min_periods,
+        adjust=adjust,
+        ignore_na=ignore_na,
+    ).std(bias=bias)
+
+
+@transformer
+def ewm_var(
+    frame: pd.DataFrame,
+    *,
+    com: float | None = None,
+    span: float | None = None,
+    halflife: float | None = None,
+    alpha: float | None = None,
+    min_periods: int = 0,
+    adjust: bool = True,
+    ignore_na: bool = False,
+    bias: bool = False,
+) -> pd.DataFrame:
+    """Return pandas exponentially weighted variances over time."""
+
+    return _ewm(
+        frame,
+        com=com,
+        span=span,
+        halflife=halflife,
+        alpha=alpha,
+        min_periods=min_periods,
+        adjust=adjust,
+        ignore_na=ignore_na,
+    ).var(bias=bias)

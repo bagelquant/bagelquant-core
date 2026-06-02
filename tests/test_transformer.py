@@ -2,17 +2,31 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from bagelquant_core import Panel
+from bagelquant_core import CategoryPanel, Panel
 from bagelquant_core.transformer import (
     abs_value,
+    bfill,
+    category_demean,
+    category_mean,
+    category_rank,
+    category_zscore,
     diff,
+    ewm_mean,
+    ewm_std,
+    ewm_var,
+    ffill,
+    fillna,
+    fillna_zero,
     identity,
     log,
     log1p,
     min_max_scale,
     negate,
+    non_nan_to_one,
+    non_nan_to_zero,
     pct_change,
     power,
+    replace_non_nan,
     rolling_max,
     rolling_mean,
     rolling_min,
@@ -133,3 +147,99 @@ def test_winsorize_rejects_invalid_quantile_range() -> None:
 
     with pytest.raises(ValueError, match="0 <= lower <= upper <= 1"):
         winsorize(source, lower=0.9, upper=0.1).compute()
+
+
+def test_missing_value_transformers() -> None:
+    source = panel({"a": [1.0, np.nan, np.nan], "b": [np.nan, 2.0, np.nan]})
+
+    assert fillna(source, value=-1).compute().data.values.tolist() == [
+        [1.0, -1.0],
+        [-1.0, 2.0],
+        [-1.0, -1.0],
+    ]
+    assert fillna_zero(source).compute().data.values.tolist() == [
+        [1.0, 0.0],
+        [0.0, 2.0],
+        [0.0, 0.0],
+    ]
+    assert ffill(source).compute().data.loc[2].tolist() == [1.0, 2.0]
+    assert bfill(source).compute().data.loc[0].tolist() == [1.0, 2.0]
+
+
+def test_replacement_transformers_preserve_missing_values() -> None:
+    source = panel({"a": [1.0, np.nan], "b": [-2.0, 3.0]})
+
+    replaced = replace_non_nan(source, value=7).compute().data
+    ones = non_nan_to_one(source).compute().data
+    zeros = non_nan_to_zero(source).compute().data
+
+    assert replaced.loc[0].tolist() == [7.0, 7.0]
+    assert np.isnan(replaced.loc[1, "a"])
+    assert ones.loc[0].tolist() == [1.0, 1.0]
+    assert zeros.loc[0].tolist() == [0.0, 0.0]
+
+
+def test_ewm_transformers_match_pandas_methods() -> None:
+    source = panel({"a": [1.0, 2.0, 3.0, 4.0]})
+    frame = source.data
+
+    averaged = ewm_mean(source, span=3).compute().data
+    deviation = ewm_std(source, halflife=2).compute().data
+    variance = ewm_var(source, alpha=0.5).compute().data
+
+    assert averaged.equals(frame.ewm(span=3).mean())
+    assert deviation.equals(frame.ewm(halflife=2).std())
+    assert variance.equals(frame.ewm(alpha=0.5).var())
+
+
+def test_ewm_requires_exactly_one_decay_argument() -> None:
+    source = panel({"a": [1.0, 2.0]})
+
+    with pytest.raises(ValueError, match="exactly one"):
+        ewm_mean(source).compute()
+
+    with pytest.raises(ValueError, match="exactly one"):
+        ewm_mean(source, span=3, alpha=0.5).compute()
+
+
+def test_category_panel_supports_string_labels() -> None:
+    categories = CategoryPanel(
+        pd.DataFrame({"a": ["tech"], "b": ["finance"]}),
+        name="industry",
+    )
+
+    assert categories.data.loc[0].tolist() == ["tech", "finance"]
+
+
+def test_category_transformers_operate_within_each_row_group() -> None:
+    source = panel(
+        {
+            "a": [1.0, 8.0],
+            "b": [3.0, 4.0],
+            "c": [10.0, 2.0],
+            "d": [14.0, 6.0],
+        }
+    )
+    categories = CategoryPanel(
+        pd.DataFrame(
+            {
+                "a": ["tech", "tech"],
+                "b": ["tech", "finance"],
+                "c": ["finance", "finance"],
+                "d": ["finance", "tech"],
+            }
+        ),
+        name="industry",
+    )
+
+    demeaned = category_demean(source, categories).compute().data
+    grouped_mean = category_mean(source, categories).compute().data
+    ranked = category_rank(source, categories).compute().data
+    scored = category_zscore(source, categories).compute().data
+
+    assert demeaned.loc[0].tolist() == [-1.0, 1.0, -2.0, 2.0]
+    assert grouped_mean.loc[0].tolist() == [2.0, 2.0, 12.0, 12.0]
+    assert ranked.loc[0].tolist() == [0.5, 1.0, 0.5, 1.0]
+    assert scored.loc[0].tolist() == pytest.approx(
+        [-np.sqrt(0.5), np.sqrt(0.5), -np.sqrt(0.5), np.sqrt(0.5)]
+    )

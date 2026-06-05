@@ -75,13 +75,6 @@ def remove_repeated(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 @transformer
-def remove_repeaded(frame: pd.DataFrame) -> pd.DataFrame:
-    """Compatibility spelling for :func:`remove_repeated`."""
-
-    return remove_repeated.operation(frame)
-
-
-@transformer
 def date_age_constraint(
     frame: pd.DataFrame,
     *,

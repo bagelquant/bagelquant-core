@@ -16,8 +16,11 @@ def _by_group(
     operation: Callable[[pd.Series], pd.Series],
 ) -> pd.DataFrame:
     output = frame.copy()
-    for index in frame.index:
-        output.loc[index] = frame.loc[index].groupby(group.loc[index], dropna=True).transform(operation)
+    for row_label, values in frame.iterrows():
+        output.loc[row_label] = values.groupby(
+            group.loc[row_label],
+            dropna=True,
+        ).transform(operation)
     return output
 
 
@@ -28,15 +31,17 @@ def orthogonalize(frame: pd.DataFrame, *factors: pd.DataFrame) -> pd.DataFrame:
     if not factors:
         raise ValueError("orthogonalize requires at least one factor")
     output = pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
-    for row in frame.index:
-        target = frame.loc[row].to_numpy(dtype=float)
-        features = np.column_stack([factor.loc[row].to_numpy(dtype=float) for factor in factors])
+    for row_label, row in frame.iterrows():
+        target = row.to_numpy(dtype=float)
+        features = np.column_stack(
+            [factor.loc[row_label].to_numpy(dtype=float) for factor in factors]
+        )
         valid = np.isfinite(target) & np.isfinite(features).all(axis=1)
         if valid.sum() <= features.shape[1]:
             continue
         design = np.column_stack([np.ones(valid.sum()), features[valid]])
         coefficients = np.linalg.lstsq(design, target[valid], rcond=None)[0]
-        output.loc[row, valid] = target[valid] - design @ coefficients
+        output.loc[row_label, valid] = target[valid] - design @ coefficients
     return output
 
 

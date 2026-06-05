@@ -110,6 +110,18 @@ Run the complete example:
 uv run python example.py
 ```
 
+## Development
+
+Package source code lives in `src/bagelquant_core`. The test suite is configured
+to import from `src`, so local validation can run from the repository root:
+
+```bash
+.\.venv\Scripts\python.exe -m pytest
+```
+
+`uv run pytest` is also expected to work in environments where `uv` can resolve
+the project Python executable correctly.
+
 ## Documentation
 
 - [Proposal](./docs/00_proposal/proposal.md)

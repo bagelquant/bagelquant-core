@@ -89,6 +89,9 @@ def test_weighted_composers_require_one_numeric_weight_per_frame() -> None:
     with pytest.raises(TypeError, match="real numbers"):
         weighted_sum(left, right, weights=[1.0, "invalid"]).compute()
 
+    with pytest.raises(TypeError, match="sequence of real numbers"):
+        weighted_sum(left, right, weights="12").compute()  # type: ignore[arg-type]
+
 
 def test_weighted_mean_rejects_zero_total_weight() -> None:
     left = panel([1.0], name="left")

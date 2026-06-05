@@ -13,6 +13,23 @@ from .domain import Domain
 _INTERNAL_MATERIALIZATION_TOKEN = object()
 
 
+def _validate_frame_shape(data: pd.DataFrame, *, kind: str) -> None:
+    if not isinstance(data, pd.DataFrame):
+        raise TypeError(f"{kind} data must be a pandas DataFrame")
+    if data.index.nlevels != 1 or data.columns.nlevels != 1:
+        raise ValueError(f"{kind} data must have 1D index and columns")
+    if data.index.has_duplicates or data.columns.has_duplicates:
+        raise ValueError(f"{kind} index and columns must be unique")
+
+
+def _immutable_copy(data: pd.DataFrame) -> pd.DataFrame:
+    validated = data.copy(deep=True)
+    values = validated.to_numpy(copy=False)
+    if hasattr(values, "flags"):
+        values.flags.writeable = False
+    return validated
+
+
 class Panel(Node):
     """Immutable numeric data container and leaf node in the DAG."""
 
@@ -127,22 +144,13 @@ class Panel(Node):
 
     @staticmethod
     def _validate_data(data: pd.DataFrame) -> pd.DataFrame:
-        if not isinstance(data, pd.DataFrame):
-            raise TypeError("Panel data must be a pandas DataFrame")
-        if data.index.nlevels != 1 or data.columns.nlevels != 1:
-            raise ValueError("Panel data must have 1D index and columns")
-        if data.index.has_duplicates or data.columns.has_duplicates:
-            raise ValueError("Panel index and columns must be unique")
+        _validate_frame_shape(data, kind="Panel")
 
         numeric_columns = data.select_dtypes(include="number").columns
         if len(numeric_columns) != len(data.columns):
             raise TypeError("Panel data must be fully numeric")
 
-        validated = data.copy(deep=True)
-        values = validated.to_numpy(copy=False)
-        if hasattr(values, "flags"):
-            values.flags.writeable = False
-        return validated
+        return _immutable_copy(data)
 
 
 class CategoryPanel(Panel):
@@ -150,15 +158,5 @@ class CategoryPanel(Panel):
 
     @staticmethod
     def _validate_data(data: pd.DataFrame) -> pd.DataFrame:
-        if not isinstance(data, pd.DataFrame):
-            raise TypeError("CategoryPanel data must be a pandas DataFrame")
-        if data.index.nlevels != 1 or data.columns.nlevels != 1:
-            raise ValueError("CategoryPanel data must have 1D index and columns")
-        if data.index.has_duplicates or data.columns.has_duplicates:
-            raise ValueError("CategoryPanel index and columns must be unique")
-
-        validated = data.copy(deep=True)
-        values = validated.to_numpy(copy=False)
-        if hasattr(values, "flags"):
-            values.flags.writeable = False
-        return validated
+        _validate_frame_shape(data, kind="CategoryPanel")
+        return _immutable_copy(data)

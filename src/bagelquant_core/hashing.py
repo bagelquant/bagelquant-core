@@ -13,9 +13,14 @@ hash_pandas_object = cast(Any, _hash_pandas_object)
 
 def _normalize_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): _normalize_value(val) for key, val in value.items()}
+        return {
+            str(key): _normalize_value(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
     if isinstance(value, (list, tuple)):
         return [_normalize_value(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_normalize_value(item) for item in value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, (np.integer, np.floating)):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from numbers import Real
 from typing import cast
 
 import numpy as np
@@ -16,6 +17,22 @@ def _validate_window(window: int) -> None:
         raise ValueError("rolling window must be a positive integer")
 
 
+def _validate_min_periods(min_periods: int | None, *, window: int) -> None:
+    if min_periods is None:
+        return
+    if not isinstance(min_periods, int) or isinstance(min_periods, bool):
+        raise TypeError("rolling min_periods must be an integer")
+    if min_periods < 0:
+        raise ValueError("rolling min_periods must be non-negative")
+    if min_periods > window:
+        raise ValueError("rolling min_periods must not exceed window")
+
+
+def _validate_non_negative_real(value: float, *, name: str) -> None:
+    if not isinstance(value, Real) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be a non-negative real number")
+
+
 @composer
 def rolling_corr(
     lhs: pd.DataFrame,
@@ -27,6 +44,7 @@ def rolling_corr(
     """Return rolling correlations between corresponding columns."""
 
     _validate_window(window)
+    _validate_min_periods(min_periods, window=window)
     return cast(pd.DataFrame, lhs.rolling(window, min_periods=min_periods).corr(rhs))
 
 
@@ -42,6 +60,7 @@ def rolling_cov(
     """Return rolling covariance between corresponding columns."""
 
     _validate_window(window)
+    _validate_min_periods(min_periods, window=window)
     return cast(
         pd.DataFrame,
         lhs.rolling(window, min_periods=min_periods).cov(rhs, ddof=ddof),
@@ -59,7 +78,8 @@ def _rolling_regression(
     if not factors:
         raise ValueError("rolling regression requires at least one factor")
     output = pd.DataFrame(np.nan, index=y.index, columns=y.columns)
-    for column in y.columns:
+    column_positions = {column: position for position, column in enumerate(y.columns)}
+    for column, column_position in column_positions.items():
         target = y[column].to_numpy(dtype=float)
         features = np.column_stack(
             [factor[column].to_numpy(dtype=float) for factor in factors]
@@ -73,7 +93,7 @@ def _rolling_regression(
                 continue
             design = np.column_stack([np.ones(valid.sum()), train_x[valid]])
             coefficients = fit(design, train_y[valid])
-            output.iat[current, output.columns.get_loc(column)] = np.r_[1, current_x] @ coefficients
+            output.iat[current, column_position] = np.r_[1, current_x] @ coefficients
     return output
 
 
@@ -138,8 +158,7 @@ def rolling_ridge(
 ) -> pd.DataFrame:
     """Return prior-window ridge-regression predictions."""
 
-    if alpha < 0:
-        raise ValueError("rolling_ridge alpha must be non-negative")
+    _validate_non_negative_real(alpha, name="rolling_ridge alpha")
     return _rolling_regression(y, factors, window=window, fit=_ridge_fit(alpha))
 
 
@@ -155,8 +174,12 @@ def rolling_elastic_net(
 ) -> pd.DataFrame:
     """Return prior-window elastic-net predictions."""
 
-    if alpha < 0 or not 0 <= l1_ratio <= 1:
+    _validate_non_negative_real(alpha, name="rolling_elastic_net alpha")
+    if not isinstance(l1_ratio, Real) or isinstance(l1_ratio, bool) or not 0 <= l1_ratio <= 1:
         raise ValueError("rolling_elastic_net requires alpha >= 0 and l1_ratio in [0, 1]")
+    if not isinstance(max_iter, int) or isinstance(max_iter, bool) or max_iter <= 0:
+        raise ValueError("rolling_elastic_net max_iter must be a positive integer")
+    _validate_non_negative_real(tolerance, name="rolling_elastic_net tolerance")
     return _rolling_regression(
         y,
         factors,

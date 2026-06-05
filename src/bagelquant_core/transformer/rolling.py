@@ -28,6 +28,13 @@ def _rolling(
     return frame.rolling(window=window, min_periods=min_periods)
 
 
+def _validate_min_periods(min_periods: int) -> None:
+    if not isinstance(min_periods, int) or isinstance(min_periods, bool):
+        raise TypeError("ewm min_periods must be an integer")
+    if min_periods < 0:
+        raise ValueError("ewm min_periods must be non-negative")
+
+
 @transformer
 def rolling_mean(
     frame: pd.DataFrame,
@@ -190,6 +197,7 @@ def _ewm(
     decay_arguments = (com, span, halflife, alpha)
     if sum(value is not None for value in decay_arguments) != 1:
         raise ValueError("ewm requires exactly one of com, span, halflife, or alpha")
+    _validate_min_periods(min_periods)
     return frame.ewm(
         com=com,
         span=span,
@@ -294,6 +302,9 @@ def rolling_ewm_fw(
 ) -> pd.DataFrame:
     """Return expanding exponentially weighted means with a half-life."""
 
+    if halflife <= 0:
+        raise ValueError("rolling_ewm_fw halflife must be positive")
+    _validate_min_periods(min_periods)
     return cast(
         pd.DataFrame,
         frame.ewm(halflife=halflife, min_periods=min_periods, adjust=True).mean(),

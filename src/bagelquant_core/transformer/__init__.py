@@ -20,7 +20,6 @@ from .general import (
     notnan,
     posonly,
     rate_of_change,
-    remove_repeaded,
     remove_repeated,
     replace_inf,
 )
@@ -120,7 +119,6 @@ __all__ = [
     "rank",
     "rankpct",
     "rate_of_change",
-    "remove_repeaded",
     "remove_repeated",
     "replace_non_nan",
     "replace_inf",

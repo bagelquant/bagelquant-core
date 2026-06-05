@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src"))
 
 from bagelquant_core import composer as composer_api
 from bagelquant_core import transformer as transformer_api

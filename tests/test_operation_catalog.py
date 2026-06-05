@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import bagelquant_core.transformer as transformer_api
 
 from bagelquant_core import CategoryPanel, Panel
 from bagelquant_core.composer import (
@@ -70,6 +71,11 @@ def test_general_transformers() -> None:
     assert np.isnan(remove_repeated(source).compute().data.iloc[1]["a"])
     assert constant(source, value=7).compute().data.iloc[0].tolist() == [7, 7]
     assert np.isnan(replace_inf(source).compute().data.iloc[2]["a"])
+
+
+def test_misspelled_remove_repeaded_is_not_public() -> None:
+    assert "remove_repeaded" not in transformer_api.__all__
+    assert not hasattr(transformer_api, "remove_repeaded")
 
 
 def test_cross_sectional_transformers() -> None:

@@ -21,8 +21,10 @@ def _validate_weights(
     *,
     weights: Sequence[Real],
     operation: str,
-) -> None:
+) -> tuple[Real, ...]:
     _validate_frames(frames, operation=operation)
+    if isinstance(weights, (str, bytes)):
+        raise TypeError(f"{operation} weights must be a sequence of real numbers")
     if len(weights) != len(frames):
         raise ValueError(f"{operation} requires one weight per frame")
     if any(
@@ -30,6 +32,7 @@ def _validate_weights(
         for weight in weights
     ):
         raise TypeError(f"{operation} weights must be real numbers")
+    return tuple(weights)
 
 
 @composer
@@ -99,9 +102,13 @@ def weighted_sum(
 ) -> pd.DataFrame:
     """Return the weighted sum of one or more frames."""
 
-    _validate_weights(frames, weights=weights, operation="weighted_sum")
-    output = frames[0] * weights[0]
-    for frame, weight in zip(frames[1:], weights[1:]):
+    checked_weights = _validate_weights(
+        frames,
+        weights=weights,
+        operation="weighted_sum",
+    )
+    output = frames[0] * checked_weights[0]
+    for frame, weight in zip(frames[1:], checked_weights[1:]):
         output = output.add(frame * weight)
     return output
 
@@ -113,11 +120,15 @@ def weighted_mean(
 ) -> pd.DataFrame:
     """Return the weighted mean of one or more frames."""
 
-    _validate_weights(frames, weights=weights, operation="weighted_mean")
-    total_weight = sum(weights)
+    checked_weights = _validate_weights(
+        frames,
+        weights=weights,
+        operation="weighted_mean",
+    )
+    total_weight = sum(checked_weights)
     if total_weight == 0:
         raise ValueError("weighted_mean weights must not sum to zero")
-    return weighted_sum.operation(*frames, weights=weights).div(total_weight)
+    return weighted_sum.operation(*frames, weights=checked_weights).div(total_weight)
 
 
 min = minimum

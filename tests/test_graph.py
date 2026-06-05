@@ -84,6 +84,15 @@ def test_user_defined_transformer_config_is_in_graph_spec() -> None:
     assert scaled.spec().nodes[-1].config["factor"] == 3
 
 
+def test_operation_signature_normalizes_equivalent_config_order() -> None:
+    price = make_panel(pd.DataFrame({"a": [1, 2]}), name="price")
+
+    left = scale(price, factor={"b": 2, "a": 1}, name="scaled")  # type: ignore[arg-type]
+    right = scale(price, factor={"a": 1, "b": 2}, name="scaled")  # type: ignore[arg-type]
+
+    assert left.topological_sort()[-1].signature() == right.topological_sort()[-1].signature()
+
+
 def test_zscore_constant_cross_section_does_not_return_infinity() -> None:
     constant = make_panel(pd.DataFrame({"a": [1.0], "b": [1.0]}), name="constant")
 

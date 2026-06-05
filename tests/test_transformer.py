@@ -203,6 +203,13 @@ def test_ewm_requires_exactly_one_decay_argument() -> None:
         ewm_mean(source, span=3, alpha=0.5).compute()
 
 
+def test_ewm_rejects_invalid_min_periods() -> None:
+    source = panel({"a": [1.0, 2.0]})
+
+    with pytest.raises(ValueError, match="non-negative"):
+        ewm_mean(source, span=3, min_periods=-1).compute()
+
+
 def test_category_panel_supports_string_labels() -> None:
     categories = make_category_panel(
         pd.DataFrame({"a": ["tech"], "b": ["finance"]}),

@@ -58,7 +58,6 @@ parameters, return value, notes, and an example.
 - [`rank`](./rank.md)
 - [`rankpct`](./rankpct.md)
 - [`rate_of_change`](./rate_of_change.md)
-- [`remove_repeaded`](./remove_repeaded.md)
 - [`remove_repeated`](./remove_repeated.md)
 - [`replace_inf`](./replace_inf.md)
 - [`replace_non_nan`](./replace_non_nan.md)

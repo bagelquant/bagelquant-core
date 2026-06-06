@@ -10,10 +10,8 @@ from bagelquant_core import CategoryPanel, Domain, Panel
 def domain_for(columns: pd.Index, rows: int) -> Domain:
     dates = pd.bdate_range("2024-01-02", periods=rows)
     return Domain(
-        region="US",
+        calendar=dates,
         universe=list(columns),
-        start_date=dates[0],
-        end_date=dates[-1],
     )
 
 

@@ -58,11 +58,20 @@ def test_execution_reuses_hashes_for_already_aligned_inputs(monkeypatch) -> None
 
 def test_execution_cache_distinguishes_domain_signatures() -> None:
     runtime = _ExecutionRuntime()
-    us = Domain(region="US", universe=["a"], start_date="2024-01-02", end_date="2024-01-03")
-    hk = Domain(region="HK", universe=["a"], start_date="2024-01-02", end_date="2024-01-03")
-    frame = pd.DataFrame({"a": [1, 2]}, index=pd.to_datetime(["2024-01-02", "2024-01-03"]))
+    first = Domain(
+        calendar=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        universe=["a"],
+    )
+    second = Domain(
+        calendar=pd.to_datetime(["2024-01-02", "2024-01-04"]),
+        universe=["a"],
+    )
+    frame = pd.DataFrame(
+        {"a": [1, 2]},
+        index=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+    )
 
-    runtime.run(rank(Panel.from_domain(frame, us), name="ranked"))
-    runtime.run(rank(Panel.from_domain(frame, hk), name="ranked"))
+    runtime.run(rank(Panel.from_domain(frame, first), name="ranked"))
+    runtime.run(rank(Panel.from_domain(frame, second), name="ranked"))
 
     assert len(runtime.cache) == 2

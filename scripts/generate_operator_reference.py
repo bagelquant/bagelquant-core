@@ -246,7 +246,7 @@ def _transformer_example(name: str) -> str:
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.transformer import {name}
 
-domain = Domain(region="US", universe=["a", "b", "c"], start_date="2024-01-02", end_date="2024-01-02")
+domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
 factor = Panel.from_domain(pd.DataFrame({{"a": [1.0], "b": [3.0], "c": [8.0]}}, index=domain.sessions), domain)
 industry = CategoryPanel.from_domain(pd.DataFrame({{"a": ["tech"], "b": ["tech"], "c": ["bank"]}}, index=domain.sessions), domain)
 
@@ -263,7 +263,7 @@ print(result)"""
 from bagelquant_core import Domain, Panel
 from bagelquant_core.transformer import {name}
 
-domain = Domain(region="US", universe=["a", "b"], start_date="2024-01-02", end_date="2024-01-04")
+domain = Domain(calendar=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]), universe=["a", "b"])
 source = Panel.from_domain(pd.DataFrame({{"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}}, index=domain.sessions), domain)
 
 result = {name}({arguments}).compute().data
@@ -277,7 +277,7 @@ def _composer_example(name: str) -> str:
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.composer import {name}
 
-domain = Domain(region="US", universe=["a", "b", "c"], start_date="2024-01-02", end_date="2024-01-02")
+domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
 factor = Panel.from_domain(pd.DataFrame({{"a": [1.0], "b": [3.0], "c": [8.0]}}, index=domain.sessions), domain)
 industry = CategoryPanel.from_domain(pd.DataFrame({{"a": ["tech"], "b": ["tech"], "c": ["bank"]}}, index=domain.sessions), domain)
 
@@ -302,11 +302,11 @@ print(result)"""
     else:
         call = f"{name}(left, right)"
     if name == "orthogonalize":
-        setup = """domain = Domain(region="US", universe=["a", "b", "c"], start_date="2024-01-02", end_date="2024-01-02")
+        setup = """domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
 factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [5.0]}, index=domain.sessions), domain)
 size = Panel.from_domain(pd.DataFrame({"a": [0.0], "b": [1.0], "c": [2.0]}, index=domain.sessions), domain)"""
     else:
-        setup = """domain = Domain(region="US", universe=["a", "b"], start_date="2024-01-02", end_date="2024-01-04")
+        setup = """domain = Domain(calendar=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]), universe=["a", "b"])
 left = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
 right = Panel.from_domain(pd.DataFrame({"a": [1.0, 1.0, 2.0], "b": [1.0, 2.0, 4.0]}, index=domain.sessions), domain)"""
     return f"""import pandas as pd

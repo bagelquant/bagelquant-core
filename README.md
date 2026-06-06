@@ -29,10 +29,8 @@ from bagelquant_core.transformer import rank, rolling_mean, winsorize, zscore
 # Define the domain of our research.
 # The `Panel.from_domain` method aligns raw data to the domain's sessions and assets.
 domain = Domain(
-    region="US",
+    calendar=pd.bdate_range("2024-01-01", "2024-12-31"),
     universe=["AAPL", "MSFT"],
-    start_date="2024-01-01",
-    end_date="2024-12-31",
 )
 
 # Create panels for input data. Replace `pd.DataFrame(...)` with actual data loading logic.
@@ -65,8 +63,7 @@ result = smoothed_signal.output  # Access the output panel after computation.
 ```
 
 `result` is a `Panel`. Its underlying frame is available as `result.data`.
-`Domain` caches exchange sessions in the operating system's user cache
-directory. Set `BAGELQUANT_CALENDAR_CACHE_DIR` to override the location.
+`Domain` never retrieves calendars; callers must provide a sorted calendar.
 
 ## Custom Operations
 

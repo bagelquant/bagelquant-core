@@ -52,10 +52,8 @@ def main() -> None:
     rng = np.random.default_rng(seed=7)
     stocks = [f"STOCK_{stock_id:04d}" for stock_id in range(1, 501)]
     domain = Domain(
-        region="US",
+        calendar=pd.bdate_range("2015-01-01", "2024-12-31"),
         universe=stocks,
-        start_date="2015-01-01",
-        end_date="2024-12-31",
     )
     dates = domain.sessions
     rows = len(dates)

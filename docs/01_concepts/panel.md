@@ -11,13 +11,13 @@ Time x Assets
 ```
 
 ```python
+import pandas as pd
+
 from bagelquant_core import Domain, Panel
 
 domain = Domain(
-    region="US",
+    calendar=pd.bdate_range("2024-01-01", "2024-12-31"),
     universe=["AAPL", "MSFT"],
-    start_date="2024-01-01",
-    end_date="2024-12-31",
 )
 price = Panel.from_domain(price_df, domain, name="price")
 ```
@@ -64,22 +64,16 @@ membership = pd.DataFrame(
     index=pd.to_datetime(["2024-01-03"]),
 )
 domain = Domain(
-    region="US",
+    calendar=pd.bdate_range("2024-01-01", "2024-01-31"),
     universe=membership,
-    start_date="2024-01-01",
-    end_date="2024-01-31",
 )
 ```
 
-## Calendar Cache
+## Calendar
 
-`Domain` stores exchange sessions in the operating system's user cache
-directory. Repeated requests inside the cached date range reuse the local
-calendar. A request outside that range refreshes the stored exchange calendar
-with the broadest available session range.
-
-Set `BAGELQUANT_CALENDAR_CACHE_DIR` to place calendar cache files in a custom
-directory.
+`Domain` never retrieves calendars. Provide a non-empty, unique, sorted
+calendar from your data layer. The first and last sessions define the domain's
+start and end dates.
 
 ## Category Panels
 

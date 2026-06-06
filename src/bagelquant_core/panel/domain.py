@@ -1,35 +1,14 @@
-"""Trading-calendar and universe definitions for panel inputs."""
+"""Explicit trading-calendar and universe definitions for panel inputs."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-import json
-import os
-from pathlib import Path
 from typing import Any
 
-import exchange_calendars as xcals
 import numpy as np
 import pandas as pd
 
 from ..hashing import hash_dataframe, hash_mapping
-
-REGION_CALENDARS = {
-    "US": "XNYS",
-    "CN": "XSHG",
-    "HK": "XHKG",
-}
-CALENDAR_CACHE_ENV = "BAGELQUANT_CALENDAR_CACHE_DIR"
-CALENDAR_CACHE_VERSION = 1
-
-
-def _normalize_timestamp(value: Any, *, name: str) -> pd.Timestamp:
-    timestamp = pd.Timestamp(value)
-    if pd.isna(timestamp):
-        raise ValueError(f"{name} must be a valid date")
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_localize(None)
-    return timestamp.normalize()
 
 
 def _normalize_index(index: pd.Index) -> pd.DatetimeIndex:
@@ -39,95 +18,17 @@ def _normalize_index(index: pd.Index) -> pd.DatetimeIndex:
     return normalized.normalize().as_unit("ns")
 
 
-def _calendar_cache_root() -> Path:
-    override = os.environ.get(CALENDAR_CACHE_ENV)
-    if override:
-        return Path(override).expanduser()
-    if os.name == "nt":
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            return Path(local_app_data) / "bagelquant" / "calendars"
-    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
-    if xdg_cache_home:
-        return Path(xdg_cache_home) / "bagelquant" / "calendars"
-    return Path.home() / ".cache" / "bagelquant" / "calendars"
-
-
-def _calendar_cache_path(calendar_name: str) -> Path:
-    return _calendar_cache_root() / f"{calendar_name}.json"
-
-
-def _sessions_from_cache(
-    calendar_name: str,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-) -> pd.DatetimeIndex | None:
-    try:
-        payload = json.loads(_calendar_cache_path(calendar_name).read_text())
-        if payload["version"] != CALENDAR_CACHE_VERSION:
-            return None
-        if payload["calendar"] != calendar_name:
-            return None
-        cached_start = _normalize_timestamp(payload["start_date"], name="start_date")
-        cached_end = _normalize_timestamp(payload["end_date"], name="end_date")
-        if start < cached_start or end > cached_end:
-            return None
-        sessions = _normalize_index(pd.Index(payload["sessions"]))
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
-        return None
-    return sessions[(sessions >= start) & (sessions <= end)]
-
-
-def _write_calendar_cache(
-    calendar_name: str,
-    sessions: pd.DatetimeIndex,
-) -> None:
+def _normalize_calendar(calendar: Sequence[Any] | pd.DatetimeIndex) -> pd.DatetimeIndex:
+    sessions = _normalize_index(pd.Index(calendar))
     if sessions.empty:
-        return
-    cache_path = _calendar_cache_path(calendar_name)
-    temporary_path = cache_path.with_suffix(".tmp")
-    payload = {
-        "version": CALENDAR_CACHE_VERSION,
-        "calendar": calendar_name,
-        "start_date": sessions[0].isoformat(),
-        "end_date": sessions[-1].isoformat(),
-        "sessions": [session.isoformat() for session in sessions],
-    }
-    try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path.write_text(json.dumps(payload), encoding="utf-8")
-        temporary_path.replace(cache_path)
-    except OSError:
-        return
-
-
-def _retrieve_calendar_sessions(
-    calendar_name: str,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-) -> pd.DatetimeIndex:
-    calendar = xcals.get_calendar(calendar_name)
-    sessions = _normalize_index(calendar.sessions)
-    if sessions.empty or start < sessions[0] or end > sessions[-1]:
-        calendar = xcals.get_calendar(
-            calendar_name,
-            start=min(start, sessions[0]) if not sessions.empty else start,
-            end=max(end, sessions[-1]) if not sessions.empty else end,
-        )
-        sessions = _normalize_index(calendar.sessions)
-    _write_calendar_cache(calendar_name, sessions)
-    return sessions[(sessions >= start) & (sessions <= end)]
-
-
-def _sessions_in_range(
-    calendar_name: str,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-) -> pd.DatetimeIndex:
-    cached = _sessions_from_cache(calendar_name, start, end)
-    if cached is not None:
-        return cached
-    return _retrieve_calendar_sessions(calendar_name, start, end)
+        raise ValueError("calendar must contain at least one session")
+    if sessions.has_duplicates:
+        raise ValueError("calendar sessions must be unique")
+    if sessions.hasnans:
+        raise ValueError("calendar sessions must be valid dates")
+    if not sessions.is_monotonic_increasing:
+        raise ValueError("calendar sessions must be sorted ascending")
+    return sessions
 
 
 class Domain:
@@ -136,28 +37,13 @@ class Domain:
     def __init__(
         self,
         *,
-        region: str,
+        calendar: Sequence[Any] | pd.DatetimeIndex,
         universe: Sequence[Any] | pd.DataFrame,
-        start_date: Any,
-        end_date: Any,
     ) -> None:
-        normalized_region = region.upper()
-        if normalized_region not in REGION_CALENDARS:
-            supported = ", ".join(sorted(REGION_CALENDARS))
-            raise ValueError(f"Unsupported region '{region}'. Expected one of: {supported}")
+        sessions = _normalize_calendar(calendar)
 
-        start = _normalize_timestamp(start_date, name="start_date")
-        end = _normalize_timestamp(end_date, name="end_date")
-        if start > end:
-            raise ValueError("start_date must not be after end_date")
-
-        calendar_name = REGION_CALENDARS[normalized_region]
-        sessions = _sessions_in_range(calendar_name, start, end)
-
-        self.region = normalized_region
-        self.calendar_name = calendar_name
-        self.start_date = start
-        self.end_date = end
+        self.start_date = sessions[0]
+        self.end_date = sessions[-1]
         self._sessions = sessions
 
         if isinstance(universe, pd.DataFrame):
@@ -170,8 +56,9 @@ class Domain:
         self._assets = self._membership.columns.copy()
         self._signature = hash_mapping(
             {
-                "region": self.region,
-                "calendar": self.calendar_name,
+                "calendar": hash_dataframe(
+                    pd.DataFrame(index=self._sessions).assign(session=True)
+                ),
                 "start_date": self.start_date.isoformat(),
                 "end_date": self.end_date.isoformat(),
                 "membership": hash_dataframe(self._membership),

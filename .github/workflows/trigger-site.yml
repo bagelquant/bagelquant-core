@@ -18,5 +18,5 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.BAGELQUANT_TRIGGER_TOKEN }}
-          repository: bagelquang/bagelquant.github.io
+          repository: bagelquant/bagelquant.github.io
           event-type: docs-updated

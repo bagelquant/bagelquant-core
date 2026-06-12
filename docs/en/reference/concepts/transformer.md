@@ -9,7 +9,7 @@ Panel | Graph -> Graph
 ```
 
 For signatures, parameter descriptions, and examples for every public
-operation, see the [transformer reference](../reference/transformers/index.md).
+operation, see the [transformer reference](../transformers/index.md).
 
 ## Built-In Transformers
 

@@ -11,13 +11,14 @@ weight panels.
 ## Recommended Reading
 
 - [Quick start](quick-start.md)
-- [Architecture and design](02_architecture/bagelquant%20core%20architecture.md)
-- [Public API](public-api.md)
-- [Internal documentation](internals.md)
-- [Panel](01_concepts/panel.md)
-- [Graph](01_concepts/graph.md)
-- [Transformer](01_concepts/transformer.md)
-- [Composer](01_concepts/composer.md)
-- [Execution](01_concepts/execution.md)
+- [Concepts](concepts.md)
+- [Architecture and design](architecture.md)
+- [Public API](reference/public-api.md)
+- [Internal documentation](reference/internals.md)
+- [Panel](reference/concepts/panel.md)
+- [Graph](reference/concepts/graph.md)
+- [Transformer](reference/concepts/transformer.md)
+- [Composer](reference/concepts/composer.md)
+- [Execution](reference/concepts/execution.md)
 - [API reference](reference/index.md)
 

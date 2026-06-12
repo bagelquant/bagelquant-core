@@ -121,17 +121,19 @@ the project Python executable correctly.
 
 ## Documentation
 
-- [Proposal](./docs/00_proposal/proposal.md)
-- [Refactor plan](./docs/00_proposal/panel-graph-refactor-plan.md)
-- [Architecture](./docs/02_architecture/bagelquant%20core%20architecture.md)
-- [Panel](./docs/01_concepts/panel.md)
-- [Graph](./docs/01_concepts/graph.md)
-- [Transformer](./docs/01_concepts/transformer.md)
-- [Composer](./docs/01_concepts/composer.md)
-- [Execution](./docs/01_concepts/execution.md)
-- [API reference](./docs/reference/index.md)
-- [Transformer reference](./docs/reference/transformers/index.md)
-- [Composer reference](./docs/reference/composers/index.md)
+- [Quick start](./docs/en/quick-start.md)
+- [Concepts](./docs/en/concepts.md)
+- [Architecture](./docs/en/architecture.md)
+- [Panel](./docs/en/reference/concepts/panel.md)
+- [Graph](./docs/en/reference/concepts/graph.md)
+- [Transformer](./docs/en/reference/concepts/transformer.md)
+- [Composer](./docs/en/reference/concepts/composer.md)
+- [Execution](./docs/en/reference/concepts/execution.md)
+- [API reference](./docs/en/reference/index.md)
+- [Transformer reference](./docs/en/reference/transformers/index.md)
+- [Composer reference](./docs/en/reference/composers/index.md)
+- [Proposal](./docs/en/reference/proposals/proposal.md)
+- [Refactor plan](./docs/en/reference/proposals/panel-graph-refactor-plan.md)
 
 ## License
 

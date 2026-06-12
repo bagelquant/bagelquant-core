@@ -25,7 +25,7 @@ factor = rank(zscore(winsorize(raw_panel)), name="factor")
 ```
 
 The generated transformer reference is in
-[`docs/reference/transformers/index.md`](reference/transformers/index.md).
+[`reference/transformers/index.md`](transformers/index.md).
 
 ## Composers
 
@@ -39,7 +39,7 @@ prediction = weighted_sum(ratio, quality, weights=[0.6, 0.4])
 ```
 
 The generated composer reference is in
-[`docs/reference/composers/index.md`](reference/composers/index.md).
+[`reference/composers/index.md`](composers/index.md).
 
 ## Custom Operations
 

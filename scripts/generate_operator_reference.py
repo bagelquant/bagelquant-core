@@ -10,8 +10,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from bagelquant_core import composer as composer_api
-from bagelquant_core import transformer as transformer_api
+from bagelquant_core import composer as composer_api  # noqa: E402
+from bagelquant_core import transformer as transformer_api  # noqa: E402
 
 REFERENCE = ROOT / "docs" / "en" / "reference"
 
@@ -289,7 +289,16 @@ print(result)"""
         call = f"{name}(left, right, window=2)"
     elif name in ROLLING_RELATIONSHIPS:
         call = f"{name}(left, right, window=2)"
-    elif name in {"coalesce", "mean", "maximum", "minimum", "max", "min", "product", "sum_frames"}:
+    elif name in {
+        "coalesce",
+        "mean",
+        "maximum",
+        "minimum",
+        "max",
+        "min",
+        "product",
+        "sum_frames",
+    }:
         call = f"{name}(left, right)"
     elif name in {"weighted_mean", "weighted_sum"}:
         call = f"{name}(left, right, weights=[0.25, 0.75])"
@@ -325,13 +334,30 @@ def _notes(name: str, *, kind: str) -> str:
     if kind == "transformer":
         notes.append("Rows represent time and columns represent assets.")
     else:
-        notes.append("Inputs are aligned by index and columns before the operation runs.")
-    if name in {"and_", "or_", "not_", "xand", "xor", "equal", "greater", "greater_equal", "less", "less_equal"}:
-        notes.append("Logical and comparison results are numeric panels containing `1.0` and `0.0`.")
+        notes.append(
+            "Inputs are aligned by index and columns before the operation runs."
+        )
+    if name in {
+        "and_",
+        "or_",
+        "not_",
+        "xand",
+        "xor",
+        "equal",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal",
+    }:
+        notes.append(
+            "Logical and comparison results are numeric panels containing `1.0` and `0.0`."
+        )
     if name.startswith("rolling_") or name.startswith("ewm_"):
         notes.append("Rolling calculations run independently down each asset column.")
     if name in ROLLING_REGRESSIONS:
-        notes.append("The model is fit on prior rows only and predicts the current row.")
+        notes.append(
+            "The model is fit on prior rows only and predicts the current row."
+        )
     if name.startswith("category_") or name.startswith("group_"):
         notes.append("Missing group labels are excluded from the group calculation.")
     return "\n\n".join(notes)
@@ -342,7 +368,9 @@ def _page(name: str, item: Any, *, kind: str) -> str:
     parameter_lines = []
     for parameter_name, type_text, description in parameters:
         parameter_lines.append(f"**{parameter_name}** : {type_text}\n: {description}")
-    example = _transformer_example(name) if kind == "transformer" else _composer_example(name)
+    example = (
+        _transformer_example(name) if kind == "transformer" else _composer_example(name)
+    )
     return f"""# {name}
 
 ```python
@@ -411,7 +439,9 @@ uv run python scripts/generate_operator_reference.py
 ```
 """
     )
-    print(f"Generated {len(transformers)} transformer pages and {len(composers)} composer pages")
+    print(
+        f"Generated {len(transformers)} transformer pages and {len(composers)} composer pages"
+    )
 
 
 if __name__ == "__main__":

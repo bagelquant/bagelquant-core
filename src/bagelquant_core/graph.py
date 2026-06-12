@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Iterable, Mapping, Sequence, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, Iterable, Sequence, TypeVar, cast
 
 from .node import Node, NodeSpec
 

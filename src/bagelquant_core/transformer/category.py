@@ -1,68 +1,44 @@
-"""Category-level cross-sectional operations."""
+"""Category-aware cross-sectional operations."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import polars as pl
 
-import pandas as pd
+from ..composer.core import composer
+from ..frame import ASSET_ID, TIME, VALUE, panel_like
 
-from ..composer import composer
 
-
-def _by_category(
-    frame: pd.DataFrame,
-    categories: pd.DataFrame,
-    operation: Callable[[pd.Series], pd.Series],
-) -> pd.DataFrame:
-    output = frame.copy()
-    for index in frame.index:
-        values = frame.loc[index]
-        labels = categories.loc[index]
-        output.loc[index] = values.groupby(labels, dropna=True).transform(operation)
-    return output
+def _joined(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
+    return frame.rename({VALUE: "x"}).join(
+        category.rename({VALUE: "category"}),
+        on=[TIME, ASSET_ID],
+        how="inner",
+    )
 
 
 @composer
-def category_demean(
-    frame: pd.DataFrame,
-    categories: pd.DataFrame,
-) -> pd.DataFrame:
-    """Subtract each asset's category mean within each row."""
-
-    return _by_category(frame, categories, lambda values: values - values.mean())
+def category_demean(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
+    data = _joined(frame, category)
+    return panel_like(data, pl.col("x") - pl.col("x").mean().over(TIME, "category"))
 
 
 @composer
-def category_mean(
-    frame: pd.DataFrame,
-    categories: pd.DataFrame,
-) -> pd.DataFrame:
-    """Replace each asset value with its category mean within each row."""
-
-    return _by_category(frame, categories, lambda values: values * 0 + values.mean())
+def category_mean(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
+    data = _joined(frame, category)
+    return panel_like(data, pl.col("x").mean().over(TIME, "category"))
 
 
 @composer
-def category_rank(
-    frame: pd.DataFrame,
-    categories: pd.DataFrame,
-) -> pd.DataFrame:
-    """Return percentile ranks within each category and row."""
-
-    return _by_category(frame, categories, lambda values: values.rank(pct=True))
+def category_rank(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
+    data = _joined(frame, category)
+    return panel_like(data, pl.col("x").rank("average").over(TIME, "category"))
 
 
 @composer
-def category_zscore(
-    frame: pd.DataFrame,
-    categories: pd.DataFrame,
-) -> pd.DataFrame:
-    """Return z-scores within each category and row."""
-
-    def zscore(values: pd.Series) -> pd.Series:
-        std = values.std()
-        if std == 0:
-            return values * float("nan")
-        return (values - values.mean()) / std
-
-    return _by_category(frame, categories, zscore)
+def category_zscore(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
+    data = _joined(frame, category)
+    return panel_like(
+        data,
+        (pl.col("x") - pl.col("x").mean().over(TIME, "category"))
+        / pl.col("x").std(ddof=1).over(TIME, "category"),
+    )

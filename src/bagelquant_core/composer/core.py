@@ -12,7 +12,7 @@ from functools import update_wrapper
 from itertools import count
 from typing import TYPE_CHECKING, Any, Mapping
 
-import pandas as pd
+import polars as pl
 
 from .._operation import as_node, operation_name
 from ..node import Node
@@ -30,7 +30,7 @@ class ComposerFunction:
 
     def __init__(
         self,
-        operation: Callable[..., pd.DataFrame],
+        operation: Callable[..., pl.DataFrame],
         *,
         registry_name: str | None = None,
     ) -> None:
@@ -86,7 +86,7 @@ class _ComposerNode(Node):
     def parents(self) -> tuple[Node, ...]:
         return self._parents
 
-    def compute(self, *frames: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, *frames: pl.DataFrame) -> pl.DataFrame:
         return self._operation.operation(*frames, **self._config)
 
     def config(self) -> Mapping[str, Any]:
@@ -96,7 +96,7 @@ class _ComposerNode(Node):
         }
 
 
-def composer(operation: Callable[..., pd.DataFrame]) -> ComposerFunction:
+def composer(operation: Callable[..., pl.DataFrame]) -> ComposerFunction:
     """Decorate a DataFrame function as a graph-building composer."""
 
     wrapped = ComposerFunction(operation)

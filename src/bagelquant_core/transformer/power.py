@@ -1,39 +1,32 @@
-"""Power transformers."""
+"""Power transforms."""
 
 from __future__ import annotations
 
 from numbers import Real
-from typing import cast
 
-import numpy as np
-import pandas as pd
+import polars as pl
 
+from ..frame import VALUE, unary
 from .core import transformer
+
+
+@transformer
+def power(frame: pl.DataFrame, *, exponent: Real) -> pl.DataFrame:
+    _validate_exponent(exponent)
+    return unary(frame, pl.col(VALUE).pow(float(exponent)))
+
+
+@transformer
+def signed_power(frame: pl.DataFrame, *, exponent: Real) -> pl.DataFrame:
+    _validate_exponent(exponent)
+    return unary(frame, pl.col(VALUE).sign() * pl.col(VALUE).abs().pow(float(exponent)))
+
+
+@transformer
+def sqrt(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.col(VALUE).sqrt())
 
 
 def _validate_exponent(exponent: Real) -> None:
     if not isinstance(exponent, Real) or isinstance(exponent, bool):
-        raise TypeError("power exponent must be a real number")
-
-
-@transformer
-def power(frame: pd.DataFrame, *, exponent: Real) -> pd.DataFrame:
-    """Raise each value to an exponent."""
-
-    _validate_exponent(exponent)
-    return frame.pow(exponent)
-
-
-@transformer
-def signed_power(frame: pd.DataFrame, *, exponent: Real) -> pd.DataFrame:
-    """Raise absolute values to an exponent while preserving signs."""
-
-    _validate_exponent(exponent)
-    return cast(pd.DataFrame, np.sign(frame) * frame.abs().pow(exponent))
-
-
-@transformer
-def sqrt(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return square roots, using NaN for negative values."""
-
-    return frame.where(frame >= 0).pow(0.5)
+        raise TypeError("exponent must be real")

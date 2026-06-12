@@ -12,7 +12,7 @@ from functools import update_wrapper
 from itertools import count
 from typing import TYPE_CHECKING, Any, Mapping
 
-import pandas as pd
+import polars as pl
 
 from .._operation import as_node, operation_name
 from ..node import Node
@@ -30,7 +30,7 @@ class TransformerFunction:
 
     def __init__(
         self,
-        operation: Callable[..., pd.DataFrame],
+        operation: Callable[..., pl.DataFrame],
         *,
         registry_name: str | None = None,
     ) -> None:
@@ -83,7 +83,7 @@ class _TransformerNode(Node):
     def parents(self) -> tuple[Node, ...]:
         return (self._parent,)
 
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, *inputs: pl.DataFrame) -> pl.DataFrame:
         if len(inputs) != 1:
             raise ValueError("Transformer node requires exactly one input")
         frame = inputs[0]
@@ -96,9 +96,7 @@ class _TransformerNode(Node):
         }
 
 
-def transformer(
-    operation: Callable[..., pd.DataFrame],
-) -> TransformerFunction:
+def transformer(operation: Callable[..., pl.DataFrame]) -> TransformerFunction:
     """Decorate a DataFrame function as a graph-building transformer."""
 
     wrapped = TransformerFunction(operation)

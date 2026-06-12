@@ -1,45 +1,51 @@
-"""Cross-sectional outlier handling transformers."""
+"""Outlier transforms."""
 
 from __future__ import annotations
 
 from numbers import Real
 
-import pandas as pd
+import polars as pl
 
+from ..frame import TIME, VALUE, panel_like
 from .core import transformer
 
 
 @transformer
-def truncate(frame: pd.DataFrame, *, lower: Real, upper: Real) -> pd.DataFrame:
-    """Clip values to fixed lower and upper bounds."""
-
-    if lower > upper:
-        raise ValueError("truncate requires lower <= upper")
-    return frame.clip(lower=lower, upper=upper)
+def truncate(frame: pl.DataFrame, *, lower: Real, upper: Real) -> pl.DataFrame:
+    _validate_bounds(lower, upper)
+    return panel_like(frame, pl.col(VALUE).clip(float(lower), float(upper)))
 
 
 @transformer
-def trim(frame: pd.DataFrame, *, lower: Real, upper: Real) -> pd.DataFrame:
-    """Replace values outside fixed lower and upper bounds with NaN."""
-
-    if lower > upper:
-        raise ValueError("trim requires lower <= upper")
-    return frame.where(frame.ge(lower) & frame.le(upper))
+def trim(frame: pl.DataFrame, *, lower: Real, upper: Real) -> pl.DataFrame:
+    _validate_bounds(lower, upper)
+    return panel_like(
+        frame,
+        pl.when(pl.col(VALUE).is_between(float(lower), float(upper)))
+        .then(pl.col(VALUE))
+        .otherwise(None),
+    )
 
 
 @transformer
 def trim_quantile(
-    frame: pd.DataFrame,
+    frame: pl.DataFrame,
     *,
     lower: float = 0.01,
     upper: float = 0.99,
-) -> pd.DataFrame:
-    """Replace row values outside cross-sectional quantile bounds with NaN."""
-
+) -> pl.DataFrame:
     if not 0 <= lower <= upper <= 1:
-        raise ValueError("trim_quantile requires 0 <= lower <= upper <= 1")
-    lower_bound = frame.quantile(lower, axis=1)
-    upper_bound = frame.quantile(upper, axis=1)
-    return frame.where(
-        frame.ge(lower_bound, axis=0) & frame.le(upper_bound, axis=0)
+        raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1")
+    lo = pl.col(VALUE).quantile(lower).over(TIME)
+    hi = pl.col(VALUE).quantile(upper).over(TIME)
+    return panel_like(
+        frame,
+        pl.when(pl.col(VALUE).is_between(lo, hi)).then(pl.col(VALUE)).otherwise(None),
     )
+
+
+def _validate_bounds(lower: Real, upper: Real) -> None:
+    if not isinstance(lower, Real) or not isinstance(upper, Real):
+        raise TypeError("bounds must be real")
+    if lower > upper:
+        raise ValueError("lower must not exceed upper")

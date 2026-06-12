@@ -1,38 +1,31 @@
-"""Pairwise arithmetic composers."""
+"""Arithmetic composers."""
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 
+from ..frame import binary
 from .core import composer
 
 
 @composer
-def add(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    """Add two frames."""
-
-    return lhs + rhs
+def add(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: left + right)
 
 
 @composer
-def sub(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    """Subtract the second frame from the first."""
-
-    return lhs - rhs
+def sub(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: left - right)
 
 
 @composer
-def mul(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    """Multiply two frames."""
-
-    return lhs * rhs
+def mul(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: left * right)
 
 
 @composer
-def div(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    """Divide the first frame by the second."""
-
-    return lhs / rhs
+def div(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: left / right)
 
 
 subtract = sub

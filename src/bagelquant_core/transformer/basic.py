@@ -2,49 +2,45 @@
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 
+from ..frame import ASSET_ID, TIME, VALUE, panel_like, unary
 from .core import transformer
 
 
 @transformer
-def identity(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return the input values unchanged."""
-
-    return frame.copy()
+def identity(frame: pl.DataFrame) -> pl.DataFrame:
+    return frame.clone()
 
 
 @transformer
-def abs_value(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return element-wise absolute values."""
-
-    return frame.abs()
+def abs_value(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.col(VALUE).abs())
 
 
 @transformer
-def negate(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return element-wise negated values."""
-
-    return -frame
+def negate(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, -pl.col(VALUE))
 
 
 @transformer
-def diff(frame: pd.DataFrame, *, periods: int = 1) -> pd.DataFrame:
-    """Return changes over a number of rows."""
+def diff(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
+    _validate_periods(periods, "diff")
+    return panel_like(
+        frame.sort([ASSET_ID, TIME]),
+        (pl.col(VALUE) - pl.col(VALUE).shift(periods).over(ASSET_ID)),
+    )
 
+
+@transformer
+def pct_change(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
+    _validate_periods(periods, "pct_change")
+    previous = pl.col(VALUE).shift(periods).over(ASSET_ID)
+    return panel_like(frame.sort([ASSET_ID, TIME]), pl.col(VALUE) / previous - 1.0)
+
+
+def _validate_periods(periods: int, operation: str) -> None:
     if not isinstance(periods, int) or isinstance(periods, bool):
-        raise TypeError("diff periods must be an integer")
+        raise TypeError(f"{operation} periods must be an integer")
     if periods == 0:
-        raise ValueError("diff periods must not be zero")
-    return frame.diff(periods=periods)
-
-
-@transformer
-def pct_change(frame: pd.DataFrame, *, periods: int = 1) -> pd.DataFrame:
-    """Return fractional changes over a number of rows."""
-
-    if not isinstance(periods, int) or isinstance(periods, bool):
-        raise TypeError("pct_change periods must be an integer")
-    if periods == 0:
-        raise ValueError("pct_change periods must not be zero")
-    return frame.pct_change(periods=periods)
+        raise ValueError(f"{operation} periods must not be zero")

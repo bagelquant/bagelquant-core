@@ -1,31 +1,25 @@
-"""Cross-sectional rank transformers."""
+"""Ranking transforms."""
 
 from __future__ import annotations
 
-from typing import cast
+import polars as pl
 
-import numpy as np
-import pandas as pd
-
+from ..frame import VALUE, cross_section_rank, unary
 from .core import transformer
 
 
 @transformer
-def rankpct(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return dense percentile ranks across each row."""
-
-    return frame.rank(axis=1, method="dense", pct=True)
+def rankpct(frame: pl.DataFrame) -> pl.DataFrame:
+    return cross_section_rank(frame, pct=True)
 
 
 @transformer
-def nrank(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return percentile ranks normalized to [-1, 1]."""
-
-    return frame.rank(axis=1, pct=True).mul(2).sub(1)
+def nrank(frame: pl.DataFrame) -> pl.DataFrame:
+    pct = rankpct.operation(frame)
+    return unary(pct, 2.0 * pl.col(VALUE) - 1.0)
 
 
 @transformer
-def logrank(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return natural logarithms of percentile ranks."""
-
-    return cast(pd.DataFrame, np.log(frame.rank(axis=1, pct=True)))
+def logrank(frame: pl.DataFrame) -> pl.DataFrame:
+    ranked = cross_section_rank(frame)
+    return unary(ranked, pl.col(VALUE).log())

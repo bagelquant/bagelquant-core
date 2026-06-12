@@ -7,13 +7,14 @@
 ## 推荐阅读
 
 - [快速开始](quick-start.md)
+- [核心概念](concepts.md)
 - [架构与设计](architecture.md)
-- [公开 API](public-api.md)
-- [内部实现](internals.md)
-- [Panel](panel.md)
-- [Graph](graph.md)
-- [Transformer](transformer.md)
-- [Composer](composer.md)
-- [Execution](execution.md)
+- [公开 API](reference/public-api.md)
+- [内部实现](reference/internals.md)
+- [Panel](reference/concepts/panel.md)
+- [Graph](reference/concepts/graph.md)
+- [Transformer](reference/concepts/transformer.md)
+- [Composer](reference/concepts/composer.md)
+- [Execution](reference/concepts/execution.md)
 - [API Reference](reference/index.md)
 

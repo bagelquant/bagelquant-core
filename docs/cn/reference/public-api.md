@@ -23,7 +23,7 @@ from bagelquant_core.transformer import rank, winsorize, zscore
 factor = rank(zscore(winsorize(raw_panel)), name="factor")
 ```
 
-完整列表见 [Transformer reference](reference/transformers/index.md)。
+完整列表见 [Transformer reference](../../en/reference/transformers/index.md)。
 
 ## Composer
 
@@ -36,7 +36,7 @@ ratio = div(book, price, name="book_to_price")
 prediction = weighted_sum(ratio, quality, weights=[0.6, 0.4])
 ```
 
-完整列表见 [Composer reference](reference/composers/index.md)。
+完整列表见 [Composer reference](../../en/reference/composers/index.md)。
 
 ## 自定义操作
 

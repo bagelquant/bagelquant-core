@@ -9,7 +9,7 @@ A composer is a multi-input function-style operation:
 ```
 
 For signatures, parameter descriptions, and examples for every public
-operation, see the [composer reference](../reference/composers/index.md).
+operation, see the [composer reference](../composers/index.md).
 
 ## Built-In Composers
 

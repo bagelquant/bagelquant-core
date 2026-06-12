@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import count
 from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
-import pandas as pd
+import polars as pl
 
 from .hashing import hash_mapping
 
@@ -43,12 +43,10 @@ class Node(ABC):
 
     @property
     @abstractmethod
-    def parents(self) -> tuple["Node", ...]:
-        ...
+    def parents(self) -> tuple["Node", ...]: ...
 
     @abstractmethod
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
-        ...
+    def compute(self, *inputs: pl.DataFrame) -> pl.DataFrame: ...
 
     def config(self) -> Mapping[str, Any]:
         return {}

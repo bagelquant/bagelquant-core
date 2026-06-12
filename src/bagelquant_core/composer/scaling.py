@@ -1,14 +1,13 @@
-"""Multi-input scaling composers."""
+"""Scaling composers."""
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 
+from ..frame import binary
 from .core import composer
 
 
 @composer
-def vol_scale(frame: pd.DataFrame, volatility: pd.DataFrame) -> pd.DataFrame:
-    """Scale values by volatility."""
-
-    return frame.div(volatility)
+def vol_scale(frame: pl.DataFrame, volatility: pl.DataFrame) -> pl.DataFrame:
+    return binary(frame, volatility, lambda value, vol: value / vol)

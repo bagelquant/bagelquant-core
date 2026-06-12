@@ -1,21 +1,18 @@
-"""Cross-sectional translation transformers."""
+"""Translation transforms."""
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 
+from ..frame import TIME, VALUE, panel_like
 from .core import transformer
 
 
 @transformer
-def demean(frame: pd.DataFrame) -> pd.DataFrame:
-    """Subtract each row's cross-sectional mean."""
-
-    return frame.sub(frame.mean(axis=1), axis=0)
+def demean(frame: pl.DataFrame) -> pl.DataFrame:
+    return panel_like(frame, pl.col(VALUE) - pl.col(VALUE).mean().over(TIME))
 
 
 @transformer
-def translate_to_pos(frame: pd.DataFrame) -> pd.DataFrame:
-    """Translate each row so its minimum value becomes zero."""
-
-    return frame.sub(frame.min(axis=1), axis=0)
+def translate_to_pos(frame: pl.DataFrame) -> pl.DataFrame:
+    return panel_like(frame, pl.col(VALUE) - pl.col(VALUE).min().over(TIME))

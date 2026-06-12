@@ -1,37 +1,24 @@
 from __future__ import annotations
 
-from typing import Any
+import polars as pl
 
-import pandas as pd
-
-from bagelquant_core import CategoryPanel, Domain, Panel
+from bagelquant_core import Domain, Panel
 
 
-def domain_for(columns: pd.Index, rows: int) -> Domain:
-    dates = pd.bdate_range("2024-01-02", periods=rows)
-    return Domain(
-        calendar=dates,
-        universe=list(columns),
+def panel(values: list[tuple[str, str, float]], *, name: str = "panel") -> Panel:
+    domain = Domain(
+        calendar=sorted({time for time, _, _ in values}),
+        universe=sorted({asset for _, asset, _ in values}),
+    )
+    return Panel.from_domain(
+        pl.DataFrame(values, schema=["time", "asset_id", "value"], orient="row"),
+        domain,
+        name=name,
     )
 
 
-def make_panel(
-    data: pd.DataFrame,
-    *,
-    name: str | None = None,
-) -> Panel:
-    domain = domain_for(data.columns, len(data))
-    normalized = data.copy()
-    normalized.index = domain.sessions
-    return Panel.from_domain(normalized, domain, name=name)
-
-
-def make_category_panel(
-    data: pd.DataFrame,
-    *,
-    name: str | None = None,
-) -> CategoryPanel:
-    domain = domain_for(data.columns, len(data))
-    normalized = data.copy()
-    normalized.index = domain.sessions
-    return CategoryPanel.from_domain(normalized, domain, name=name)
+def values(frame: pl.DataFrame) -> dict[tuple[str, str], float | None]:
+    return {
+        (str(row["time"]), row["asset_id"]): row["value"]
+        for row in frame.sort(["time", "asset_id"]).to_dicts()
+    }

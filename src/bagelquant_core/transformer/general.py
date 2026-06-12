@@ -2,119 +2,100 @@
 
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
+import polars as pl
 
+from ..frame import ASSET_ID, TIME, VALUE, panel_like, unary
 from .core import transformer
 
 
 @transformer
-def nonnans(frame: pd.DataFrame) -> pd.DataFrame:
-    """Replace missing values with zero."""
-
-    return frame.fillna(0)
+def nonnans(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.col(VALUE).is_not_nan().cast(pl.Float64))
 
 
 @transformer
-def notnan(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return one where values are present and zero where they are missing."""
-
-    return frame.notna().astype(float)
+def notnan(frame: pl.DataFrame) -> pl.DataFrame:
+    return nonnans.operation(frame)
 
 
 @transformer
-def denoise(frame: pd.DataFrame, *, threshold: float = 1e-12) -> pd.DataFrame:
-    """Replace values whose absolute magnitude is tiny with zero."""
-
-    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool) or threshold < 0:
-        raise ValueError("denoise threshold must be a non-negative real number")
-    return frame.mask(frame.abs() < threshold, 0)
-
-
-@transformer
-def posonly(frame: pd.DataFrame) -> pd.DataFrame:
-    """Keep positive values and zero, replacing negative values with NaN."""
-
-    return frame.where(frame >= 0)
+def denoise(frame: pl.DataFrame, *, threshold: float = 1e-12) -> pl.DataFrame:
+    return unary(
+        frame,
+        pl.when(pl.col(VALUE).abs() < threshold).then(0.0).otherwise(pl.col(VALUE)),
+    )
 
 
 @transformer
-def negonly(frame: pd.DataFrame) -> pd.DataFrame:
-    """Keep negative values and zero, replacing positive values with NaN."""
-
-    return frame.where(frame <= 0)
+def posonly(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.when(pl.col(VALUE) > 0).then(pl.col(VALUE)).otherwise(None))
 
 
 @transformer
-def lag(frame: pd.DataFrame, *, periods: int = 1) -> pd.DataFrame:
-    """Shift values over rows, which represent time."""
-
-    return frame.shift(periods=_validate_periods(periods, operation="lag"))
+def negonly(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.when(pl.col(VALUE) < 0).then(pl.col(VALUE)).otherwise(None))
 
 
 @transformer
-def delta(frame: pd.DataFrame, *, interval: int = 1) -> pd.DataFrame:
-    """Return changes between rows separated by an interval."""
-
-    return frame.diff(periods=_validate_periods(interval, operation="delta"))
-
-
-@transformer
-def rate_of_change(frame: pd.DataFrame, *, interval: int = 1) -> pd.DataFrame:
-    """Return row differences divided by the interval."""
-
-    checked = _validate_periods(interval, operation="rate_of_change")
-    return frame.diff(periods=checked).div(checked)
+def lag(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
+    _validate_periods(periods, operation="lag")
+    return panel_like(
+        frame.sort([ASSET_ID, TIME]), pl.col(VALUE).shift(periods).over(ASSET_ID)
+    )
 
 
 @transformer
-def remove_repeated(frame: pd.DataFrame) -> pd.DataFrame:
-    """Keep values only when they changed from the previous row."""
-
-    return frame.where(frame.ne(frame.shift()))
-
-
-@transformer
-def date_age_constraint(
-    frame: pd.DataFrame,
-    *,
-    window: int,
-    min_valid: int | None = None,
-) -> pd.DataFrame:
-    """Mask values until enough valid observations exist in a trailing window."""
-
-    if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
-        raise ValueError("date_age_constraint window must be a positive integer")
-    required = window if min_valid is None else min_valid
-    if (
-        not isinstance(required, int)
-        or isinstance(required, bool)
-        or required <= 0
-        or required > window
-    ):
-        raise ValueError("date_age_constraint min_valid must be in [1, window]")
-    return frame.where(frame.notna().rolling(window).sum() >= required)
+def delta(frame: pl.DataFrame, *, interval: int = 1) -> pl.DataFrame:
+    _validate_periods(interval, operation="delta")
+    return panel_like(
+        frame.sort([ASSET_ID, TIME]),
+        pl.col(VALUE) - pl.col(VALUE).shift(interval).over(ASSET_ID),
+    )
 
 
 @transformer
-def constant(frame: pd.DataFrame, *, value: float = 1) -> pd.DataFrame:
-    """Return a same-shaped constant frame."""
-
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError("constant value must be a real number")
-    return pd.DataFrame(value, index=frame.index, columns=frame.columns)
+def rate_of_change(frame: pl.DataFrame, *, interval: int = 1) -> pl.DataFrame:
+    _validate_periods(interval, operation="rate_of_change")
+    previous = pl.col(VALUE).shift(interval).over(ASSET_ID)
+    return panel_like(
+        frame.sort([ASSET_ID, TIME]), (pl.col(VALUE) - previous) / previous
+    )
 
 
 @transformer
-def replace_inf(frame: pd.DataFrame) -> pd.DataFrame:
-    """Replace positive and negative infinity with NaN."""
+def remove_repeated(frame: pl.DataFrame) -> pl.DataFrame:
+    previous = pl.col(VALUE).shift(1).over(ASSET_ID)
+    return panel_like(
+        frame.sort([ASSET_ID, TIME]),
+        pl.when(pl.col(VALUE) == previous).then(None).otherwise(pl.col(VALUE)),
+    )
 
-    return frame.replace([np.inf, -np.inf], np.nan)
+
+@transformer
+def date_age_constraint(frame: pl.DataFrame, *, max_age: int) -> pl.DataFrame:
+    if max_age < 0:
+        raise ValueError("max_age must be non-negative")
+    valid_age = pl.col(VALUE).is_not_null().cum_sum().over(ASSET_ID)
+    return panel_like(
+        frame.sort([ASSET_ID, TIME]),
+        pl.when(valid_age <= max_age).then(pl.col(VALUE)).otherwise(None),
+    )
 
 
-def _validate_periods(periods: int, *, operation: str) -> int:
+@transformer
+def constant(frame: pl.DataFrame, *, value: float = 1) -> pl.DataFrame:
+    return unary(frame, pl.lit(float(value)))
+
+
+@transformer
+def replace_inf(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(
+        frame, pl.when(pl.col(VALUE).is_infinite()).then(None).otherwise(pl.col(VALUE))
+    )
+
+
+def _validate_periods(periods: int, *, operation: str) -> None:
     if not isinstance(periods, int) or isinstance(periods, bool):
         raise TypeError(f"{operation} periods must be an integer")
-    if periods == 0:
-        raise ValueError(f"{operation} periods must not be zero")
-    return periods
+    if periods <= 0:
+        raise ValueError(f"{operation} periods must be positive")

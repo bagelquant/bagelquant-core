@@ -4,30 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-import pandas as pd
+import polars as pl
 
+from ..frame import align_frames, normalize_panel_frame
 from ..hashing import hash_dataframe
 from ..node import Node
 from .domain import Domain
 
 _INTERNAL_MATERIALIZATION_TOKEN = object()
-
-
-def _validate_frame_shape(data: pd.DataFrame, *, kind: str) -> None:
-    if not isinstance(data, pd.DataFrame):
-        raise TypeError(f"{kind} data must be a pandas DataFrame")
-    if data.index.nlevels != 1 or data.columns.nlevels != 1:
-        raise ValueError(f"{kind} data must have 1D index and columns")
-    if data.index.has_duplicates or data.columns.has_duplicates:
-        raise ValueError(f"{kind} index and columns must be unique")
-
-
-def _immutable_copy(data: pd.DataFrame) -> pd.DataFrame:
-    validated = data.copy(deep=True)
-    values = validated.to_numpy(copy=False)
-    if hasattr(values, "flags"):
-        values.flags.writeable = False
-    return validated
 
 
 class Panel(Node):
@@ -37,7 +21,7 @@ class Panel(Node):
 
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         *,
@@ -56,24 +40,19 @@ class Panel(Node):
     @classmethod
     def from_domain(
         cls,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         domain: Domain,
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> "Panel":
         if not isinstance(domain, Domain):
             raise TypeError("domain must be a Domain")
-        return cls._materialize(
-            data,
-            domain=domain,
-            name=name,
-            metadata=metadata,
-        )
+        return cls._materialize(data, domain=domain, name=name, metadata=metadata)
 
     @classmethod
     def _materialize(
         cls,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         *,
         domain: Domain,
         name: str | None = None,
@@ -96,18 +75,18 @@ class Panel(Node):
     def parents(self) -> tuple[Node, ...]:
         return ()
 
-    def compute(self, *inputs: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, *inputs: pl.DataFrame) -> pl.DataFrame:
         if inputs:
             raise ValueError("Panel does not accept inputs")
-        return self._data.copy(deep=True)
+        return self._data.clone()
 
     @property
     def output(self) -> "Panel":
         return self
 
     @property
-    def data(self) -> pd.DataFrame:
-        return self._data.copy(deep=True)
+    def data(self) -> pl.DataFrame:
+        return self._data.clone()
 
     def config(self) -> Mapping[str, Any]:
         return {
@@ -117,46 +96,18 @@ class Panel(Node):
 
     @staticmethod
     def align_frames(
-        *frames: pd.DataFrame,
-        join: str = "inner",
-    ) -> tuple[pd.DataFrame, ...]:
-        if join not in {"inner", "outer"}:
-            raise ValueError("join must be either 'inner' or 'outer'")
-        if len(frames) <= 1:
-            return tuple(frames)
-
-        index = frames[0].index
-        columns = frames[0].columns
-        for frame in frames[1:]:
-            if join == "inner":
-                index = index.intersection(frame.index)
-                columns = columns.intersection(frame.columns)
-            else:
-                index = index.union(frame.index)
-                columns = columns.union(frame.columns)
-
-        return tuple(
-            frame
-            if frame.index.equals(index) and frame.columns.equals(columns)
-            else frame.reindex(index=index, columns=columns)
-            for frame in frames
-        )
+        *frames: pl.DataFrame, join: str = "inner"
+    ) -> tuple[pl.DataFrame, ...]:
+        return align_frames(*frames, join=join)
 
     @staticmethod
-    def _validate_data(data: pd.DataFrame) -> pd.DataFrame:
-        _validate_frame_shape(data, kind="Panel")
-
-        numeric_columns = data.select_dtypes(include="number").columns
-        if len(numeric_columns) != len(data.columns):
-            raise TypeError("Panel data must be fully numeric")
-
-        return _immutable_copy(data)
+    def _validate_data(data: pl.DataFrame) -> pl.DataFrame:
+        return normalize_panel_frame(data, numeric=True)
 
 
 class CategoryPanel(Panel):
     """Immutable categorical domain-aware data container and leaf node."""
 
     @staticmethod
-    def _validate_data(data: pd.DataFrame) -> pd.DataFrame:
-        _validate_frame_shape(data, kind="CategoryPanel")
-        return _immutable_copy(data)
+    def _validate_data(data: pl.DataFrame) -> pl.DataFrame:
+        return normalize_panel_frame(data, numeric=False)

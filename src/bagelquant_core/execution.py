@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Mapping
 
-import pandas as pd
+import polars as pl
 
 from .graph import Graph
 from .hashing import hash_dataframe
@@ -60,9 +60,7 @@ class _ExecutionRuntime:
                 join=self._alignment,
             )
             input_hashes = tuple(
-                panel._data_hash
-                if frame is panel._data
-                else hash_dataframe(frame)
+                panel._data_hash if frame is panel._data else hash_dataframe(frame)
                 for panel, frame in zip(inputs, frames)
             )
         else:
@@ -78,7 +76,7 @@ class _ExecutionRuntime:
             return output
 
         result = node.compute(*frames)
-        if not isinstance(result, pd.DataFrame):
+        if not isinstance(result, pl.DataFrame):
             raise TypeError(
                 f"Node '{node.name}' returned {type(result)}; expected DataFrame"
             )

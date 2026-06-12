@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-from typing import cast
+import polars as pl
 
-import numpy as np
-import pandas as pd
-
+from ..frame import VALUE, unary
 from .core import transformer
 
 
 @transformer
-def sign(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return the element-wise sign."""
-
-    return cast(pd.DataFrame, np.sign(frame))
+def sign(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(
+        frame,
+        pl.when(pl.col(VALUE) > 0)
+        .then(1.0)
+        .when(pl.col(VALUE) < 0)
+        .then(-1.0)
+        .otherwise(0.0),
+    )
 
 
 @transformer
-def abs(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return element-wise absolute values."""
-
-    return frame.abs()
+def abs(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.col(VALUE).abs())

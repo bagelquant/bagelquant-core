@@ -1,32 +1,32 @@
-"""Value replacement transformers."""
+"""Replacement transformers."""
 
 from __future__ import annotations
 
 from numbers import Real
 
-import pandas as pd
+import polars as pl
 
+from ..frame import VALUE, unary
 from .core import transformer
 
 
 @transformer
-def replace_non_nan(frame: pd.DataFrame, *, value: Real) -> pd.DataFrame:
-    """Replace existing non-missing values with a numeric scalar."""
-
+def replace_non_nan(frame: pl.DataFrame, *, value: Real) -> pl.DataFrame:
     if not isinstance(value, Real) or isinstance(value, bool):
-        raise TypeError("replacement value must be a real number")
-    return frame.where(frame.isna(), value)
+        raise TypeError("value must be real")
+    return unary(
+        frame,
+        pl.when(pl.col(VALUE).is_not_null() & ~pl.col(VALUE).is_nan())
+        .then(float(value))
+        .otherwise(pl.col(VALUE)),
+    )
 
 
 @transformer
-def non_nan_to_one(frame: pd.DataFrame) -> pd.DataFrame:
-    """Replace existing non-missing values with one."""
-
-    return frame.where(frame.isna(), 1)
+def non_nan_to_one(frame: pl.DataFrame) -> pl.DataFrame:
+    return replace_non_nan(frame, value=1)
 
 
 @transformer
-def non_nan_to_zero(frame: pd.DataFrame) -> pd.DataFrame:
-    """Replace existing non-missing values with zero."""
-
-    return frame.where(frame.isna(), 0)
+def non_nan_to_zero(frame: pl.DataFrame) -> pl.DataFrame:
+    return replace_non_nan(frame, value=0)

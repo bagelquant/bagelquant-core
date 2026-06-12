@@ -1,67 +1,90 @@
-"""Element-wise mathematical and logical composers."""
+"""Logical and comparison composers."""
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 
+from ..frame import VALUE, binary, unary
 from .core import composer
 
 
 @composer
-def power_df(frame: pd.DataFrame, power: pd.DataFrame) -> pd.DataFrame:
-    return frame.pow(power)
+def power_df(frame: pl.DataFrame, power: pl.DataFrame) -> pl.DataFrame:
+    return binary(frame, power, lambda left, right: left.pow(right))
 
 
 @composer
-def and_(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return (lhs.astype(bool) & rhs.astype(bool)).astype(float)
+def and_(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(
+        lhs,
+        rhs,
+        lambda left, right: (left.cast(pl.Boolean) & right.cast(pl.Boolean)).cast(
+            pl.Float64
+        ),
+    )
 
 
 @composer
-def or_(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return (lhs.astype(bool) | rhs.astype(bool)).astype(float)
+def or_(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(
+        lhs,
+        rhs,
+        lambda left, right: (left.cast(pl.Boolean) | right.cast(pl.Boolean)).cast(
+            pl.Float64
+        ),
+    )
 
 
 @composer
-def not_(frame: pd.DataFrame) -> pd.DataFrame:
-    return (~frame.astype(bool)).astype(float)
+def not_(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, (~pl.col(VALUE).cast(pl.Boolean)).cast(pl.Float64))
 
 
 @composer
-def xand(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    """Return logical equivalence."""
-
-    return lhs.astype(bool).eq(rhs.astype(bool)).astype(float)
-
-
-@composer
-def xor(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return (lhs.astype(bool) ^ rhs.astype(bool)).astype(float)
-
-
-@composer
-def greater(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs.gt(rhs).astype(float)
+def xand(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(
+        lhs,
+        rhs,
+        lambda left, right: (left.cast(pl.Boolean) & right.cast(pl.Boolean)).cast(
+            pl.Float64
+        ),
+    )
 
 
 @composer
-def greater_equal(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs.ge(rhs).astype(float)
+def xor(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(
+        lhs,
+        rhs,
+        lambda left, right: (left.cast(pl.Boolean) ^ right.cast(pl.Boolean)).cast(
+            pl.Float64
+        ),
+    )
 
 
 @composer
-def less(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs.lt(rhs).astype(float)
+def greater(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: (left > right).cast(pl.Float64))
 
 
 @composer
-def less_equal(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs.le(rhs).astype(float)
+def greater_equal(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: (left >= right).cast(pl.Float64))
 
 
 @composer
-def equal(lhs: pd.DataFrame, rhs: pd.DataFrame) -> pd.DataFrame:
-    return lhs.eq(rhs).astype(float)
+def less(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: (left < right).cast(pl.Float64))
+
+
+@composer
+def less_equal(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: (left <= right).cast(pl.Float64))
+
+
+@composer
+def equal(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return binary(lhs, rhs, lambda left, right: (left == right).cast(pl.Float64))
 
 
 power = power_df

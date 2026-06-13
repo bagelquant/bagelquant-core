@@ -4,7 +4,7 @@
 orthogonalize(frame, *factors, name=None, metadata=None)
 ```
 
-Return row-wise residuals after projecting values onto factors.
+Apply `orthogonalize` to long-form panel inputs.
 
 ## Parameters
 
@@ -25,14 +25,28 @@ Return row-wise residuals after projecting values onto factors.
 ## Examples
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import Domain, Panel
 from bagelquant_core.composer import orthogonalize
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
-factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [5.0]}, index=domain.sessions), domain)
-size = Panel.from_domain(pd.DataFrame({"a": [0.0], "b": [1.0], "c": [2.0]}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02"], universe=["a", "b", "c"])
+factor = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [1.0, 3.0, 5.0],
+    }),
+    domain,
+)
+size = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [0.0, 1.0, 2.0],
+    }),
+    domain,
+)
 
 result = orthogonalize(factor, size).compute().data
 print(result)
@@ -40,4 +54,4 @@ print(result)
 
 ## Notes
 
-Inputs are aligned by index and columns before the operation runs.
+Inputs are aligned by `(time, asset_id)` before the operation runs.

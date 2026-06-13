@@ -23,14 +23,28 @@ Alias for [`minimum`](./minimum.md). Return element-wise minimum values.
 ## Examples
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import Domain, Panel
 from bagelquant_core.composer import min
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]), universe=["a", "b"])
-left = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
-right = Panel.from_domain(pd.DataFrame({"a": [1.0, 1.0, 2.0], "b": [1.0, 2.0, 4.0]}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02", "2024-01-03", "2024-01-04"], universe=["a", "b"])
+left = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02", "2024-01-03", "2024-01-04"] * 2,
+        "asset_id": ["a"] * 3 + ["b"] * 3,
+        "value": [1.0, 2.0, 4.0, 2.0, 3.0, 8.0],
+    }),
+    domain,
+)
+right = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02", "2024-01-03", "2024-01-04"] * 2,
+        "asset_id": ["a"] * 3 + ["b"] * 3,
+        "value": [1.0, 1.0, 2.0, 1.0, 2.0, 4.0],
+    }),
+    domain,
+)
 
 result = min(left, right).compute().data
 print(result)
@@ -38,4 +52,4 @@ print(result)
 
 ## Notes
 
-Inputs are aligned by index and columns before the operation runs.
+Inputs are aligned by `(time, asset_id)` before the operation runs.

@@ -6,8 +6,8 @@ The stable public API is exported from `bagelquant_core`,
 ## Top-Level Objects
 
 - `Domain`: trading sessions plus static or dynamic asset membership.
-- `Panel`: immutable numeric time-by-asset data aligned to a `Domain`.
-- `CategoryPanel`: immutable time-by-asset label data aligned to a `Domain`.
+- `Panel`: immutable numeric long-form data aligned to a `Domain`.
+- `CategoryPanel`: immutable long-form label data aligned to a `Domain`.
 - `Graph`: lazy derived logic produced by transformers and composers.
 
 ```python
@@ -47,25 +47,35 @@ Use decorators when project-specific logic should behave like built-in
 operations.
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core.composer import composer
 from bagelquant_core.transformer import transformer
 
 
 @transformer
-def demean(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.sub(frame.mean(axis=1), axis=0)
+def demean(frame: pl.DataFrame) -> pl.DataFrame:
+    means = frame.group_by("time").agg(pl.col("value").mean().alias("mean"))
+    return (
+        frame.join(means, on="time")
+        .with_columns((pl.col("value") - pl.col("mean")).alias("value"))
+        .select("time", "asset_id", "value")
+    )
 
 
 @composer
-def average(*frames: pd.DataFrame) -> pd.DataFrame:
-    return sum(frames) / len(frames)
+def average(*frames: pl.DataFrame) -> pl.DataFrame:
+    stacked = pl.concat(frames)
+    return (
+        stacked.group_by("time", "asset_id")
+        .agg(pl.col("value").mean().alias("value"))
+        .sort("time", "asset_id")
+    )
 ```
 
 ## Compatibility Boundary
 
-Public APIs are DataFrame and `Panel` oriented. `bagelquant-core` does not own
-data retrieval, provider credentials, persistence, portfolio simulation, or
-application UI.
+Public APIs are Polars DataFrame and `Panel` oriented. `bagelquant-core` does
+not own data retrieval, provider credentials, persistence, portfolio
+simulation, or application UI.
 

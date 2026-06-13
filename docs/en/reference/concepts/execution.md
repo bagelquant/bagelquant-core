@@ -38,7 +38,7 @@ signal_panel = signal.output
 
 - Execution is deterministic.
 - Panels are immutable from the public API.
-- Multi-input frames align on intersecting indexes and columns by default.
+- Multi-input frames align on intersecting `(time, asset_id)` keys by default.
 - Intermediate cache values are panels.
 - Shared DAG nodes are evaluated once per runtime invocation.
 - Stored panel hashes are reused when alignment does not change an input frame.

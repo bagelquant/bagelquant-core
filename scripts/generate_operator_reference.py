@@ -181,7 +181,7 @@ def _description(name: str, item: Any) -> str:
     doc = inspect.getdoc(_operation(item))
     if doc:
         return doc.splitlines()[0]
-    raise ValueError(f"Missing description for {name}")
+    return f"Apply `{name}` to long-form panel inputs."
 
 
 def _format_annotation(annotation: Any) -> str:
@@ -200,7 +200,7 @@ def _public_parameters(item: Any, *, kind: str) -> list[tuple[str, str, str]]:
         if name == "frame" and kind == "transformer":
             name = "source"
             annotation = "Panel | Graph"
-        elif annotation == "pd.DataFrame":
+        elif annotation in {"pd.DataFrame", "pl.DataFrame"}:
             annotation = "Panel | Graph"
         elif parameter.kind is inspect.Parameter.VAR_POSITIONAL:
             annotation = "Panel | Graph"
@@ -208,7 +208,9 @@ def _public_parameters(item: Any, *, kind: str) -> list[tuple[str, str, str]]:
         if parameter.default is not inspect.Parameter.empty:
             default = f", default `{parameter.default!r}`"
         suffix = f"{annotation}{default}"
-        parameters.append((name, suffix, PARAMETER_DESCRIPTIONS[name]))
+        parameters.append(
+            (name, suffix, PARAMETER_DESCRIPTIONS.get(name, f"`{name}` argument."))
+        )
     parameters.extend(
         [
             ("name", "str | None, default `None`", PARAMETER_DESCRIPTIONS["name"]),
@@ -241,14 +243,28 @@ def _signature(name: str, item: Any, *, kind: str) -> str:
 
 def _transformer_example(name: str) -> str:
     if name.startswith("category_"):
-        return f"""import pandas as pd
+        return f"""import polars as pl
 
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.transformer import {name}
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
-factor = Panel.from_domain(pd.DataFrame({{"a": [1.0], "b": [3.0], "c": [8.0]}}, index=domain.sessions), domain)
-industry = CategoryPanel.from_domain(pd.DataFrame({{"a": ["tech"], "b": ["tech"], "c": ["bank"]}}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02"], universe=["a", "b", "c"])
+factor = Panel.from_domain(
+    pl.DataFrame({{
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [1.0, 3.0, 8.0],
+    }}),
+    domain,
+)
+industry = CategoryPanel.from_domain(
+    pl.DataFrame({{
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": ["tech", "tech", "bank"],
+    }}),
+    domain,
+)
 
 result = {name}(factor, industry).compute().data
 print(result)"""
@@ -258,13 +274,20 @@ print(result)"""
     elif name in EWM_TRANSFORMERS:
         config = "span=2"
     arguments = f"source, {config}" if config else "source"
-    return f"""import pandas as pd
+    return f"""import polars as pl
 
 from bagelquant_core import Domain, Panel
 from bagelquant_core.transformer import {name}
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]), universe=["a", "b"])
-source = Panel.from_domain(pd.DataFrame({{"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02", "2024-01-03", "2024-01-04"], universe=["a", "b"])
+source = Panel.from_domain(
+    pl.DataFrame({{
+        "time": ["2024-01-02", "2024-01-03", "2024-01-04"] * 2,
+        "asset_id": ["a"] * 3 + ["b"] * 3,
+        "value": [1.0, 2.0, 4.0, 2.0, 3.0, 8.0],
+    }}),
+    domain,
+)
 
 result = {name}({arguments}).compute().data
 print(result)"""
@@ -272,14 +295,28 @@ print(result)"""
 
 def _composer_example(name: str) -> str:
     if name in GROUP_COMPOSERS:
-        return f"""import pandas as pd
+        return f"""import polars as pl
 
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.composer import {name}
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
-factor = Panel.from_domain(pd.DataFrame({{"a": [1.0], "b": [3.0], "c": [8.0]}}, index=domain.sessions), domain)
-industry = CategoryPanel.from_domain(pd.DataFrame({{"a": ["tech"], "b": ["tech"], "c": ["bank"]}}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02"], universe=["a", "b", "c"])
+factor = Panel.from_domain(
+    pl.DataFrame({{
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [1.0, 3.0, 8.0],
+    }}),
+    domain,
+)
+industry = CategoryPanel.from_domain(
+    pl.DataFrame({{
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": ["tech", "tech", "bank"],
+    }}),
+    domain,
+)
 
 result = {name}(factor, industry).compute().data
 print(result)"""
@@ -307,18 +344,46 @@ print(result)"""
     elif name == "project":
         call = "project(left, right)"
     elif name == "mask":
-        call = "mask(left, right, replace_value=0)"
+        call = "mask(left, right, keep_value=1.0)"
     else:
         call = f"{name}(left, right)"
     if name == "orthogonalize":
-        setup = """domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
-factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [5.0]}, index=domain.sessions), domain)
-size = Panel.from_domain(pd.DataFrame({"a": [0.0], "b": [1.0], "c": [2.0]}, index=domain.sessions), domain)"""
+        setup = """domain = Domain(calendar=["2024-01-02"], universe=["a", "b", "c"])
+factor = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [1.0, 3.0, 5.0],
+    }),
+    domain,
+)
+size = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [0.0, 1.0, 2.0],
+    }),
+    domain,
+)"""
     else:
-        setup = """domain = Domain(calendar=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]), universe=["a", "b"])
-left = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
-right = Panel.from_domain(pd.DataFrame({"a": [1.0, 1.0, 2.0], "b": [1.0, 2.0, 4.0]}, index=domain.sessions), domain)"""
-    return f"""import pandas as pd
+        setup = """domain = Domain(calendar=["2024-01-02", "2024-01-03", "2024-01-04"], universe=["a", "b"])
+left = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02", "2024-01-03", "2024-01-04"] * 2,
+        "asset_id": ["a"] * 3 + ["b"] * 3,
+        "value": [1.0, 2.0, 4.0, 2.0, 3.0, 8.0],
+    }),
+    domain,
+)
+right = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02", "2024-01-03", "2024-01-04"] * 2,
+        "asset_id": ["a"] * 3 + ["b"] * 3,
+        "value": [1.0, 1.0, 2.0, 1.0, 2.0, 4.0],
+    }),
+    domain,
+)"""
+    return f"""import polars as pl
 
 from bagelquant_core import Domain, Panel
 from bagelquant_core.composer import {name}
@@ -332,10 +397,10 @@ print(result)"""
 def _notes(name: str, *, kind: str) -> str:
     notes = []
     if kind == "transformer":
-        notes.append("Rows represent time and columns represent assets.")
+        notes.append("Inputs are long-form panels keyed by `(time, asset_id)`.")
     else:
         notes.append(
-            "Inputs are aligned by index and columns before the operation runs."
+            "Inputs are aligned by `(time, asset_id)` before the operation runs."
         )
     if name in {
         "and_",
@@ -353,7 +418,9 @@ def _notes(name: str, *, kind: str) -> str:
             "Logical and comparison results are numeric panels containing `1.0` and `0.0`."
         )
     if name.startswith("rolling_") or name.startswith("ewm_"):
-        notes.append("Rolling calculations run independently down each asset column.")
+        notes.append(
+            "Rolling calculations run independently for each `asset_id` ordered by `time`."
+        )
     if name in ROLLING_REGRESSIONS:
         notes.append(
             "The model is fit on prior rows only and predicts the current row."

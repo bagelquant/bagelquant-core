@@ -1,8 +1,8 @@
 # Quick Start
 
 `bagelquant-core` is the panel and graph foundation for BagelQuant research.
-Use it when raw research inputs are already available as pandas data and you
-want reproducible factor logic.
+Use it when raw research inputs are already available as long-form Polars data
+and you want reproducible factor logic.
 
 ## Install
 
@@ -23,25 +23,40 @@ panel. The package does not download calendars or security masters; callers
 provide them from a data layer.
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import Domain
 
 domain = Domain(
-    calendar=pd.bdate_range("2024-01-01", "2024-12-31"),
+    calendar=pl.date_range(
+        pl.date(2024, 1, 1),
+        pl.date(2024, 12, 31),
+        interval="1d",
+        eager=True,
+    ),
     universe=["AAPL", "MSFT"],
 )
 ```
 
 ## Create Panels
 
-`Panel.from_domain` aligns raw frames to the domain. Rows are sessions, columns
-are assets, and values are numeric.
+`Panel.from_domain` aligns raw frames to the domain. Public panel data is
+long-form with `time`, `asset_id`, and `value` columns.
 
 ```python
 from bagelquant_core import Panel
 
-price = Panel.from_domain(price_df, domain, name="price")
+price = Panel.from_domain(
+    pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"],
+            "asset_id": ["AAPL", "MSFT", "AAPL", "MSFT"],
+            "value": [185.0, 370.0, 187.0, 372.0],
+        }
+    ),
+    domain,
+    name="price",
+)
 book = Panel.from_domain(book_df, domain, name="book")
 quality = Panel.from_domain(quality_df, domain, name="quality")
 ```

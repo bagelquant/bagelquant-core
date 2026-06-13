@@ -1,17 +1,17 @@
 # category_zscore
 
 ```python
-category_zscore(source, categories, name=None, metadata=None)
+category_zscore(source, category, name=None, metadata=None)
 ```
 
-Return z-scores within each category and row.
+Apply `category_zscore` to long-form panel inputs.
 
 ## Parameters
 
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
-**categories** : Panel | Graph
-: Matching `CategoryPanel` containing row-wise group labels.
+**category** : Panel | Graph
+: `category` argument.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`
@@ -25,14 +25,28 @@ Return z-scores within each category and row.
 ## Examples
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.transformer import category_zscore
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
-factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [8.0]}, index=domain.sessions), domain)
-industry = CategoryPanel.from_domain(pd.DataFrame({"a": ["tech"], "b": ["tech"], "c": ["bank"]}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02"], universe=["a", "b", "c"])
+factor = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [1.0, 3.0, 8.0],
+    }),
+    domain,
+)
+industry = CategoryPanel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": ["tech", "tech", "bank"],
+    }),
+    domain,
+)
 
 result = category_zscore(factor, industry).compute().data
 print(result)
@@ -40,6 +54,6 @@ print(result)
 
 ## Notes
 
-Rows represent time and columns represent assets.
+Inputs are long-form panels keyed by `(time, asset_id)`.
 
 Missing group labels are excluded from the group calculation.

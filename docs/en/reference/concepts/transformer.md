@@ -49,7 +49,7 @@ Built-ins are grouped by behavior:
 
 ## Basic
 
-Basic operations are element-wise or run over rows, which represent time:
+Basic operations are element-wise or run per `asset_id` ordered by `time`:
 
 | Transformer | Behavior |
 | --- | --- |
@@ -86,7 +86,7 @@ These operations are useful for availability masks and constant exposures.
 
 ## Rolling
 
-Rolling operations run over rows, which represent time:
+Rolling operations run per `asset_id` ordered by `time`:
 
 | Transformer | Behavior |
 | --- | --- |
@@ -95,11 +95,11 @@ Rolling operations run over rows, which represent time:
 | `rolling_min(source, window, min_periods=None)` | Rolling minimum. |
 | `rolling_max(source, window, min_periods=None)` | Rolling maximum. |
 | `rolling_sum(source, window, min_periods=None)` | Rolling sum. |
-| `ewm_mean(source, ...)` | Pandas exponentially weighted mean. |
-| `ewm_std(source, ...)` | Pandas exponentially weighted standard deviation. |
-| `ewm_var(source, ...)` | Pandas exponentially weighted variance. |
+| `ewm_mean(source, ...)` | Exponentially weighted mean. |
+| `ewm_std(source, ...)` | Exponentially weighted standard deviation. |
+| `ewm_var(source, ...)` | Exponentially weighted variance. |
 
-EWM operations follow pandas semantics and require exactly one decay argument:
+EWM operations require exactly one decay argument:
 `com`, `span`, `halflife`, or `alpha`. They also accept `min_periods`,
 `adjust`, and `ignore_na`. `ewm_std` and `ewm_var` additionally accept `bias`.
 
@@ -121,7 +121,7 @@ EWM operations follow pandas semantics and require exactly one decay argument:
 
 ## Normalization
 
-Normalization operations run across columns, which represent assets:
+Normalization operations run cross-sectionally by `time`:
 
 | Transformer | Behavior |
 | --- | --- |
@@ -149,13 +149,19 @@ The category panel may contain strings such as industry, sector, or country
 labels:
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import CategoryPanel
 from bagelquant_core.transformer import category_demean, category_rank
 
 industry = CategoryPanel.from_domain(
-    pd.DataFrame(...),
+    pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-02"],
+            "asset_id": ["AAPL", "MSFT"],
+            "value": ["tech", "software"],
+        }
+    ),
     domain,
     name="industry",
 )
@@ -177,20 +183,25 @@ aligned inputs and are represented internally as multi-input graph nodes.
 ## User-Defined Transformers
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core.transformer import transformer
 
 
 @transformer
-def demean(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.sub(frame.mean(axis=1), axis=0)
+def demean(frame: pl.DataFrame) -> pl.DataFrame:
+    means = frame.group_by("time").agg(pl.col("value").mean().alias("mean"))
+    return (
+        frame.join(means, on="time")
+        .with_columns((pl.col("value") - pl.col("mean")).alias("value"))
+        .select("time", "asset_id", "value")
+    )
 
 
 centered = demean(price, name="centered")
 ```
 
-The decorated function receives a `DataFrame` during execution but accepts a
-`Panel` or `Graph` when researchers construct a workflow.
+The decorated function receives a Polars `DataFrame` during execution but
+accepts a `Panel` or `Graph` when researchers construct a workflow.
 
 Configuration arguments are stored in graph specifications and cache keys.

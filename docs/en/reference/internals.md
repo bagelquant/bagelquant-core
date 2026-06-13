@@ -20,7 +20,7 @@ The public `Graph` object is a wrapper around this lazy node chain.
 `Graph.compute()` creates an execution runtime and evaluates dependencies
 recursively. Within one compute call, shared upstream nodes are executed once.
 The runtime validates domain compatibility before multi-input composition,
-applies operation functions to pandas frames, then wraps results back into
+applies operation functions to Polars frames, then wraps results back into
 `Panel` objects.
 
 Dynamic universe masks are reapplied after derived computations so inactive

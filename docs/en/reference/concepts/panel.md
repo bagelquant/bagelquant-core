@@ -3,23 +3,33 @@
 ## Overview
 
 `Panel` is the explicit data object in BagelQuant. Every input panel is
-created through a `Domain`, which defines trading sessions and asset
-membership. A panel stores a numeric two-dimensional frame:
+created through a `Domain`, which defines trading times and asset membership.
+A panel stores long-form data:
 
 ```text
-Time x Assets
+time, asset_id, value
 ```
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import Domain, Panel
 
 domain = Domain(
-    calendar=pd.bdate_range("2024-01-01", "2024-12-31"),
+    calendar=["2024-01-02", "2024-01-03"],
     universe=["AAPL", "MSFT"],
 )
-price = Panel.from_domain(price_df, domain, name="price")
+price = Panel.from_domain(
+    pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"],
+            "asset_id": ["AAPL", "MSFT", "AAPL", "MSFT"],
+            "value": [185.0, 370.0, 187.0, 372.0],
+        }
+    ),
+    domain,
+    name="price",
+)
 ```
 
 ## Role
@@ -38,13 +48,13 @@ graphs until their output panels are needed.
 
 Panels:
 
-- Have a one-dimensional unique index
-- Have one-dimensional unique columns
+- Have unique `(time, asset_id)` keys
+- Use `time`, `asset_id`, and `value` columns
 - Contain only numeric values
 - Copy input data at construction
 - Return a defensive copy when data is accessed through `Panel.data`
 - Are immutable from the public API
-- Match their Domain's trading-session index and universe columns
+- Match their Domain's trading times and asset ids
 - Mask inactive cells for dynamic universes
 
 ## Alignment
@@ -55,16 +65,19 @@ inactive cells cannot affect later operations.
 
 ## Dynamic Universes
 
-A dynamic universe is a boolean frame indexed by dates and asset columns.
-Missing rows and cells are inactive; membership is not forward-filled:
+A dynamic universe is a long-form boolean frame keyed by `time` and
+`asset_id`. Missing rows are inactive; membership is not forward-filled:
 
 ```python
-membership = pd.DataFrame(
-    {"AAPL": [True], "MSFT": [False]},
-    index=pd.to_datetime(["2024-01-03"]),
+membership = pl.DataFrame(
+    {
+        "time": ["2024-01-03", "2024-01-03"],
+        "asset_id": ["AAPL", "MSFT"],
+        "active": [True, False],
+    }
 )
 domain = Domain(
-    calendar=pd.bdate_range("2024-01-01", "2024-01-31"),
+    calendar=["2024-01-02", "2024-01-03"],
     universe=membership,
 )
 ```
@@ -78,16 +91,22 @@ start and end dates.
 ## Category Panels
 
 `CategoryPanel` is an immutable leaf node for labels such as industry, sector,
-or country. It follows the same time-by-asset shape as `Panel` but accepts
-string labels:
+or country. It follows the same long-form shape as `Panel` but accepts string
+labels:
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import CategoryPanel
 
 industry = CategoryPanel.from_domain(
-    pd.DataFrame(...),
+    pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-02"],
+            "asset_id": ["AAPL", "MSFT"],
+            "value": ["tech", "software"],
+        }
+    ),
     domain,
     name="industry",
 )

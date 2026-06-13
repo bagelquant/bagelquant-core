@@ -1,6 +1,6 @@
 # 快速开始
 
-`bagelquant-core` 是 BagelQuant 的面板数据与图计算基础。当研究数据已经以 pandas 形式存在，并且你希望用可复现的方式组织因子逻辑时，可以使用它。
+`bagelquant-core` 是 BagelQuant 的面板数据与图计算基础。当研究数据已经是 long-form Polars 数据，并且你希望用可复现的方式组织因子逻辑时，可以使用它。
 
 ## 安装
 
@@ -19,24 +19,39 @@ uv run python example.py
 `Domain` 定义交易日历和资产池。包本身不会下载交易日历或证券主数据，这些信息应由数据层提供。
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import Domain
 
 domain = Domain(
-    calendar=pd.bdate_range("2024-01-01", "2024-12-31"),
+    calendar=pl.date_range(
+        pl.date(2024, 1, 1),
+        pl.date(2024, 12, 31),
+        interval="1d",
+        eager=True,
+    ),
     universe=["AAPL", "MSFT"],
 )
 ```
 
 ## 创建 Panel
 
-`Panel.from_domain` 会把原始数据对齐到研究域。行是交易日，列是资产，值必须是数值。
+`Panel.from_domain` 会把原始数据对齐到研究域。公开面板数据统一使用 `time`、`asset_id` 和 `value` 列。
 
 ```python
 from bagelquant_core import Panel
 
-price = Panel.from_domain(price_df, domain, name="price")
+price = Panel.from_domain(
+    pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"],
+            "asset_id": ["AAPL", "MSFT", "AAPL", "MSFT"],
+            "value": [185.0, 370.0, 187.0, 372.0],
+        }
+    ),
+    domain,
+    name="price",
+)
 book = Panel.from_domain(book_df, domain, name="book")
 quality = Panel.from_domain(quality_df, domain, name="quality")
 ```

@@ -43,23 +43,33 @@ prediction = weighted_sum(ratio, quality, weights=[0.6, 0.4])
 项目内逻辑可以用装饰器注册为与内置操作一致的函数。
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core.composer import composer
 from bagelquant_core.transformer import transformer
 
 
 @transformer
-def demean(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.sub(frame.mean(axis=1), axis=0)
+def demean(frame: pl.DataFrame) -> pl.DataFrame:
+    means = frame.group_by("time").agg(pl.col("value").mean().alias("mean"))
+    return (
+        frame.join(means, on="time")
+        .with_columns((pl.col("value") - pl.col("mean")).alias("value"))
+        .select("time", "asset_id", "value")
+    )
 
 
 @composer
-def average(*frames: pd.DataFrame) -> pd.DataFrame:
-    return sum(frames) / len(frames)
+def average(*frames: pl.DataFrame) -> pl.DataFrame:
+    return (
+        pl.concat(frames)
+        .group_by("time", "asset_id")
+        .agg(pl.col("value").mean().alias("value"))
+        .sort("time", "asset_id")
+    )
 ```
 
 ## 边界
 
-公开 API 面向 pandas、`Panel` 和 `Graph`。`bagelquant-core` 不负责数据获取、凭证管理、持久化、组合模拟或应用 UI。
+公开 API 面向 Polars、`Panel` 和 `Graph`。`bagelquant-core` 不负责数据获取、凭证管理、持久化、组合模拟或应用 UI。
 

@@ -4,7 +4,7 @@
 demean(source, name=None, metadata=None)
 ```
 
-Subtract each row's cross-sectional mean.
+Apply `demean` to long-form panel inputs.
 
 ## Parameters
 
@@ -23,13 +23,20 @@ Subtract each row's cross-sectional mean.
 ## Examples
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import Domain, Panel
 from bagelquant_core.transformer import demean
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]), universe=["a", "b"])
-source = Panel.from_domain(pd.DataFrame({"a": [1.0, 2.0, 4.0], "b": [2.0, 3.0, 8.0]}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02", "2024-01-03", "2024-01-04"], universe=["a", "b"])
+source = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02", "2024-01-03", "2024-01-04"] * 2,
+        "asset_id": ["a"] * 3 + ["b"] * 3,
+        "value": [1.0, 2.0, 4.0, 2.0, 3.0, 8.0],
+    }),
+    domain,
+)
 
 result = demean(source).compute().data
 print(result)
@@ -37,4 +44,4 @@ print(result)
 
 ## Notes
 
-Rows represent time and columns represent assets.
+Inputs are long-form panels keyed by `(time, asset_id)`.

@@ -4,9 +4,9 @@
 domain-aware panel data, lazy graph logic, reusable operations, and an internal
 execution runtime.
 
-Use it after data has been loaded into pandas objects and before downstream
-backtesting or application workflows need materialized factor, prediction, or
-weight panels.
+Use it after data has been loaded into long-form Polars panels and before
+downstream backtesting or application workflows need materialized factor,
+prediction, or weight panels.
 
 ## Recommended Reading
 

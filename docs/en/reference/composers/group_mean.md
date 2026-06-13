@@ -25,14 +25,28 @@ Replace each element with its row-wise group mean.
 ## Examples
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.composer import group_mean
 
-domain = Domain(calendar=pd.to_datetime(["2024-01-02"]), universe=["a", "b", "c"])
-factor = Panel.from_domain(pd.DataFrame({"a": [1.0], "b": [3.0], "c": [8.0]}, index=domain.sessions), domain)
-industry = CategoryPanel.from_domain(pd.DataFrame({"a": ["tech"], "b": ["tech"], "c": ["bank"]}, index=domain.sessions), domain)
+domain = Domain(calendar=["2024-01-02"], universe=["a", "b", "c"])
+factor = Panel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": [1.0, 3.0, 8.0],
+    }),
+    domain,
+)
+industry = CategoryPanel.from_domain(
+    pl.DataFrame({
+        "time": ["2024-01-02"] * 3,
+        "asset_id": ["a", "b", "c"],
+        "value": ["tech", "tech", "bank"],
+    }),
+    domain,
+)
 
 result = group_mean(factor, industry).compute().data
 print(result)
@@ -40,6 +54,6 @@ print(result)
 
 ## Notes
 
-Inputs are aligned by index and columns before the operation runs.
+Inputs are aligned by `(time, asset_id)` before the operation runs.
 
 Missing group labels are excluded from the group calculation.

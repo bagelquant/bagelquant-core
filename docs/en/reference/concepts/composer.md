@@ -42,14 +42,19 @@ Built-ins are grouped by behavior:
 ## User-Defined Composers
 
 ```python
-import pandas as pd
+import polars as pl
 
 from bagelquant_core.composer import composer
 
 
 @composer
-def average(*frames: pd.DataFrame) -> pd.DataFrame:
-    return sum(frames) / len(frames)
+def average(*frames: pl.DataFrame) -> pl.DataFrame:
+    return (
+        pl.concat(frames)
+        .group_by("time", "asset_id")
+        .agg(pl.col("value").mean().alias("value"))
+        .sort("time", "asset_id")
+    )
 
 
 combined = average(value, quality, momentum, name="combined")

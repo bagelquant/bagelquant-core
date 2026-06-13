@@ -23,12 +23,18 @@ Panel | Graph -> Graph
 
 ## 自定义 Transformer
 
-项目可以用 `@transformer` 装饰器把自定义 pandas 逻辑包装成 BagelQuant 操作：
+项目可以用 `@transformer` 装饰器把自定义 Polars 逻辑包装成 BagelQuant 操作：
 
 ```python
+import polars as pl
+
 from bagelquant_core.transformer import transformer
+
 
 @transformer
 def demean(frame):
-    return frame.sub(frame.mean(axis=1), axis=0)
+    means = frame.group_by("time").agg(pl.col("value").mean().alias("mean"))
+    return frame.join(means, on="time").with_columns(
+        (pl.col("value") - pl.col("mean")).alias("value")
+    ).select("time", "asset_id", "value")
 ```

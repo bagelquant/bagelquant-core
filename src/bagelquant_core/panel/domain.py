@@ -12,7 +12,7 @@ from ..hashing import hash_dataframe, hash_mapping
 
 
 class Domain:
-    """Trading times and asset membership for long-form panel data."""
+    """Trading times and static or dynamic asset membership for panel data."""
 
     def __init__(
         self,

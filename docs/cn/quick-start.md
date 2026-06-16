@@ -34,6 +34,21 @@ domain = Domain(
 )
 ```
 
+资产池可以像上面一样是静态列表，也可以是随时间变化的动态资产池。动态资产池使用稀疏的 long-form Polars 表，包含 `time`、`asset_id` 和布尔型 `active` 三列。缺失的 `(time, asset_id)` 行会被视为非活跃，成员关系不会自动向前填充。
+
+```python
+dynamic_domain = Domain(
+    calendar=["2024-01-02", "2024-01-03"],
+    universe=pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-03"],
+            "asset_id": ["AAPL", "MSFT"],
+            "active": [True, True],
+        }
+    ),
+)
+```
+
 ## 创建 Panel
 
 `Panel.from_domain` 会把原始数据对齐到研究域。公开面板数据统一使用 `time`、`asset_id` 和 `value` 列。

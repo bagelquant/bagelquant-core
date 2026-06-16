@@ -10,19 +10,20 @@ from typing import Mapping
 import polars as pl
 
 from .graph import Graph
-from .hashing import hash_dataframe
 from .node import Node
 from .panel import Domain, Panel
 
 logger = logging.getLogger(__name__)
 
 
-class _ExecutionRuntime:
+class ExecutionRuntime:
     """
     Deterministic executor with memoization cache.
     """
 
     def __init__(self, alignment: str = "inner") -> None:
+        if alignment != "inner":
+            raise ValueError("ExecutionRuntime only supports inner alignment")
         self.cache: dict[tuple[str, tuple[str, ...], str], Panel] = {}
         self._alignment = alignment
 
@@ -54,18 +55,8 @@ class _ExecutionRuntime:
 
         inputs = [self._run_node(parent, evaluated) for parent in node.parents]
         domain = self._resolve_domain(inputs)
-        if len(inputs) > 1:
-            frames = Panel.align_frames(
-                *(panel._data for panel in inputs),
-                join=self._alignment,
-            )
-            input_hashes = tuple(
-                panel._data_hash if frame is panel._data else hash_dataframe(frame)
-                for panel, frame in zip(inputs, frames)
-            )
-        else:
-            frames = tuple(panel._data for panel in inputs)
-            input_hashes = tuple(panel._data_hash for panel in inputs)
+        frames = tuple(panel._data for panel in inputs)
+        input_hashes = tuple(panel._data_hash for panel in inputs)
         cache_key = (node.signature(), input_hashes, domain.signature)
 
         if cache_key in self.cache:
@@ -107,3 +98,6 @@ class _ExecutionRuntime:
         if any(not domain.equivalent_to(panel.domain) for panel in inputs[1:]):
             raise ValueError("Composer inputs must use equivalent Domains")
         return domain
+
+
+_ExecutionRuntime = ExecutionRuntime

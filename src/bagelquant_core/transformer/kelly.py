@@ -4,22 +4,19 @@ from __future__ import annotations
 
 import polars as pl
 
-from ..frame import VALUE, panel_like
+from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from .core import transformer
 from .normalization import rank, zscore
-from .rolling import rolling_mean, rolling_var
+from .rolling import _validate_window
 
 
 @transformer
 def kelly(frame: pl.DataFrame, *, window: int) -> pl.DataFrame:
-    mean = rolling_mean.operation(frame, window=window, min_periods=window).rename(
-        {VALUE: "mean"}
-    )
-    var = rolling_var.operation(frame, window=window, min_periods=window).rename(
-        {VALUE: "var"}
-    )
-    data = mean.join(var, on=["time", "asset_id"], how="inner")
-    return panel_like(data, pl.col("mean") / pl.col("var"))
+    minp = _validate_window(window, window)
+    data = frame.sort([ASSET_ID, TIME])
+    mean = pl.col(VALUE).rolling_mean(window, min_samples=minp).over(ASSET_ID)
+    var = pl.col(VALUE).rolling_var(window, min_samples=minp, ddof=1).over(ASSET_ID)
+    return panel_like(data, mean / var)
 
 
 @transformer

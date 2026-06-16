@@ -2,59 +2,61 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
-import numpy as np
 import polars as pl
 
-from ..frame import ASSET_ID, TIME, VALUE
+from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from .core import composer
 
 
-def _rolling_pair(
-    lhs: pl.DataFrame,
-    rhs: pl.DataFrame,
-    *,
-    window: int,
-    min_periods: int | None,
-    func: Callable[[np.ndarray, np.ndarray], float],
-) -> pl.DataFrame:
-    if window <= 0:
+def _validate_window(window: int, min_periods: int | None) -> int:
+    if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
         raise ValueError("window must be positive")
-    minp = window if min_periods is None else min_periods
-    data = (
+    resolved = window if min_periods is None else min_periods
+    if (
+        not isinstance(resolved, int)
+        or isinstance(resolved, bool)
+        or resolved < 0
+        or resolved > window
+    ):
+        raise ValueError("min_periods must be between 0 and window")
+    return resolved
+
+
+def _joined_pair(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
+    return (
         lhs.rename({VALUE: "lhs"})
-        .join(
-            rhs.rename({VALUE: "rhs"}),
-            on=[TIME, ASSET_ID],
-            how="inner",
-        )
+        .join(rhs.rename({VALUE: "rhs"}), on=[TIME, ASSET_ID], how="inner")
         .sort([ASSET_ID, TIME])
     )
-    rows: list[dict[str, object]] = []
-    for group in data.partition_by(ASSET_ID):
-        left = np.array(group["lhs"], dtype=float)
-        right = np.array(group["rhs"], dtype=float)
-        for index, row in enumerate(group.iter_rows(named=True)):
-            start = max(0, index - window + 1)
-            x = left[start : index + 1]
-            y = right[start : index + 1]
-            valid = ~(np.isnan(x) | np.isnan(y))
-            value = func(x[valid], y[valid]) if valid.sum() >= minp else np.nan
-            rows.append({TIME: row[TIME], ASSET_ID: row[ASSET_ID], VALUE: value})
-    return pl.DataFrame(rows).sort([TIME, ASSET_ID])
+
+
+def _valid_pair(data: pl.DataFrame) -> pl.DataFrame:
+    valid = (
+        pl.col("lhs").is_not_null()
+        & pl.col("rhs").is_not_null()
+        & ~pl.col("lhs").is_nan()
+        & ~pl.col("rhs").is_nan()
+    )
+    return data.with_columns(
+        pl.when(valid).then(pl.col("lhs")).otherwise(None).alias("y"),
+        pl.when(valid).then(pl.col("rhs")).otherwise(None).alias("x"),
+    )
 
 
 @composer
 def rolling_corr(
     lhs: pl.DataFrame, rhs: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
-    return _rolling_pair(
-        lhs,
-        rhs,
-        window=window,
-        min_periods=min_periods,
-        func=lambda x, y: float(np.corrcoef(x, y)[0, 1]) if len(x) > 1 else np.nan,
+    minp = _validate_window(window, min_periods)
+    data = _joined_pair(lhs, rhs)
+    return panel_like(
+        data,
+        pl.rolling_corr(
+            pl.col("lhs").fill_nan(None),
+            pl.col("rhs").fill_nan(None),
+            window_size=window,
+            min_samples=minp,
+        ).over(ASSET_ID),
     )
 
 
@@ -67,27 +69,44 @@ def rolling_cov(
     min_periods: int | None = None,
     ddof: int = 1,
 ) -> pl.DataFrame:
-    return _rolling_pair(
-        lhs,
-        rhs,
-        window=window,
-        min_periods=min_periods,
-        func=lambda x, y: (
-            float(np.cov(x, y, ddof=ddof)[0, 1]) if len(x) > ddof else np.nan
-        ),
+    minp = _validate_window(window, min_periods)
+    data = _joined_pair(lhs, rhs)
+    return panel_like(
+        data,
+        pl.rolling_cov(
+            pl.col("lhs").fill_nan(None),
+            pl.col("rhs").fill_nan(None),
+            window_size=window,
+            min_samples=minp,
+            ddof=ddof,
+        ).over(ASSET_ID),
     )
 
 
 def _rolling_regression(
     target: pl.DataFrame, factor: pl.DataFrame, *, window: int, alpha: float = 0.0
 ) -> pl.DataFrame:
-    return _rolling_pair(
-        target,
-        factor,
-        window=window,
-        min_periods=window,
-        func=lambda y, x: _slope(y, x, alpha=alpha),
+    _validate_window(window, window)
+    data = _valid_pair(_joined_pair(target, factor))
+    n = (
+        pl.col("x")
+        .is_not_null()
+        .cast(pl.Float64)
+        .rolling_sum(window, min_samples=1)
+        .over(ASSET_ID)
     )
+    sum_x = pl.col("x").rolling_sum(window, min_samples=window).over(ASSET_ID)
+    sum_y = pl.col("y").rolling_sum(window, min_samples=window).over(ASSET_ID)
+    sum_xx = (pl.col("x") * pl.col("x")).rolling_sum(
+        window, min_samples=window
+    ).over(ASSET_ID)
+    sum_xy = (pl.col("x") * pl.col("y")).rolling_sum(
+        window, min_samples=window
+    ).over(ASSET_ID)
+    centered_xx = sum_xx - (sum_x * sum_x) / n
+    centered_xy = sum_xy - (sum_x * sum_y) / n
+    slope = centered_xy / (centered_xx + float(alpha))
+    return panel_like(data, pl.when(n >= window).then(slope).otherwise(None))
 
 
 @composer
@@ -122,10 +141,3 @@ def rolling_lasso(
     target: pl.DataFrame, factor: pl.DataFrame, *, window: int, alpha: float = 1.0
 ) -> pl.DataFrame:
     return _rolling_regression(target, factor, window=window, alpha=alpha)
-
-
-def _slope(y: np.ndarray, x: np.ndarray, *, alpha: float) -> float:
-    design = np.column_stack([np.ones(len(x)), x])
-    penalty = np.diag([0.0, alpha])
-    beta = np.linalg.solve(design.T @ design + penalty, design.T @ y)
-    return float(beta[1])

@@ -7,7 +7,7 @@ from collections.abc import Callable
 import numpy as np
 import polars as pl
 
-from ..frame import ASSET_ID, TIME, VALUE, map_groups_numpy, panel_like
+from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from .core import transformer
 
 
@@ -29,6 +29,23 @@ def _validate_window(window: int, min_periods: int | None) -> int:
 
 def _rolling_expr(frame: pl.DataFrame, expr: pl.Expr) -> pl.DataFrame:
     return panel_like(frame.sort([ASSET_ID, TIME]), expr.over(ASSET_ID))
+
+
+def _rolling_map_expr(
+    window: int,
+    min_periods: int,
+    func: Callable[[np.ndarray], float],
+) -> pl.Expr:
+    def apply_window(sample: pl.Series) -> float:
+        values = sample.to_numpy().astype(float, copy=False)
+        values = values[~np.isnan(values)]
+        return np.nan if len(values) < min_periods else func(values)
+
+    return pl.col(VALUE).rolling_map(
+        apply_window,
+        window_size=window,
+        min_samples=min_periods,
+    )
 
 
 @transformer
@@ -120,9 +137,7 @@ def rolling_skew(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return map_groups_numpy(
-        frame, lambda values: _rolling_apply(values, window, minp, _skew)
-    )
+    return _rolling_expr(frame, _rolling_map_expr(window, minp, _skew))
 
 
 @transformer
@@ -130,9 +145,7 @@ def rolling_kurt(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return map_groups_numpy(
-        frame, lambda values: _rolling_apply(values, window, minp, _kurt)
-    )
+    return _rolling_expr(frame, _rolling_map_expr(window, minp, _kurt))
 
 
 @transformer
@@ -140,9 +153,7 @@ def rolling_percentile(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return map_groups_numpy(
-        frame, lambda values: _rolling_apply(values, window, minp, _last_percentile)
-    )
+    return _rolling_expr(frame, _rolling_map_expr(window, minp, _last_percentile))
 
 
 @transformer
@@ -150,9 +161,7 @@ def rolling_rank(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return map_groups_numpy(
-        frame, lambda values: _rolling_apply(values, window, minp, _last_rank)
-    )
+    return _rolling_expr(frame, _rolling_map_expr(window, minp, _last_rank))
 
 
 @transformer
@@ -160,13 +169,9 @@ def rolling_zscore(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None, ddof: int = 1
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-
-    def calculate(values: np.ndarray) -> np.ndarray:
-        return _rolling_apply(
-            values, window, minp, lambda sample: _zscore_last(sample, ddof)
-        )
-
-    return map_groups_numpy(frame, calculate)
+    return _rolling_expr(
+        frame, _rolling_map_expr(window, minp, lambda sample: _zscore_last(sample, ddof))
+    )
 
 
 def _alpha(
@@ -188,22 +193,6 @@ def _alpha(
     return 1.0 - float(np.exp(np.log(0.5) / float(halflife)))
 
 
-def _ewm_values(values: np.ndarray, alpha: float, min_periods: int) -> np.ndarray:
-    output = np.full(len(values), np.nan)
-    current = np.nan
-    seen = 0
-    for index, value in enumerate(values):
-        if np.isnan(value):
-            output[index] = current if seen >= min_periods else np.nan
-            continue
-        seen += 1
-        current = (
-            value if np.isnan(current) else alpha * value + (1.0 - alpha) * current
-        )
-        output[index] = current if seen >= min_periods else np.nan
-    return output
-
-
 @transformer
 def ewm_mean(
     frame: pl.DataFrame,
@@ -217,9 +206,20 @@ def ewm_mean(
     ignore_na: bool = False,
 ) -> pl.DataFrame:
     del adjust, ignore_na
-    resolved = _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
-    return map_groups_numpy(
-        frame, lambda values: _ewm_values(values, resolved, min_periods)
+    _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    return _rolling_expr(
+        frame,
+        pl.col(VALUE)
+        .fill_nan(None)
+        .ewm_mean(
+            com=com,
+            span=span,
+            half_life=halflife,
+            alpha=alpha,
+            adjust=False,
+            min_samples=min_periods,
+            ignore_nulls=False,
+        ),
     )
 
 
@@ -237,14 +237,22 @@ def ewm_var(
     bias: bool = False,
 ) -> pl.DataFrame:
     del adjust, ignore_na
-    resolved = _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
-
-    def calculate(values: np.ndarray) -> np.ndarray:
-        mean = _ewm_values(values, resolved, 0)
-        variance = _ewm_values((values - mean) ** 2, resolved, min_periods)
-        return variance if bias else variance * (len(values) / max(len(values) - 1, 1))
-
-    return map_groups_numpy(frame, calculate)
+    _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    return _rolling_expr(
+        frame,
+        pl.col(VALUE)
+        .fill_nan(None)
+        .ewm_var(
+            com=com,
+            span=span,
+            half_life=halflife,
+            alpha=alpha,
+            adjust=False,
+            min_samples=min_periods,
+            ignore_nulls=False,
+            bias=bias,
+        ),
+    )
 
 
 @transformer
@@ -260,18 +268,23 @@ def ewm_std(
     ignore_na: bool = False,
     bias: bool = False,
 ) -> pl.DataFrame:
-    variance = ewm_var.operation(
+    del adjust, ignore_na
+    _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    return _rolling_expr(
         frame,
-        com=com,
-        span=span,
-        halflife=halflife,
-        alpha=alpha,
-        min_periods=min_periods,
-        adjust=adjust,
-        ignore_na=ignore_na,
-        bias=bias,
+        pl.col(VALUE)
+        .fill_nan(None)
+        .ewm_std(
+            com=com,
+            span=span,
+            half_life=halflife,
+            alpha=alpha,
+            adjust=False,
+            min_samples=min_periods,
+            ignore_nulls=False,
+            bias=bias,
+        ),
     )
-    return panel_like(variance, pl.col(VALUE).sqrt())
 
 
 rolling_ewm = ewm_mean
@@ -285,21 +298,6 @@ def rolling_ewm_fw(
     if halflife <= 0:
         raise ValueError("rolling_ewm_fw halflife must be positive")
     return ewm_mean.operation(frame, halflife=halflife, min_periods=min_periods)
-
-
-def _rolling_apply(
-    values: np.ndarray,
-    window: int,
-    min_periods: int,
-    func: Callable[[np.ndarray], float],
-) -> np.ndarray:
-    output = np.full(len(values), np.nan)
-    for index in range(len(values)):
-        sample = values[max(0, index - window + 1) : index + 1]
-        sample = sample[~np.isnan(sample)]
-        if len(sample) >= min_periods:
-            output[index] = func(sample)
-    return output
 
 
 def _skew(sample: np.ndarray) -> float:

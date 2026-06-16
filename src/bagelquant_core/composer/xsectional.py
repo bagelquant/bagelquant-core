@@ -19,6 +19,9 @@ def _grouped(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
 
 @composer
 def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
+    if len(factors) == 1:
+        return _orthogonalize_one_factor(frame, factors[0])
+
     data = frame.rename({VALUE: "target"})
     for index, factor in enumerate(factors):
         data = data.join(
@@ -53,6 +56,38 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
                 }
             )
     return pl.DataFrame(rows).sort([TIME, ASSET_ID])
+
+
+def _orthogonalize_one_factor(frame: pl.DataFrame, factor: pl.DataFrame) -> pl.DataFrame:
+    data = frame.rename({VALUE: "target"}).join(
+        factor.rename({VALUE: "factor"}),
+        on=[TIME, ASSET_ID],
+        how="inner",
+    )
+    valid = (
+        pl.col("target").is_not_null()
+        & pl.col("factor").is_not_null()
+        & ~pl.col("target").is_nan()
+        & ~pl.col("factor").is_nan()
+    )
+    data = data.with_columns(
+        pl.when(valid).then(pl.col("target")).otherwise(None).alias("y"),
+        pl.when(valid).then(pl.col("factor")).otherwise(None).alias("x"),
+    )
+    n = pl.col("x").count().over(TIME)
+    sum_x = pl.col("x").sum().over(TIME)
+    sum_y = pl.col("y").sum().over(TIME)
+    sum_xx = (pl.col("x") * pl.col("x")).sum().over(TIME)
+    sum_xy = (pl.col("x") * pl.col("y")).sum().over(TIME)
+    centered_xx = sum_xx - (sum_x * sum_x) / n
+    centered_xy = sum_xy - (sum_x * sum_y) / n
+    mean_y = sum_y / n
+    slope = pl.when(centered_xx == 0).then(0.0).otherwise(centered_xy / centered_xx)
+    intercept = mean_y - slope * (sum_x / n)
+    residual = pl.when(valid & (n > 1)).then(
+        pl.col("target") - (intercept + slope * pl.col("factor"))
+    )
+    return panel_like(data, residual)
 
 
 @composer

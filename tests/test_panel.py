@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import polars as pl
 
 from bagelquant_core import CategoryPanel, Domain, Panel
@@ -41,6 +43,25 @@ def test_dynamic_membership_masks_inactive_rows() -> None:
 
     assert panel.data.to_dicts() == [
         {"time": panel.data["time"][0], "asset_id": "a", "value": 1.0}
+    ]
+
+
+def test_domain_accepts_series_calendar_and_static_universe() -> None:
+    domain = Domain(
+        calendar=pl.Series("sessions", ["2024-01-01", "2024-01-02"]),
+        universe=pl.Series("symbols", ["b", "a"]),
+    )
+
+    assert domain.times.to_list() == [
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+    ]
+    assert domain.asset_ids.to_list() == ["a", "b"]
+    assert domain.membership.sort(["time", "asset_id"]).to_dicts() == [
+        {"time": domain.times[0], "asset_id": "a", "active": True},
+        {"time": domain.times[0], "asset_id": "b", "active": True},
+        {"time": domain.times[1], "asset_id": "a", "active": True},
+        {"time": domain.times[1], "asset_id": "b", "active": True},
     ]
 
 

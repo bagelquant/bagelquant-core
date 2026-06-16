@@ -18,7 +18,7 @@ class Domain:
         self,
         *,
         calendar: Sequence[Any] | pl.Series,
-        universe: Sequence[Any] | pl.DataFrame,
+        universe: Sequence[Any] | pl.Series | pl.DataFrame,
     ) -> None:
         times = normalize_time_series(calendar)
         self.start_time = times[0]
@@ -97,7 +97,7 @@ class Domain:
             how="cross",
         )
 
-    def _static_membership(self, universe: Sequence[Any]) -> pl.DataFrame:
+    def _static_membership(self, universe: Sequence[Any] | pl.Series) -> pl.DataFrame:
         assets = normalize_asset_ids(universe)
         return (
             self._make_grid(assets)

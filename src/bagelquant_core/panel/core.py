@@ -78,7 +78,7 @@ class Panel(Node):
     def compute(self, *inputs: pl.DataFrame) -> pl.DataFrame:
         if inputs:
             raise ValueError("Panel does not accept inputs")
-        return self._data.clone()
+        return self._data
 
     @property
     def output(self) -> "Panel":

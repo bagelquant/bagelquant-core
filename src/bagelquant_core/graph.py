@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Generic, Iterable, Sequence, TypeVar, cast
 from .node import Node, NodeSpec
 
 if TYPE_CHECKING:
+    from .execution import ExecutionRuntime
     from .panel import Panel
 
 
@@ -71,10 +72,11 @@ class Graph(Generic[OutputT]):
             return cast(OutputT, self._outputs[0].output)
         return cast(OutputT, {node.name: node.output for node in self._outputs})
 
-    def compute(self) -> OutputT:
-        from .execution import _ExecutionRuntime
+    def compute(self, runtime: "ExecutionRuntime | None" = None) -> OutputT:
+        from .execution import ExecutionRuntime
 
-        return cast(OutputT, _ExecutionRuntime().run(self))
+        executor = runtime or ExecutionRuntime()
+        return cast(OutputT, executor.run(self))
 
     def _single_output(self) -> Node:
         if len(self._outputs) != 1:

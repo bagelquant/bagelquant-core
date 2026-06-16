@@ -18,7 +18,7 @@ class Domain:
         self,
         *,
         calendar: Sequence[Any] | pl.Series,
-        universe: Sequence[Any] | pl.DataFrame,
+        universe: Sequence[Any] | pl.Series | pl.DataFrame,
     ) -> None:
         times = normalize_time_series(calendar)
         self.start_time = times[0]
@@ -35,6 +35,7 @@ class Domain:
         self._asset_ids = (
             self._membership.select(ASSET_ID).unique().sort(ASSET_ID)[ASSET_ID]
         )
+        self._grid_frame = self._make_grid(self._asset_ids)
         self._signature = hash_mapping(
             {
                 "calendar": hash_dataframe(pl.DataFrame({TIME: self._times})),
@@ -88,16 +89,18 @@ class Domain:
         return isinstance(other, Domain) and self.signature == other.signature
 
     def _grid(self) -> pl.DataFrame:
+        return self._grid_frame
+
+    def _make_grid(self, assets: pl.Series) -> pl.DataFrame:
         return pl.DataFrame({TIME: self._times}).join(
-            pl.DataFrame({ASSET_ID: self._asset_ids}),
+            pl.DataFrame({ASSET_ID: assets}),
             how="cross",
         )
 
-    def _static_membership(self, universe: Sequence[Any]) -> pl.DataFrame:
+    def _static_membership(self, universe: Sequence[Any] | pl.Series) -> pl.DataFrame:
         assets = normalize_asset_ids(universe)
         return (
-            pl.DataFrame({TIME: self._times})
-            .join(pl.DataFrame({ASSET_ID: assets}), how="cross")
+            self._make_grid(assets)
             .with_columns(pl.lit(True).alias("active"))
         )
 
@@ -123,9 +126,7 @@ class Domain:
         assets = normalize_asset_ids(
             normalized.select(ASSET_ID).unique().sort(ASSET_ID)[ASSET_ID]
         )
-        grid = pl.DataFrame({TIME: self._times}).join(
-            pl.DataFrame({ASSET_ID: assets}), how="cross"
-        )
+        grid = self._make_grid(assets)
         return (
             grid.join(normalized, on=[TIME, ASSET_ID], how="left")
             .with_columns(pl.col("active").fill_null(False))

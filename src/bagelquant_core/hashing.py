@@ -32,10 +32,14 @@ def hash_mapping(payload: Mapping[str, Any]) -> str:
 
 
 def hash_dataframe(frame: pl.DataFrame) -> str:
-    ordered = frame.sort(frame.columns) if frame.columns else frame
-    payload = {
-        "schema": {name: str(dtype) for name, dtype in ordered.schema.items()},
-        "rows": ordered.to_dicts(),
+    digest = hashlib.sha256()
+    schema = {
+        "schema": {name: str(dtype) for name, dtype in frame.schema.items()},
+        "height": frame.height,
+        "width": frame.width,
     }
-    data = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(data).hexdigest()
+    digest.update(json.dumps(schema, sort_keys=True).encode("utf-8"))
+    if frame.width:
+        row_hashes = frame.hash_rows(seed=0, seed_1=0, seed_2=0, seed_3=0)
+        digest.update(row_hashes.to_numpy().tobytes())
+    return digest.hexdigest()

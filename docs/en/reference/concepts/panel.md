@@ -88,6 +88,16 @@ domain = Domain(
 calendar from your data layer. The first and last sessions define the domain's
 start and end dates.
 
+Static calendars and universes may be provided as Python sequences or Polars
+Series:
+
+```python
+domain = Domain(
+    calendar=pl.Series("sessions", ["2024-01-02", "2024-01-03"]),
+    universe=pl.Series("symbols", ["AAPL", "MSFT"]),
+)
+```
+
 ## Category Panels
 
 `CategoryPanel` is an immutable leaf node for labels such as industry, sector,

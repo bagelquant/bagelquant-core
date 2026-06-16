@@ -38,6 +38,24 @@ domain = Domain(
 )
 ```
 
+The universe may be static, as above, or dynamic over time. Dynamic universes
+use a sparse long-form Polars frame with `time`, `asset_id`, and boolean
+`active` columns. Missing `(time, asset_id)` rows are inactive, and membership
+is not carried forward.
+
+```python
+dynamic_domain = Domain(
+    calendar=["2024-01-02", "2024-01-03"],
+    universe=pl.DataFrame(
+        {
+            "time": ["2024-01-02", "2024-01-03"],
+            "asset_id": ["AAPL", "MSFT"],
+            "active": [True, True],
+        }
+    ),
+)
+```
+
 ## Create Panels
 
 `Panel.from_domain` aligns raw frames to the domain. Public panel data is

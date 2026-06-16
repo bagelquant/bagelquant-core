@@ -65,8 +65,9 @@ inactive cells cannot affect later operations.
 
 ## Dynamic Universes
 
-A dynamic universe is a long-form boolean frame keyed by `time` and
-`asset_id`. Missing rows are inactive; membership is not forward-filled:
+A dynamic universe is a sparse long-form boolean frame keyed by `time` and
+`asset_id`. It uses the columns `time`, `asset_id`, and `active`. Missing rows
+are inactive; membership is not forward-filled:
 
 ```python
 membership = pl.DataFrame(

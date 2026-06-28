@@ -1,3 +1,5 @@
+"""Abstract graph node model used by composers, transformers, and panels."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

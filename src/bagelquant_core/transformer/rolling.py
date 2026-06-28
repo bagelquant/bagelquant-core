@@ -153,7 +153,7 @@ def rolling_percentile(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return _rolling_expr(frame, _rolling_map_expr(window, minp, _last_percentile))
+    return _rolling_last_rank_numpy(frame, window=window, min_periods=minp, pct=True)
 
 
 @transformer
@@ -161,7 +161,7 @@ def rolling_rank(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return _rolling_expr(frame, _rolling_map_expr(window, minp, _last_rank))
+    return _rolling_last_rank_numpy(frame, window=window, min_periods=minp, pct=False)
 
 
 @transformer
@@ -329,3 +329,32 @@ def _last_percentile(sample: np.ndarray) -> float:
 def _zscore_last(sample: np.ndarray, ddof: int) -> float:
     std = sample.std(ddof=ddof)
     return np.nan if std == 0 else float((sample[-1] - sample.mean()) / std)
+
+
+def _rolling_last_rank_numpy(
+    frame: pl.DataFrame,
+    *,
+    window: int,
+    min_periods: int,
+    pct: bool,
+) -> pl.DataFrame:
+    """Rank the last non-null window value with one NumPy pass per asset."""
+
+    output: list[pl.DataFrame] = []
+    for group in frame.sort([ASSET_ID, TIME]).partition_by(ASSET_ID):
+        values = group.get_column(VALUE).to_numpy().astype(float, copy=False)
+        result = np.full(len(values), np.nan, dtype=float)
+        for index in range(len(values)):
+            start = max(0, index - window + 1)
+            sample = values[start : index + 1]
+            sample = sample[~np.isnan(sample)]
+            if len(sample) < min_periods:
+                continue
+            rank = float(np.sum(sample <= sample[-1]))
+            result[index] = rank / len(sample) if pct else rank
+        output.append(
+            group.select(TIME, ASSET_ID).with_columns(pl.Series(VALUE, result))
+        )
+    if not output:
+        return pl.DataFrame(schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64})
+    return pl.concat(output).sort([TIME, ASSET_ID])

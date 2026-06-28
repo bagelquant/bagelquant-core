@@ -1,3 +1,10 @@
+"""Lazy graph expression objects for BagelQuant Core.
+
+Graphs collect panel inputs, transformer nodes, and composer nodes into a
+validated DAG. They can be inspected through ``spec()`` or evaluated by an
+``ExecutionRuntime``.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

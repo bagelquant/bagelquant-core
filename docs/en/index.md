@@ -11,6 +11,7 @@ prediction, or weight panels.
 ## Recommended Reading
 
 - [Quick start](quick-start.md)
+- [Performance notes](performance.md)
 - [Concepts](concepts.md)
 - [Architecture and design](architecture.md)
 - [Public API](reference/public-api.md)
@@ -21,4 +22,3 @@ prediction, or weight panels.
 - [Composer](reference/concepts/composer.md)
 - [Execution](reference/concepts/execution.md)
 - [API reference](reference/index.md)
-

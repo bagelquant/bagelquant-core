@@ -1,3 +1,5 @@
+"""Stable hashing utilities for graph configs and panel payloads."""
+
 from __future__ import annotations
 
 import hashlib

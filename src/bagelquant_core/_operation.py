@@ -1,3 +1,9 @@
+"""Shared helpers for turning panels and graphs into operation nodes.
+
+Composer and transformer decorators use this module to normalize inputs and to
+derive stable operation names for cache signatures and graph specs.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

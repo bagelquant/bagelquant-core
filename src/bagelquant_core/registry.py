@@ -1,3 +1,5 @@
+"""Small name-to-object registry used by operation decorators."""
+
 from __future__ import annotations
 
 from typing import Callable, Generic, TypeVar

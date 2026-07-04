@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local/generated artifacts
+.DS_Store
+*.html
+*.csv
+*.ipynb

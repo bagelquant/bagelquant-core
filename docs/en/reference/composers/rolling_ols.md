@@ -1,17 +1,17 @@
 # rolling_ols
 
 ```python
-rolling_ols(target, factor, window, name=None, metadata=None)
+rolling_ols(target, *factors, window, name=None, metadata=None)
 ```
 
-Apply `rolling_ols` to long-form panel inputs.
+Predict the current target from one or more factors fitted on the prior window.
 
 ## Parameters
 
 **target** : Panel | Graph
 : `target` argument.
-**factor** : Panel | Graph
-: `factor` argument.
+**factors** : Panel | Graph
+: One or more factor `Panel` or single-output `Graph` inputs.
 **window** : int
 : Positive trailing-window length in rows.
 **name** : str | None, default `None`

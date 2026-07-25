@@ -11,7 +11,7 @@ Apply `pct_change` to long-form panel inputs.
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
 **periods** : int, default `1`
-: Number of rows to shift or compare. Must be a non-zero integer.
+: Number of prior rows to shift or compare. Must be a positive integer.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`

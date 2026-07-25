@@ -137,7 +137,12 @@ def rolling_skew(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return _rolling_expr(frame, _rolling_map_expr(window, minp, _skew))
+    return _rolling_expr(
+        frame,
+        pl.col(VALUE)
+        .fill_nan(None)
+        .rolling_skew(window, min_samples=minp, bias=False),
+    )
 
 
 @transformer
@@ -145,7 +150,12 @@ def rolling_kurt(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
-    return _rolling_expr(frame, _rolling_map_expr(window, minp, _kurt))
+    return _rolling_expr(
+        frame,
+        pl.col(VALUE)
+        .fill_nan(None)
+        .rolling_kurtosis(window, min_samples=minp, fisher=True, bias=False),
+    )
 
 
 @transformer
@@ -205,7 +215,6 @@ def ewm_mean(
     adjust: bool = True,
     ignore_na: bool = False,
 ) -> pl.DataFrame:
-    del adjust, ignore_na
     _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
     return _rolling_expr(
         frame,
@@ -216,9 +225,9 @@ def ewm_mean(
             span=span,
             half_life=halflife,
             alpha=alpha,
-            adjust=False,
+            adjust=adjust,
             min_samples=min_periods,
-            ignore_nulls=False,
+            ignore_nulls=ignore_na,
         ),
     )
 
@@ -236,7 +245,6 @@ def ewm_var(
     ignore_na: bool = False,
     bias: bool = False,
 ) -> pl.DataFrame:
-    del adjust, ignore_na
     _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
     return _rolling_expr(
         frame,
@@ -247,9 +255,9 @@ def ewm_var(
             span=span,
             half_life=halflife,
             alpha=alpha,
-            adjust=False,
+            adjust=adjust,
             min_samples=min_periods,
-            ignore_nulls=False,
+            ignore_nulls=ignore_na,
             bias=bias,
         ),
     )
@@ -268,7 +276,6 @@ def ewm_std(
     ignore_na: bool = False,
     bias: bool = False,
 ) -> pl.DataFrame:
-    del adjust, ignore_na
     _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
     return _rolling_expr(
         frame,
@@ -279,9 +286,9 @@ def ewm_std(
             span=span,
             half_life=halflife,
             alpha=alpha,
-            adjust=False,
+            adjust=adjust,
             min_samples=min_periods,
-            ignore_nulls=False,
+            ignore_nulls=ignore_na,
             bias=bias,
         ),
     )
@@ -300,26 +307,10 @@ def rolling_ewm_fw(
     return ewm_mean.operation(frame, halflife=halflife, min_periods=min_periods)
 
 
-def _skew(sample: np.ndarray) -> float:
-    std = sample.std(ddof=1)
-    return (
-        np.nan
-        if std == 0 or len(sample) < 3
-        else float(np.mean(((sample - sample.mean()) / std) ** 3))
-    )
-
-
-def _kurt(sample: np.ndarray) -> float:
-    std = sample.std(ddof=1)
-    return (
-        np.nan
-        if std == 0 or len(sample) < 4
-        else float(np.mean(((sample - sample.mean()) / std) ** 4) - 3.0)
-    )
-
-
 def _last_rank(sample: np.ndarray) -> float:
-    return float(np.sum(sample <= sample[-1]))
+    less = np.sum(sample < sample[-1])
+    equal = np.sum(sample == sample[-1])
+    return float(less + (equal + 1.0) / 2.0)
 
 
 def _last_percentile(sample: np.ndarray) -> float:
@@ -350,7 +341,7 @@ def _rolling_last_rank_numpy(
             sample = sample[~np.isnan(sample)]
             if len(sample) < min_periods:
                 continue
-            rank = float(np.sum(sample <= sample[-1]))
+            rank = _last_rank(sample)
             result[index] = rank / len(sample) if pct else rank
         output.append(
             group.select(TIME, ASSET_ID).with_columns(pl.Series(VALUE, result))

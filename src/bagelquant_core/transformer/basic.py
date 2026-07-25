@@ -42,5 +42,5 @@ def pct_change(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
 def _validate_periods(periods: int, operation: str) -> None:
     if not isinstance(periods, int) or isinstance(periods, bool):
         raise TypeError(f"{operation} periods must be an integer")
-    if periods == 0:
-        raise ValueError(f"{operation} periods must not be zero")
+    if periods <= 0:
+        raise ValueError(f"{operation} periods must be positive")

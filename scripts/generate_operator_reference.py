@@ -47,15 +47,26 @@ DESCRIPTIONS = {
     "group_rankpct": "Return row-wise dense percentile ranks within each group.",
     "group_std": "Replace each element with its row-wise group standard deviation.",
     "group_zscore": "Return row-wise z-scores within each group.",
+    "date_age_constraint": "Mask values until a trailing window contains the required number of valid observations.",
+    "inv_log_sqrt_rank": "Return `-log(rank) / sqrt(rank)` using cross-sectional percentile ranks.",
     "less": "Return one where the first input is less than the second and zero elsewhere.",
     "less_equal": "Return one where the first input is less than or equal to the second and zero elsewhere.",
     "max": "Alias for [`maximum`](./maximum.md). Return element-wise maximum values.",
     "min": "Alias for [`minimum`](./minimum.md). Return element-wise minimum values.",
     "multiply": "Alias for [`mul`](./mul.md). Multiply two inputs element-wise.",
+    "net_scale": "Scale positive and negative cross-sectional values independently by their absolute-side sums.",
+    "nonnans": "Replace null and NaN values with zero.",
+    "normalize": "Scale each cross-section linearly to `[-1, 1]`.",
+    "notnan": "Return one for finite or infinite present values and zero for null or NaN values.",
     "not_": "Return one where elements are falsy and zero where they are truthy.",
     "or_": "Return one where either corresponding element is truthy and zero elsewhere.",
     "power": "Raise each element of the first input to the corresponding element of the second input.",
     "power_df": "Raise each element of the first input to the corresponding element of the second input.",
+    "rate_of_change": "Return the value difference over `interval` rows divided by that interval.",
+    "rolling_elastic_net": "Predict the current target from factors fitted on the prior window with elastic-net regularization.",
+    "rolling_lasso": "Predict the current target from factors fitted on the prior window with L1 regularization.",
+    "rolling_ols": "Predict the current target from one or more factors fitted on the prior window.",
+    "rolling_ridge": "Predict the current target from factors fitted on the prior window with L2 regularization.",
     "rolling_ew_std": "Alias for [`ewm_std`](./ewm_std.md). Return exponentially weighted standard deviations.",
     "rolling_ewm": "Alias for [`ewm_mean`](./ewm_mean.md). Return exponentially weighted means.",
     "sin": "Return the sine of each element.",
@@ -80,8 +91,8 @@ PARAMETER_DESCRIPTIONS = {
     "power": "Exponent `Panel` or single-output `Graph`.",
     "name": "Optional graph-node name. A generated name is used when omitted.",
     "metadata": "Optional metadata stored on the graph node.",
-    "periods": "Number of rows to shift or compare. Must be a non-zero integer.",
-    "interval": "Number of rows between observations. Must be a non-zero integer.",
+    "periods": "Number of prior rows to shift or compare. Must be a positive integer.",
+    "interval": "Number of prior rows between observations. Must be a positive integer.",
     "window": "Positive trailing-window length in rows.",
     "min_periods": "Minimum number of observations required to produce a value.",
     "ddof": "Delta degrees of freedom used by variance or standard-deviation calculations.",
@@ -344,7 +355,7 @@ print(result)"""
     elif name == "project":
         call = "project(left, right)"
     elif name == "mask":
-        call = "mask(left, right, keep_value=1.0)"
+        call = "mask(left, right, replace_value=0.0)"
     else:
         call = f"{name}(left, right)"
     if name == "orthogonalize":

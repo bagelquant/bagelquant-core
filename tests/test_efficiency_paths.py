@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import polars as pl
+import pytest
 
 from bagelquant_core import ExecutionRuntime
 from bagelquant_core.composer import (
@@ -62,7 +63,7 @@ def test_rolling_rank_and_percentile_fast_paths() -> None:
     assert values(pct.output.data)[("2024-01-02", "a")] == 0.5
 
 
-def test_ewm_mean_uses_recursive_weighting() -> None:
+def test_ewm_mean_honors_adjusted_and_recursive_weighting() -> None:
     source = panel(
         [
             ("2024-01-01", "a", 1.0),
@@ -71,13 +72,18 @@ def test_ewm_mean_uses_recursive_weighting() -> None:
         ]
     )
 
-    graph = ewm_mean(source, alpha=0.5, min_periods=0)
-    graph.compute()
+    adjusted = ewm_mean(source, alpha=0.5, min_periods=0)
+    recursive = ewm_mean(source, alpha=0.5, min_periods=0, adjust=False)
+    adjusted.compute()
+    recursive.compute()
 
-    result = values(graph.output.data)
-    assert result[("2024-01-01", "a")] == 1.0
-    assert result[("2024-01-02", "a")] == 1.5
-    assert result[("2024-01-03", "a")] == 2.25
+    adjusted_values = values(adjusted.output.data)
+    recursive_values = values(recursive.output.data)
+    assert adjusted_values[("2024-01-01", "a")] == 1.0
+    assert adjusted_values[("2024-01-02", "a")] == pytest.approx(5 / 3)
+    assert adjusted_values[("2024-01-03", "a")] == pytest.approx(17 / 7)
+    assert recursive_values[("2024-01-02", "a")] == 1.5
+    assert recursive_values[("2024-01-03", "a")] == 2.25
 
 
 def test_rolling_pair_composers_are_grouped_by_asset() -> None:
@@ -109,12 +115,13 @@ def test_rolling_pair_composers_are_grouped_by_asset() -> None:
     assert math.isclose(values(cov.output.data)[("2024-01-02", "a")], 1.0)
 
 
-def test_rolling_ols_uses_closed_form_slope() -> None:
+def test_rolling_ols_predicts_current_value_from_prior_window() -> None:
     target = panel(
         [
             ("2024-01-01", "a", 3.0),
             ("2024-01-02", "a", 5.0),
             ("2024-01-03", "a", 7.0),
+            ("2024-01-04", "a", 9.0),
         ],
         name="target",
     )
@@ -123,6 +130,7 @@ def test_rolling_ols_uses_closed_form_slope() -> None:
             ("2024-01-01", "a", 1.0),
             ("2024-01-02", "a", 2.0),
             ("2024-01-03", "a", 3.0),
+            ("2024-01-04", "a", 4.0),
         ],
         name="factor",
     )
@@ -130,7 +138,9 @@ def test_rolling_ols_uses_closed_form_slope() -> None:
     graph = rolling_ols(target, factor, window=3)
     graph.compute()
 
-    assert math.isclose(values(graph.output.data)[("2024-01-03", "a")], 2.0)
+    result = values(graph.output.data)
+    assert result[("2024-01-03", "a")] is None
+    assert math.isclose(result[("2024-01-04", "a")], 9.0)
 
 
 def test_one_factor_orthogonalize_uses_closed_form_residuals() -> None:

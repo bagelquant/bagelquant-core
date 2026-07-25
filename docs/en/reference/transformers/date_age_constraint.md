@@ -1,17 +1,19 @@
 # date_age_constraint
 
 ```python
-date_age_constraint(source, max_age, name=None, metadata=None)
+date_age_constraint(source, window, min_valid=None, name=None, metadata=None)
 ```
 
-Apply `date_age_constraint` to long-form panel inputs.
+Mask values until a trailing window contains the required number of valid observations.
 
 ## Parameters
 
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
-**max_age** : int
-: `max_age` argument.
+**window** : int
+: Positive trailing-window length in rows.
+**min_valid** : int | None, default `None`
+: Minimum valid observations required within the trailing window.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`

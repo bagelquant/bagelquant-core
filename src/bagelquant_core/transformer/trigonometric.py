@@ -30,7 +30,9 @@ def arccos(frame: pl.DataFrame) -> pl.DataFrame:
 
 @transformer
 def arctanh(frame: pl.DataFrame) -> pl.DataFrame:
-    return unary(frame, 0.5 * ((1.0 + pl.col(VALUE)) / (1.0 - pl.col(VALUE))).log())
+    value = pl.col(VALUE)
+    transformed = 0.5 * ((1.0 + value) / (1.0 - value)).log()
+    return unary(frame, pl.when(value.abs() < 1).then(transformed).otherwise(None))
 
 
 @transformer
@@ -40,7 +42,9 @@ def arctan(frame: pl.DataFrame) -> pl.DataFrame:
 
 @transformer
 def trig(frame: pl.DataFrame) -> pl.DataFrame:
-    return sin.operation(frame)
+    value = pl.col(VALUE)
+    transformed = value.arccos() * value.arcsin()
+    return unary(frame, pl.when(value.abs() <= 1).then(transformed).otherwise(None))
 
 
 @transformer

@@ -68,6 +68,8 @@ def normalize_panel_frame(
         raise ValueError("panel data must be unique by (time, asset_id)")
     if numeric and not normalized.schema[VALUE].is_numeric():
         raise TypeError("panel value column must be numeric")
+    if numeric and normalized.schema[VALUE].is_float():
+        normalized = normalized.with_columns(pl.col(VALUE).fill_nan(None))
     return normalized.sort(list(PANEL_KEYS))
 
 

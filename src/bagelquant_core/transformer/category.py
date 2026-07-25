@@ -31,7 +31,9 @@ def category_mean(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
 @composer
 def category_rank(frame: pl.DataFrame, category: pl.DataFrame) -> pl.DataFrame:
     data = _joined(frame, category)
-    return panel_like(data, pl.col("x").rank("average").over(TIME, "category"))
+    rank = pl.col("x").rank("average").over(TIME, "category")
+    count = pl.col("x").count().over(TIME, "category")
+    return panel_like(data, rank / count)
 
 
 @composer

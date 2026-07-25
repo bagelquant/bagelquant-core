@@ -17,8 +17,8 @@ def test_cross_sectional_rank_uses_time_groups() -> None:
     graph.compute()
 
     assert values(graph.output.data) == {
-        ("2024-01-01", "a"): 2.0,
-        ("2024-01-01", "b"): 1.0,
+        ("2024-01-01", "a"): 1.0,
+        ("2024-01-01", "b"): 0.5,
     }
 
 

@@ -4,7 +4,7 @@
 inv_log_sqrt_rank(source, name=None, metadata=None)
 ```
 
-Apply `inv_log_sqrt_rank` to long-form panel inputs.
+Return `-log(rank) / sqrt(rank)` using cross-sectional percentile ranks.
 
 ## Parameters
 

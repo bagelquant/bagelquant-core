@@ -1,17 +1,17 @@
 # rolling_ridge
 
 ```python
-rolling_ridge(target, factor, window, alpha=1.0, name=None, metadata=None)
+rolling_ridge(target, *factors, window, alpha=1.0, name=None, metadata=None)
 ```
 
-Apply `rolling_ridge` to long-form panel inputs.
+Predict the current target from factors fitted on the prior window with L2 regularization.
 
 ## Parameters
 
 **target** : Panel | Graph
 : `target` argument.
-**factor** : Panel | Graph
-: `factor` argument.
+**factors** : Panel | Graph
+: One or more factor `Panel` or single-output `Graph` inputs.
 **window** : int
 : Positive trailing-window length in rows.
 **alpha** : float, default `1.0`

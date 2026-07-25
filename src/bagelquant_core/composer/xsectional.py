@@ -19,6 +19,8 @@ def _grouped(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
 
 @composer
 def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
+    if not factors:
+        raise ValueError("orthogonalize requires at least one factor")
     if len(factors) == 1:
         return _orthogonalize_one_factor(frame, factors[0])
 
@@ -32,21 +34,26 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict[str, object]] = []
     factor_columns = [f"f{index}" for index in range(len(factors))]
     for time, group in data.partition_by(TIME, as_dict=True).items():
-        clean = group.drop_nulls(["target", *factor_columns])
-        if clean.height <= len(factor_columns):
+        target = np.array(group["target"], dtype=float)
+        features = np.column_stack(
+            [np.array(group[column], dtype=float) for column in factor_columns]
+        )
+        valid = np.isfinite(target) & np.isfinite(features).all(axis=1)
+        if valid.sum() <= len(factor_columns):
             for row in group.iter_rows(named=True):
                 rows.append({TIME: _key(time), ASSET_ID: row[ASSET_ID], VALUE: None})
             continue
         x = np.column_stack(
             [
-                np.ones(clean.height),
-                *[np.array(clean[col], dtype=float) for col in factor_columns],
+                np.ones(valid.sum()),
+                features[valid],
             ]
         )
-        y = np.array(clean["target"], dtype=float)
+        y = target[valid]
         beta, *_ = np.linalg.lstsq(x, y, rcond=None)
         residuals = y - x @ beta
-        by_asset = dict(zip(clean[ASSET_ID], residuals, strict=True))
+        valid_assets = np.array(group[ASSET_ID], dtype=object)[valid]
+        by_asset = dict(zip(valid_assets, residuals, strict=True))
         for row in group.iter_rows(named=True):
             rows.append(
                 {
@@ -145,16 +152,19 @@ def group_zscore(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
 @composer
 def group_rankpct(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
+    rank = pl.col("x").rank("dense").over(TIME, "group")
+    count = pl.col("x").n_unique().over(TIME, "group")
+    return panel_like(data, rank / count)
+
+
+@composer
+def group_percentile(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+    data = _grouped(frame, group)
     return panel_like(
         data,
         pl.col("x").rank("average").over(TIME, "group")
         / pl.col("x").count().over(TIME, "group"),
     )
-
-
-@composer
-def group_percentile(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
-    return group_rankpct(frame, group)
 
 
 def _key(value: object) -> object:

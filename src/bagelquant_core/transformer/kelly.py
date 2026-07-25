@@ -21,7 +21,9 @@ def kelly(frame: pl.DataFrame, *, window: int) -> pl.DataFrame:
 
 @transformer
 def kelly_nonan_standardize(frame: pl.DataFrame, *, window: int) -> pl.DataFrame:
-    return zscore.operation(kelly.operation(frame, window=window))
+    filled = panel_like(frame, pl.col(VALUE).fill_nan(None).fill_null(0.0))
+    standardized = zscore.operation(filled)
+    return kelly.operation(standardized, window=window)
 
 
 @transformer
@@ -33,14 +35,11 @@ def kelly_rank_boxcox(
 ) -> pl.DataFrame:
     from .boxcox import boxcox
 
-    return boxcox.operation(
-        rank.operation(kelly.operation(frame, window=window)),
-        lambda_=lambda_,
-    )
+    transformed = boxcox.operation(rank.operation(frame), lambda_=lambda_)
+    return kelly.operation(transformed, window=window)
 
 
 @transformer
 def kelly_rescaling_weight(frame: pl.DataFrame, *, window: int) -> pl.DataFrame:
     scored = kelly.operation(frame, window=window)
-    gross = pl.col(VALUE).abs().sum().over("time")
-    return panel_like(scored, pl.col(VALUE) / gross)
+    return panel_like(scored, pl.col(VALUE).clip(0.0, 1.0))

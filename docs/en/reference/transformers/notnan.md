@@ -4,7 +4,7 @@
 notnan(source, name=None, metadata=None)
 ```
 
-Apply `notnan` to long-form panel inputs.
+Return one for finite or infinite present values and zero for null or NaN values.
 
 ## Parameters
 

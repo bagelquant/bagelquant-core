@@ -1,21 +1,25 @@
 # rolling_lasso
 
 ```python
-rolling_lasso(target, factor, window, alpha=1.0, name=None, metadata=None)
+rolling_lasso(target, *factors, window, alpha=1.0, max_iter=1000, tolerance=1e-08, name=None, metadata=None)
 ```
 
-Apply `rolling_lasso` to long-form panel inputs.
+Predict the current target from factors fitted on the prior window with L1 regularization.
 
 ## Parameters
 
 **target** : Panel | Graph
 : `target` argument.
-**factor** : Panel | Graph
-: `factor` argument.
+**factors** : Panel | Graph
+: One or more factor `Panel` or single-output `Graph` inputs.
 **window** : int
 : Positive trailing-window length in rows.
 **alpha** : float, default `1.0`
 : Smoothing or regularization parameter, depending on the operation.
+**max_iter** : int, default `1000`
+: Maximum coordinate-descent iterations.
+**tolerance** : float, default `1e-08`
+: Convergence tolerance for coordinate descent.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`

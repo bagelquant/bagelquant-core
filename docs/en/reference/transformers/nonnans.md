@@ -4,7 +4,7 @@
 nonnans(source, name=None, metadata=None)
 ```
 
-Apply `nonnans` to long-form panel inputs.
+Replace null and NaN values with zero.
 
 ## Parameters
 

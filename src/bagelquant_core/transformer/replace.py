@@ -24,9 +24,9 @@ def replace_non_nan(frame: pl.DataFrame, *, value: Real) -> pl.DataFrame:
 
 @transformer
 def non_nan_to_one(frame: pl.DataFrame) -> pl.DataFrame:
-    return replace_non_nan(frame, value=1)
+    return replace_non_nan.operation(frame, value=1)
 
 
 @transformer
 def non_nan_to_zero(frame: pl.DataFrame) -> pl.DataFrame:
-    return replace_non_nan(frame, value=0)
+    return replace_non_nan.operation(frame, value=0)

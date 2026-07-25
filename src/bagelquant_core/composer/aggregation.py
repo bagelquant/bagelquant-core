@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from numbers import Real
 
 import polars as pl
 
@@ -42,8 +43,12 @@ def maximum(*frames: pl.DataFrame) -> pl.DataFrame:
 
 @composer
 def weighted_sum(*frames: pl.DataFrame, weights: Sequence[float]) -> pl.DataFrame:
+    if not frames:
+        raise ValueError("weighted_sum requires at least one frame")
     if len(frames) != len(weights):
         raise ValueError("weights length must match frame count")
+    if any(not isinstance(weight, Real) or isinstance(weight, bool) for weight in weights):
+        raise TypeError("weights must be real numbers")
     joined = frames[0].rename({VALUE: "v0"})
     expr = pl.col("v0") * float(weights[0])
     for index, (frame, weight) in enumerate(

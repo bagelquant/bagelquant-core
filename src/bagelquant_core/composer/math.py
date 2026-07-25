@@ -45,9 +45,9 @@ def xand(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
     return binary(
         lhs,
         rhs,
-        lambda left, right: (left.cast(pl.Boolean) & right.cast(pl.Boolean)).cast(
-            pl.Float64
-        ),
+        lambda left, right: (
+            left.cast(pl.Boolean) == right.cast(pl.Boolean)
+        ).cast(pl.Float64),
     )
 
 

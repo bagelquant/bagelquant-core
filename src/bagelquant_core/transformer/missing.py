@@ -23,7 +23,10 @@ def ffill(frame: pl.DataFrame, *, limit: int | None = None) -> pl.DataFrame:
     _validate_limit(limit)
     return panel_like(
         frame.sort([ASSET_ID, TIME]),
-        pl.col(VALUE).fill_null(strategy="forward", limit=limit).over(ASSET_ID),
+        pl.col(VALUE)
+        .fill_nan(None)
+        .fill_null(strategy="forward", limit=limit)
+        .over(ASSET_ID),
     )
 
 
@@ -32,7 +35,10 @@ def bfill(frame: pl.DataFrame, *, limit: int | None = None) -> pl.DataFrame:
     _validate_limit(limit)
     return panel_like(
         frame.sort([ASSET_ID, TIME]),
-        pl.col(VALUE).fill_null(strategy="backward", limit=limit).over(ASSET_ID),
+        pl.col(VALUE)
+        .fill_nan(None)
+        .fill_null(strategy="backward", limit=limit)
+        .over(ASSET_ID),
     )
 
 

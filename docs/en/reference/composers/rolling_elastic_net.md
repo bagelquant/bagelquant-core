@@ -1,23 +1,27 @@
 # rolling_elastic_net
 
 ```python
-rolling_elastic_net(target, factor, window, alpha=1.0, l1_ratio=0.5, name=None, metadata=None)
+rolling_elastic_net(target, *factors, window, alpha=1.0, l1_ratio=0.5, max_iter=1000, tolerance=1e-08, name=None, metadata=None)
 ```
 
-Apply `rolling_elastic_net` to long-form panel inputs.
+Predict the current target from factors fitted on the prior window with elastic-net regularization.
 
 ## Parameters
 
 **target** : Panel | Graph
 : `target` argument.
-**factor** : Panel | Graph
-: `factor` argument.
+**factors** : Panel | Graph
+: One or more factor `Panel` or single-output `Graph` inputs.
 **window** : int
 : Positive trailing-window length in rows.
 **alpha** : float, default `1.0`
 : Smoothing or regularization parameter, depending on the operation.
 **l1_ratio** : float, default `0.5`
 : Elastic-net mixing parameter in `[0, 1]`.
+**max_iter** : int, default `1000`
+: Maximum coordinate-descent iterations.
+**tolerance** : float, default `1e-08`
+: Convergence tolerance for coordinate descent.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`

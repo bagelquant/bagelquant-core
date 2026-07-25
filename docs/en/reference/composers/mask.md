@@ -1,7 +1,7 @@
 # mask
 
 ```python
-mask(frame, binary, keep_value=1.0, name=None, metadata=None)
+mask(frame, mask_frame, replace_value=nan, name=None, metadata=None)
 ```
 
 Apply `mask` to long-form panel inputs.
@@ -10,10 +10,10 @@ Apply `mask` to long-form panel inputs.
 
 **frame** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
-**binary** : Panel | Graph
-: Binary projection input. Cells equal to `1` are retained; other cells are masked.
-**keep_value** : float, default `1.0`
-: `keep_value` argument.
+**mask_frame** : Panel | Graph
+: Mask input. Truthy cells retain values; false or missing cells are replaced.
+**replace_value** : float, default `nan`
+: Value inserted where the mask is false or missing.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`
@@ -50,7 +50,7 @@ right = Panel.from_domain(
     domain,
 )
 
-result = mask(left, right, keep_value=1.0).compute().data
+result = mask(left, right, replace_value=0.0).compute().data
 print(result)
 ```
 

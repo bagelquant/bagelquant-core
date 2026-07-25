@@ -10,7 +10,7 @@ from .core import transformer
 
 @transformer
 def rank(frame: pl.DataFrame) -> pl.DataFrame:
-    return cross_section_rank(frame)
+    return cross_section_rank(frame, pct=True)
 
 
 @transformer
@@ -41,15 +41,27 @@ def min_max_scale(frame: pl.DataFrame) -> pl.DataFrame:
 
 @transformer
 def normalize(frame: pl.DataFrame) -> pl.DataFrame:
-    total = pl.col(VALUE).abs().sum().over(TIME)
-    return panel_like(frame, pl.col(VALUE) / total)
+    scaled = min_max_scale.operation(frame)
+    return panel_like(scaled, 2.0 * pl.col(VALUE) - 1.0)
 
 
 @transformer
 def net_scale(frame: pl.DataFrame) -> pl.DataFrame:
-    gross = pl.col(VALUE).abs().sum().over(TIME)
-    net = pl.col(VALUE).sum().over(TIME)
-    return panel_like(frame, pl.col(VALUE) / gross - net / gross / pl.len().over(TIME))
+    value = pl.col(VALUE)
+    positive_sum = pl.when(value > 0).then(value).otherwise(0.0).sum().over(TIME)
+    negative_sum = (
+        pl.when(value < 0).then(value.abs()).otherwise(0.0).sum().over(TIME)
+    )
+    scaled = (
+        pl.when(value > 0)
+        .then(value / positive_sum)
+        .when(value < 0)
+        .then(value / negative_sum)
+        .when(value == 0)
+        .then(0.0)
+        .otherwise(None)
+    )
+    return panel_like(frame, scaled)
 
 
 def _validate_quantiles(lower: float, upper: float) -> None:

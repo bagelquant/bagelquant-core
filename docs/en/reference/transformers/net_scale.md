@@ -4,7 +4,7 @@
 net_scale(source, name=None, metadata=None)
 ```
 
-Apply `net_scale` to long-form panel inputs.
+Scale positive and negative cross-sectional values independently by their absolute-side sums.
 
 ## Parameters
 

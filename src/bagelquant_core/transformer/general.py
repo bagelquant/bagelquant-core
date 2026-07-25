@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from numbers import Real
+
 import polars as pl
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like, unary
@@ -10,16 +12,19 @@ from .core import transformer
 
 @transformer
 def nonnans(frame: pl.DataFrame) -> pl.DataFrame:
-    return unary(frame, pl.col(VALUE).is_not_nan().cast(pl.Float64))
+    return unary(frame, pl.col(VALUE).fill_nan(None).fill_null(0.0))
 
 
 @transformer
 def notnan(frame: pl.DataFrame) -> pl.DataFrame:
-    return nonnans.operation(frame)
+    present = pl.col(VALUE).is_not_null() & ~pl.col(VALUE).is_nan()
+    return unary(frame, present.cast(pl.Float64))
 
 
 @transformer
 def denoise(frame: pl.DataFrame, *, threshold: float = 1e-12) -> pl.DataFrame:
+    if not isinstance(threshold, Real) or isinstance(threshold, bool) or threshold < 0:
+        raise ValueError("denoise threshold must be a non-negative real number")
     return unary(
         frame,
         pl.when(pl.col(VALUE).abs() < threshold).then(0.0).otherwise(pl.col(VALUE)),
@@ -28,12 +33,16 @@ def denoise(frame: pl.DataFrame, *, threshold: float = 1e-12) -> pl.DataFrame:
 
 @transformer
 def posonly(frame: pl.DataFrame) -> pl.DataFrame:
-    return unary(frame, pl.when(pl.col(VALUE) > 0).then(pl.col(VALUE)).otherwise(None))
+    return unary(
+        frame, pl.when(pl.col(VALUE) >= 0).then(pl.col(VALUE)).otherwise(None)
+    )
 
 
 @transformer
 def negonly(frame: pl.DataFrame) -> pl.DataFrame:
-    return unary(frame, pl.when(pl.col(VALUE) < 0).then(pl.col(VALUE)).otherwise(None))
+    return unary(
+        frame, pl.when(pl.col(VALUE) <= 0).then(pl.col(VALUE)).otherwise(None)
+    )
 
 
 @transformer
@@ -56,9 +65,9 @@ def delta(frame: pl.DataFrame, *, interval: int = 1) -> pl.DataFrame:
 @transformer
 def rate_of_change(frame: pl.DataFrame, *, interval: int = 1) -> pl.DataFrame:
     _validate_periods(interval, operation="rate_of_change")
-    previous = pl.col(VALUE).shift(interval).over(ASSET_ID)
     return panel_like(
-        frame.sort([ASSET_ID, TIME]), (pl.col(VALUE) - previous) / previous
+        frame.sort([ASSET_ID, TIME]),
+        pl.col(VALUE).diff(interval).over(ASSET_ID) / interval,
     )
 
 
@@ -72,18 +81,38 @@ def remove_repeated(frame: pl.DataFrame) -> pl.DataFrame:
 
 
 @transformer
-def date_age_constraint(frame: pl.DataFrame, *, max_age: int) -> pl.DataFrame:
-    if max_age < 0:
-        raise ValueError("max_age must be non-negative")
-    valid_age = pl.col(VALUE).is_not_null().cum_sum().over(ASSET_ID)
+def date_age_constraint(
+    frame: pl.DataFrame,
+    *,
+    window: int,
+    min_valid: int | None = None,
+) -> pl.DataFrame:
+    if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+        raise ValueError("date_age_constraint window must be a positive integer")
+    required = window if min_valid is None else min_valid
+    if (
+        not isinstance(required, int)
+        or isinstance(required, bool)
+        or required <= 0
+        or required > window
+    ):
+        raise ValueError("date_age_constraint min_valid must be in [1, window]")
+    valid_count = (
+        (pl.col(VALUE).is_not_null() & ~pl.col(VALUE).is_nan())
+        .cast(pl.Int64)
+        .rolling_sum(window, min_samples=1)
+        .over(ASSET_ID)
+    )
     return panel_like(
         frame.sort([ASSET_ID, TIME]),
-        pl.when(valid_age <= max_age).then(pl.col(VALUE)).otherwise(None),
+        pl.when(valid_count >= required).then(pl.col(VALUE)).otherwise(None),
     )
 
 
 @transformer
 def constant(frame: pl.DataFrame, *, value: float = 1) -> pl.DataFrame:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        raise TypeError("constant value must be a real number")
     return unary(frame, pl.lit(float(value)))
 
 

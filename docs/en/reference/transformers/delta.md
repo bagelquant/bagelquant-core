@@ -11,7 +11,7 @@ Apply `delta` to long-form panel inputs.
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
 **interval** : int, default `1`
-: Number of rows between observations. Must be a non-zero integer.
+: Number of prior rows between observations. Must be a positive integer.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`

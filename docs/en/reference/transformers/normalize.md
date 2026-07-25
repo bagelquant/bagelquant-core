@@ -4,7 +4,7 @@
 normalize(source, name=None, metadata=None)
 ```
 
-Apply `normalize` to long-form panel inputs.
+Scale each cross-section linearly to `[-1, 1]`.
 
 ## Parameters
 

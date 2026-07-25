@@ -6,7 +6,7 @@ operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 """
 
 from .execution import ExecutionRuntime
-from .graph import Graph
+from .graph import Graph, GraphSpec, GraphValidationError
 from .panel import CategoryPanel, Domain, Panel
 
 __all__ = [
@@ -14,5 +14,7 @@ __all__ = [
     "Domain",
     "ExecutionRuntime",
     "Graph",
+    "GraphSpec",
+    "GraphValidationError",
     "Panel",
 ]

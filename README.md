@@ -56,6 +56,16 @@ factor.compute()
 print(factor.output.data)
 ```
 
+Graphs also have a JSON-compatible declarative representation. Only registered
+BagelQuant transformers and composers can be restored, and panel inputs are
+resolved explicitly by symbolic name:
+
+```python
+specification = factor.spec().to_dict()
+restored = Graph.from_spec(specification, inputs={"price": price, "book": book})
+result = restored.compute()
+```
+
 Time-series operations group by `asset_id` and order by `time`.
 Cross-sectional operations group by `time`.
 Composer operations join inputs on `(time, asset_id)`.

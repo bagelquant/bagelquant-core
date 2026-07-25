@@ -7,8 +7,10 @@ validated DAG. They can be inspected through ``spec()`` or evaluated by an
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Iterable, Sequence, TypeVar, cast
+from inspect import signature
+from typing import TYPE_CHECKING, Any, Generic, Iterable, Sequence, TypeVar, cast
 
 from .node import Node, NodeSpec
 
@@ -25,6 +27,80 @@ class GraphValidationError(ValueError):
 class GraphSpec:
     outputs: tuple[str, ...]
     nodes: tuple[NodeSpec, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible graph specification."""
+
+        return {
+            "outputs": list(self.outputs),
+            "nodes": [
+                {
+                    "name": node.name,
+                    "node_type": node.node_type,
+                    "config": dict(node.config),
+                    "metadata": dict(node.metadata),
+                    "parents": list(node.parents),
+                }
+                for node in self.nodes
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "GraphSpec":
+        """Validate and construct a graph specification from JSON data."""
+
+        outputs = value.get("outputs")
+        nodes = value.get("nodes")
+        if (
+            not isinstance(outputs, list)
+            or not outputs
+            or not all(isinstance(item, str) and item for item in outputs)
+        ):
+            raise GraphValidationError(
+                "graph outputs must be a non-empty string list"
+            )
+        if not isinstance(nodes, list) or not nodes:
+            raise GraphValidationError("graph nodes must be a non-empty list")
+        parsed: list[NodeSpec] = []
+        for raw in nodes:
+            if not isinstance(raw, Mapping):
+                raise GraphValidationError("each graph node must be an object")
+            try:
+                name = raw["name"]
+                node_type = raw["node_type"]
+            except KeyError as error:
+                raise GraphValidationError(
+                    f"graph node is missing {error.args[0]}"
+                ) from error
+            config = raw.get("config", {})
+            metadata = raw.get("metadata", {})
+            parents = raw.get("parents", [])
+            if not isinstance(name, str) or not name:
+                raise GraphValidationError("graph node name must be a non-empty string")
+            if node_type not in {"panel", "transformer", "composer"}:
+                raise GraphValidationError(
+                    f"unsupported graph node type: {node_type!r}"
+                )
+            if not isinstance(config, Mapping) or not isinstance(metadata, Mapping):
+                raise GraphValidationError(
+                    f"graph node {name!r} config and metadata must be objects"
+                )
+            if not isinstance(parents, list) or not all(
+                isinstance(parent, str) and parent for parent in parents
+            ):
+                raise GraphValidationError(
+                    f"graph node {name!r} parents must be a string list"
+                )
+            parsed.append(
+                NodeSpec(
+                    name=name,
+                    node_type=node_type,
+                    config=dict(config),
+                    metadata=dict(metadata),
+                    parents=tuple(parents),
+                )
+            )
+        return cls(outputs=tuple(outputs), nodes=tuple(parsed))
 
 
 OutputT = TypeVar("OutputT", covariant=True)
@@ -64,6 +140,132 @@ class Graph(Generic[OutputT]):
     @classmethod
     def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph[Panel]":
         return Graph(_nodes=nodes)
+
+    @classmethod
+    def from_spec(
+        cls,
+        specification: GraphSpec | Mapping[str, Any],
+        *,
+        inputs: Mapping[str, "Panel"],
+    ) -> "Graph[Panel]":
+        """Compile a declarative graph using registered safe operations.
+
+        Panel nodes are symbolic references resolved from ``inputs``.
+        Transformer and composer names resolve through BagelQuant's registries;
+        arbitrary Python callables are never deserialized.
+        """
+
+        from .composer import COMPOSER_REGISTRY
+        from .transformer import TRANSFORMER_REGISTRY
+
+        spec = cls.validate_spec(specification)
+        by_name: dict[str, Node] = {}
+
+        for node in spec.nodes:
+            if node.node_type == "panel":
+                try:
+                    panel = inputs[node.name]
+                except KeyError as error:
+                    raise GraphValidationError(
+                        f"missing symbolic panel input: {node.name}"
+                    ) from error
+                by_name[node.name] = panel
+                continue
+
+            config = dict(node.config)
+            operation_key = node.node_type
+            operation_name = cast(str, config.pop(operation_key))
+            parents = tuple(by_name[parent] for parent in node.parents)
+            try:
+                if node.node_type == "transformer":
+                    built = TRANSFORMER_REGISTRY.get(operation_name)(
+                        Graph._from_nodes((parents[0],)),
+                        name=node.name,
+                        metadata=node.metadata,
+                        **config,
+                    )
+                else:
+                    built = COMPOSER_REGISTRY.get(operation_name)(
+                        *(Graph._from_nodes((parent,)) for parent in parents),
+                        name=node.name,
+                        metadata=node.metadata,
+                        **config,
+                    )
+            except KeyError as error:
+                raise GraphValidationError(str(error)) from error
+            by_name[node.name] = built._single_output()
+
+        return Graph(_nodes=tuple(by_name[name] for name in spec.outputs))
+
+    @classmethod
+    def validate_spec(
+        cls, specification: GraphSpec | Mapping[str, Any]
+    ) -> GraphSpec:
+        """Validate topology, registered operators, and operator parameters."""
+
+        from .composer import COMPOSER_REGISTRY
+        from .transformer import TRANSFORMER_REGISTRY
+
+        spec = (
+            specification
+            if isinstance(specification, GraphSpec)
+            else GraphSpec.from_dict(specification)
+        )
+        declared_names = [node.name for node in spec.nodes]
+        if len(declared_names) != len(set(declared_names)):
+            raise GraphValidationError("graph specification has duplicate node names")
+        seen: set[str] = set()
+        for node in spec.nodes:
+            missing = [parent for parent in node.parents if parent not in seen]
+            if missing:
+                raise GraphValidationError(
+                    f"graph node {node.name!r} has unresolved or forward parents: "
+                    f"{missing}"
+                )
+            if node.node_type == "panel":
+                if node.parents:
+                    raise GraphValidationError(
+                        f"panel node {node.name!r} cannot have parents"
+                    )
+                seen.add(node.name)
+                continue
+            config = dict(node.config)
+            operation_name = config.pop(node.node_type, None)
+            if not isinstance(operation_name, str) or not operation_name:
+                raise GraphValidationError(
+                    f"graph node {node.name!r} is missing {node.node_type!r}"
+                )
+            if node.node_type == "transformer" and len(node.parents) != 1:
+                raise GraphValidationError(
+                    f"transformer {node.name!r} must have one parent"
+                )
+            if node.node_type == "composer" and not node.parents:
+                raise GraphValidationError(
+                    f"composer {node.name!r} requires at least one parent"
+                )
+            try:
+                operation = (
+                    TRANSFORMER_REGISTRY.get(operation_name)
+                    if node.node_type == "transformer"
+                    else COMPOSER_REGISTRY.get(operation_name)
+                )
+            except KeyError as error:
+                raise GraphValidationError(str(error)) from error
+            try:
+                signature(operation.operation).bind(
+                    *(object() for _ in node.parents), **config
+                )
+            except TypeError as error:
+                raise GraphValidationError(
+                    f"invalid parameters for graph node {node.name!r}: {error}"
+                ) from error
+            seen.add(node.name)
+        missing_outputs = [name for name in spec.outputs if name not in seen]
+        if missing_outputs:
+            raise GraphValidationError(
+                f"graph outputs reference unknown nodes: {missing_outputs}"
+            )
+        return spec
 
     @property
     def nodes(self) -> tuple[Node, ...]:

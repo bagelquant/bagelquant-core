@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from bagelquant_core.transformer import rank, rolling_mean, zscore
+from datetime import date
+
+import polars as pl
+
+from bagelquant_core import Domain, Panel
+from bagelquant_core.transformer import lag, rank, rolling_mean, zscore
 
 from helpers import panel, values
 
@@ -37,6 +42,30 @@ def test_rolling_mean_uses_asset_id_groups() -> None:
 
     assert values(graph.output.data)[("2024-01-02", "a")] == 2.0
     assert values(graph.output.data)[("2024-01-02", "b")] == 15.0
+
+
+def test_lag_uses_daily_domain_sessions_for_sparse_monthly_inputs() -> None:
+    domain = Domain(
+        calendar=["2024-01-31", "2024-02-01", "2024-02-02", "2024-02-05"],
+        universe=["a"],
+    )
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {"time": ["2024-01-31"], "asset_id": ["a"], "value": [1.0]}
+        ),
+        domain,
+        name="monthly_input",
+    )
+
+    delayed = lag(source, periods=1)
+    delayed.compute()
+
+    assert delayed.output.data.to_dicts() == [
+        {"time": date(2024, 1, 31), "asset_id": "a", "value": None},
+        {"time": date(2024, 2, 1), "asset_id": "a", "value": 1.0},
+        {"time": date(2024, 2, 2), "asset_id": "a", "value": None},
+        {"time": date(2024, 2, 5), "asset_id": "a", "value": None},
+    ]
 
 
 def test_zscore_constant_cross_section_returns_null_or_nan() -> None:

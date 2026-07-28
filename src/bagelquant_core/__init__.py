@@ -8,6 +8,7 @@ operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 from .execution import ExecutionRuntime
 from .graph import Graph, GraphSpec, GraphValidationError
 from .panel import CategoryPanel, Domain, Panel
+from .transformer import pct_change_frame
 
 __all__ = [
     "CategoryPanel",
@@ -17,4 +18,5 @@ __all__ = [
     "GraphSpec",
     "GraphValidationError",
     "Panel",
+    "pct_change_frame",
 ]

@@ -5,7 +5,7 @@ Built-in transformers are grouped by behavior while this module keeps the
 public import surface compact.
 """
 
-from .basic import abs_value, diff, identity, negate, pct_change
+from .basic import abs_value, diff, identity, negate, pct_change, pct_change_frame
 from .boxcox import boxcox
 from .category import category_demean, category_mean, category_rank, category_zscore
 from .core import TRANSFORMER_REGISTRY, TransformerFunction, transformer
@@ -114,6 +114,7 @@ __all__ = [
     "notnan",
     "nrank",
     "pct_change",
+    "pct_change_frame",
     "posonly",
     "power",
     "rank",

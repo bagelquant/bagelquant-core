@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import date
 
 import polars as pl
+import pytest
 
-from bagelquant_core import Domain, Panel
+from bagelquant_core import Domain, Panel, pct_change_frame
 from bagelquant_core.transformer import lag, rank, rolling_mean, zscore
 
 from helpers import panel, values
@@ -42,6 +43,25 @@ def test_rolling_mean_uses_asset_id_groups() -> None:
 
     assert values(graph.output.data)[("2024-01-02", "a")] == 2.0
     assert values(graph.output.data)[("2024-01-02", "b")] == 15.0
+
+
+def test_pct_change_frame_supports_runtime_consumers_without_a_graph() -> None:
+    source = panel(
+        [
+            ("2024-01-01", "a", 2.0),
+            ("2024-01-02", "a", 3.0),
+            ("2024-01-01", "b", 10.0),
+            ("2024-01-02", "b", 8.0),
+        ]
+    ).compute()
+
+    result = pct_change_frame(source)
+    result_values = values(result)
+
+    assert result_values[("2024-01-01", "a")] is None
+    assert result_values[("2024-01-01", "b")] is None
+    assert result_values[("2024-01-02", "a")] == pytest.approx(0.5)
+    assert result_values[("2024-01-02", "b")] == pytest.approx(-0.2)
 
 
 def test_lag_uses_daily_domain_sessions_for_sparse_monthly_inputs() -> None:

@@ -34,6 +34,12 @@ def diff(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
 
 @transformer
 def pct_change(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
+    return pct_change_frame(frame, periods=periods)
+
+
+def pct_change_frame(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
+    """Calculate panel percentage change without constructing a graph."""
+
     _validate_periods(periods, "pct_change")
     previous = pl.col(VALUE).shift(periods).over(ASSET_ID)
     return panel_like(frame.sort([ASSET_ID, TIME]), pl.col(VALUE) / previous - 1.0)

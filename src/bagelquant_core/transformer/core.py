@@ -10,12 +10,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import update_wrapper
 from itertools import count
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, overload
 
 import polars as pl
 
 from .._operation import as_node, operation_name
 from ..node import Node
+from ..operation_contract import OperationContract, default_operation_contract
 from ..registry import Registry
 
 if TYPE_CHECKING:
@@ -33,10 +34,14 @@ class TransformerFunction:
         operation: Callable[..., pl.DataFrame],
         *,
         registry_name: str | None = None,
+        contract: OperationContract | None = None,
     ) -> None:
         self.operation = operation
         self.registry_name = registry_name or operation_name(operation)
         self.display_name = operation.__name__
+        self.contract = contract or default_operation_contract(
+            operation, kind="transformer"
+        )
         self._counter = count(1)
         update_wrapper(self, operation)
 
@@ -89,6 +94,14 @@ class _TransformerNode(Node):
         frame = inputs[0]
         return self._operation.operation(frame, **self._config)
 
+    @property
+    def operation(self) -> TransformerFunction:
+        return self._operation
+
+    @property
+    def contract(self) -> OperationContract:
+        return self._operation.contract
+
     def config(self) -> Mapping[str, Any]:
         return {
             "transformer": operation_name(self._operation.operation),
@@ -96,9 +109,28 @@ class _TransformerNode(Node):
         }
 
 
-def transformer(operation: Callable[..., pl.DataFrame]) -> TransformerFunction:
-    """Decorate a DataFrame function as a graph-building transformer."""
+@overload
+def transformer(operation: Callable[..., pl.DataFrame]) -> TransformerFunction: ...
 
-    wrapped = TransformerFunction(operation)
-    TRANSFORMER_REGISTRY.add(wrapped.registry_name, wrapped)
-    return wrapped
+
+@overload
+def transformer(
+    operation: None = None,
+    *,
+    contract: OperationContract,
+) -> Callable[[Callable[..., pl.DataFrame]], TransformerFunction]: ...
+
+
+def transformer(
+    operation: Callable[..., pl.DataFrame] | None = None,
+    *,
+    contract: OperationContract | None = None,
+) -> TransformerFunction | Callable[[Callable[..., pl.DataFrame]], TransformerFunction]:
+    """Decorate a frame operation and attach its execution contract."""
+
+    def decorate(func: Callable[..., pl.DataFrame]) -> TransformerFunction:
+        wrapped = TransformerFunction(func, contract=contract)
+        TRANSFORMER_REGISTRY.add(wrapped.registry_name, wrapped)
+        return wrapped
+
+    return decorate(operation) if operation is not None else decorate

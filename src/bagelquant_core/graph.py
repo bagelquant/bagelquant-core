@@ -142,6 +142,14 @@ class Graph(Generic[OutputT]):
         return Graph(_nodes=nodes)
 
     @classmethod
+    def compile(
+        cls, specification: GraphSpec | Mapping[str, Any]
+    ) -> "CompiledGraph":
+        """Validate and resolve a reusable declarative graph template."""
+
+        return CompiledGraph(cls.validate_spec(specification))
+
+    @classmethod
     def from_spec(
         cls,
         specification: GraphSpec | Mapping[str, Any],
@@ -155,10 +163,21 @@ class Graph(Generic[OutputT]):
         arbitrary Python callables are never deserialized.
         """
 
+        spec = cls.validate_spec(specification)
+        return cls._from_validated_spec(spec, inputs=inputs)
+
+    @classmethod
+    def _from_validated_spec(
+        cls,
+        spec: GraphSpec,
+        *,
+        inputs: Mapping[str, "Panel"],
+    ) -> "Graph[Panel]":
+        """Bind inputs without repeating topology and signature validation."""
+
         from .composer import COMPOSER_REGISTRY
         from .transformer import TRANSFORMER_REGISTRY
 
-        spec = cls.validate_spec(specification)
         by_name: dict[str, Node] = {}
 
         for node in spec.nodes:
@@ -281,11 +300,16 @@ class Graph(Generic[OutputT]):
             return cast(OutputT, self._outputs[0].output)
         return cast(OutputT, {node.name: node.output for node in self._outputs})
 
-    def compute(self, runtime: "ExecutionRuntime | None" = None) -> OutputT:
+    def compute(
+        self,
+        runtime: "ExecutionRuntime | None" = None,
+        *,
+        dense_output: bool = True,
+    ) -> OutputT:
         from .execution import ExecutionRuntime
 
         executor = runtime or ExecutionRuntime()
-        return cast(OutputT, executor.run(self))
+        return cast(OutputT, executor.run(self, dense_output=dense_output))
 
     def _single_output(self) -> Node:
         if len(self._outputs) != 1:
@@ -372,4 +396,29 @@ class Graph(Generic[OutputT]):
         return GraphSpec(
             outputs=tuple(node.name for node in self._outputs),
             nodes=tuple(node.spec() for node in self._nodes),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledGraph:
+    """Validated graph topology reusable with different panel inputs."""
+
+    specification: GraphSpec
+
+    def bind(self, inputs: Mapping[str, "Panel"]) -> Graph["Panel"]:
+        return Graph._from_validated_spec(self.specification, inputs=inputs)
+
+    def compute(
+        self,
+        inputs: Mapping[str, "Panel"],
+        *,
+        runtime: "ExecutionRuntime | None" = None,
+        dense_output: bool = True,
+    ) -> "Panel | Mapping[str, Panel]":
+        from .execution import ExecutionRuntime
+
+        executor = runtime or ExecutionRuntime()
+        return executor.run(
+            self.bind(inputs),
+            dense_output=dense_output,
         )

@@ -6,17 +6,28 @@ operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 """
 
 from .execution import ExecutionRuntime
-from .graph import Graph, GraphSpec, GraphValidationError
+from .graph import CompiledGraph, Graph, GraphSpec, GraphValidationError
+from .operation_contract import (
+    ExecutionMode,
+    InputDensity,
+    OperationContract,
+    TraceRule,
+)
 from .panel import CategoryPanel, Domain, Panel
 from .transformer import pct_change_frame
 
 __all__ = [
     "CategoryPanel",
+    "CompiledGraph",
     "Domain",
+    "ExecutionMode",
     "ExecutionRuntime",
     "Graph",
     "GraphSpec",
     "GraphValidationError",
+    "InputDensity",
+    "OperationContract",
     "Panel",
+    "TraceRule",
     "pct_change_frame",
 ]

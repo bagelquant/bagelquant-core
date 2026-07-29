@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import statistics
 import time
 from collections.abc import Callable
 
@@ -28,15 +30,20 @@ def make_panel(rows: int, assets: int) -> Panel:
     return Panel.from_domain(frame, domain, name="benchmark")
 
 
-def measure(label: str, func: Callable[[], object], repeats: int) -> None:
+def measure(
+    label: str, func: Callable[[], object], repeats: int
+) -> dict[str, float | str]:
     timings: list[float] = []
     for _ in range(repeats):
         start = time.perf_counter()
         func()
         timings.append(time.perf_counter() - start)
-    best = min(timings)
-    avg = sum(timings) / len(timings)
-    print(f"{label:28s} best={best:8.4f}s avg={avg:8.4f}s")
+    return {
+        "name": label,
+        "best_seconds": min(timings),
+        "median_seconds": statistics.median(timings),
+        "mean_seconds": statistics.fmean(timings),
+    }
 
 
 def main() -> None:
@@ -44,6 +51,11 @@ def main() -> None:
     parser.add_argument("--rows", type=int, default=100_000)
     parser.add_argument("--assets", type=int, default=500)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit a machine-readable baseline",
+    )
     args = parser.parse_args()
 
     base = make_panel(args.rows, args.assets)
@@ -54,17 +66,39 @@ def main() -> None:
     )
     runtime = ExecutionRuntime()
 
-    print(f"rows={base.data.height} assets={args.assets} repeats={args.repeats}")
-    measure("domain materialization", lambda: Panel.from_domain(base.data, base.domain), args.repeats)
-    measure("rolling_mean", lambda: rolling_mean(base, window=20).compute(), args.repeats)
-    measure("rolling_rank", lambda: rolling_rank(base, window=20).compute(), args.repeats)
-    measure("ewm_mean", lambda: ewm_mean(base, alpha=0.2).compute(), args.repeats)
-    measure("zscore(add)", lambda: zscore(add(base, other)).compute(), args.repeats)
-    measure("rolling_corr", lambda: rolling_corr(base, other, window=20).compute(), args.repeats)
-    measure("rolling_ols", lambda: rolling_ols(other, base, window=20).compute(), args.repeats)
+    measurements = [
+        measure("domain materialization", lambda: Panel.from_domain(base.data, base.domain), args.repeats),
+        measure("rolling_mean", lambda: rolling_mean(base, window=20).compute(), args.repeats),
+        measure("rolling_rank", lambda: rolling_rank(base, window=20).compute(), args.repeats),
+        measure("ewm_mean", lambda: ewm_mean(base, alpha=0.2).compute(), args.repeats),
+        measure("zscore(add)", lambda: zscore(add(base, other)).compute(), args.repeats),
+        measure("rolling_corr", lambda: rolling_corr(base, other, window=20).compute(), args.repeats),
+        measure("rolling_ols", lambda: rolling_ols(other, base, window=20).compute(), args.repeats),
+    ]
     cached = zscore(add(base, other), name="cached_zscore")
-    measure("runtime cache miss", lambda: cached.compute(runtime=runtime), 1)
-    measure("runtime cache hit", lambda: cached.compute(runtime=runtime), args.repeats)
+    measurements.extend(
+        [
+            measure("runtime cache miss", lambda: cached.compute(runtime=runtime), 1),
+            measure("runtime cache hit", lambda: cached.compute(runtime=runtime), args.repeats),
+        ]
+    )
+    payload = {
+        "rows": base.data.height,
+        "assets": args.assets,
+        "repeats": args.repeats,
+        "measurements": measurements,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    print(f"rows={base.data.height} assets={args.assets} repeats={args.repeats}")
+    for item in measurements:
+        print(
+            f"{item['name']:28s} "
+            f"best={item['best_seconds']:8.4f}s "
+            f"median={item['median_seconds']:8.4f}s "
+            f"mean={item['mean_seconds']:8.4f}s"
+        )
 
 
 if __name__ == "__main__":

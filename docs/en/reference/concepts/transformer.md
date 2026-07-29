@@ -185,11 +185,23 @@ aligned inputs and are represented internally as multi-input graph nodes.
 ```python
 import polars as pl
 
+from bagelquant_core import (
+    ExecutionMode,
+    InputDensity,
+    OperationContract,
+    TraceRule,
+)
 from bagelquant_core.transformer import transformer
 
 
-@transformer
-def demean(frame: pl.DataFrame) -> pl.DataFrame:
+@transformer(
+    contract=OperationContract(
+        execution=ExecutionMode.LAZY,
+        density=InputDensity.SPARSE_OK,
+        trace_rule=TraceRule.PASSTHROUGH,
+    )
+)
+def demean(frame: pl.LazyFrame) -> pl.LazyFrame:
     means = frame.group_by("time").agg(pl.col("value").mean().alias("mean"))
     return (
         frame.join(means, on="time")
@@ -201,7 +213,10 @@ def demean(frame: pl.DataFrame) -> pl.DataFrame:
 centered = demean(price, name="centered")
 ```
 
-The decorated function receives a Polars `DataFrame` during execution but
-accepts a `Panel` or `Graph` when researchers construct a workflow.
+The decorated function accepts a `Panel` or `Graph` while constructing a
+workflow. A declared lazy operation receives a `LazyFrame`. A bare custom
+decorator is intentionally conservative: it receives a dense `DataFrame` at
+an eager barrier. If traced inputs are possible, declare a trace rule;
+otherwise execution raises an explicit error.
 
 Configuration arguments are stored in graph specifications and cache keys.

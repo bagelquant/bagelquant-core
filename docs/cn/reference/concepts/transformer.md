@@ -38,3 +38,7 @@ def demean(frame):
         (pl.col("value") - pl.col("mean")).alias("value")
     ).select("time", "asset_id", "value")
 ```
+
+裸 `@transformer` 默认采用安全的稠密 eager barrier。需要 lazy 执行时，
+应显式传入 `OperationContract`，声明 `execution`、`density`、`trace_rule`
+和 `deterministic`。带 trace 输入却未声明 trace rule 会明确报错。

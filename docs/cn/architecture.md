@@ -12,7 +12,7 @@ Transformer 与 Composer
 Graph 逻辑链
     |
     v
-内部执行运行时
+稀疏 PlanValue / Polars LazyFrame
     |
     v
 缓存后的 Panel 输出
@@ -28,7 +28,7 @@ Graph 逻辑链
 ## 结构
 
 - `Domain` 负责交易日和资产成员关系。
-- `Panel` 和 `CategoryPanel` 负责不可变的 `(time, asset_id)` long-form 数据。
+- `Panel` 和 `CategoryPanel` 保存稀疏、不可变的 `(time, asset_id)` LazyFrame 计划。
 - `Graph` 负责惰性逻辑链和用户侧执行入口。
 - Transformer 负责一元变换。
 - Composer 负责多输入组合。
@@ -36,7 +36,8 @@ Graph 逻辑链
 
 ## 执行路径
 
-调用操作函数时不会立即计算，而是创建内部节点。调用 `Graph.compute()` 后，运行时递归计算依赖，检查多输入 domain 是否兼容，执行 Polars frame 级别的函数，并把结果包装回 `Panel`。
+调用操作函数时不会立即计算，而是创建内部节点。调用 `Graph.compute()` 后，运行时把 lazy 节点融合为 Polars 计划，只在算子契约要求时稠密对齐或进入 eager barrier，最终输出才物化。共享子图只执行一次，多输出共用一次最终收集。
 
-当前调度是顺序执行。持久化缓存、增量失效和并行调度属于后续扩展方向。
-
+`Graph.compile(spec)` 可只校验一次拓扑，再通过
+`CompiledGraph.compute(inputs, runtime=...)` 绑定多批输入。执行缓存使用输入
+identity、Domain identity 和节点配置，不在运行期间计算全表 payload hash。

@@ -1,6 +1,6 @@
 # Execution
 
-Execution 负责把惰性图计算成物化的 `Panel` 输出。
+Execution 负责把惰性图编译成稀疏 Polars 计划，并在必要边界物化为 `Panel` 输出。
 
 ## 执行流程
 
@@ -8,13 +8,15 @@ Execution 负责把惰性图计算成物化的 `Panel` 输出。
 
 - 校验图结构和依赖
 - 按拓扑顺序计算父节点
-- 对每个操作调用底层 Polars 函数
-- 缓存中间输出
-- 重新应用 `Domain` 的动态资产池屏蔽
+- 按 `OperationContract` 决定 lazy、稠密或 eager barrier
+- 在计划中传播 lineage trace columns
+- 缓存中间计划，并让共享子图只执行一次
+- 多输出共同收集，最终按 `Domain` 对齐
 
 ## 输出访问
 
-图执行前不能读取 `Graph.output`。调用 `compute()` 后，输出节点以及参与计算的中间节点都会持有对应的 panel 输出。
+图执行前不能读取 `Graph.output`。重复批次应先调用 `Graph.compile(spec)`，
+然后复用 `CompiledGraph` 和 `ExecutionRuntime`。Core 不提供磁盘缓存。
 
 ## 边界
 

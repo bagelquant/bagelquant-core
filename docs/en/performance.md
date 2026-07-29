@@ -3,10 +3,13 @@
 Benchmarks are intentionally lightweight and reproducible:
 
 ```bash
-uv run python scripts/benchmark_efficiency.py --rows 100000 --assets 500 --repeats 1
+uv run python scripts/benchmark_efficiency.py --rows 100000 --assets 500 --repeats 5 --json
 ```
 
-Current local baseline after the rolling-rank optimization:
+The JSON output records same-machine medians for regression comparison.
+Time-based thresholds should remain loose in CI; structural tests assert that
+lazy graphs have one final materialization and eager graphs add exactly their
+declared barriers.
 
 ```text
 rolling_rank best=0.3035s

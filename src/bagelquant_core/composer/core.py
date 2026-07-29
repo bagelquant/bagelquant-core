@@ -10,12 +10,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import update_wrapper
 from itertools import count
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, overload
 
 import polars as pl
 
 from .._operation import as_node, operation_name
 from ..node import Node
+from ..operation_contract import OperationContract, default_operation_contract
 from ..registry import Registry
 
 if TYPE_CHECKING:
@@ -33,10 +34,14 @@ class ComposerFunction:
         operation: Callable[..., pl.DataFrame],
         *,
         registry_name: str | None = None,
+        contract: OperationContract | None = None,
     ) -> None:
         self.operation = operation
         self.registry_name = registry_name or operation_name(operation)
         self.display_name = operation.__name__
+        self.contract = contract or default_operation_contract(
+            operation, kind="composer"
+        )
         self._counter = count(1)
         update_wrapper(self, operation)
 
@@ -89,6 +94,14 @@ class _ComposerNode(Node):
     def compute(self, *frames: pl.DataFrame) -> pl.DataFrame:
         return self._operation.operation(*frames, **self._config)
 
+    @property
+    def operation(self) -> ComposerFunction:
+        return self._operation
+
+    @property
+    def contract(self) -> OperationContract:
+        return self._operation.contract
+
     def config(self) -> Mapping[str, Any]:
         return {
             "composer": operation_name(self._operation.operation),
@@ -96,9 +109,28 @@ class _ComposerNode(Node):
         }
 
 
-def composer(operation: Callable[..., pl.DataFrame]) -> ComposerFunction:
-    """Decorate a DataFrame function as a graph-building composer."""
+@overload
+def composer(operation: Callable[..., pl.DataFrame]) -> ComposerFunction: ...
 
-    wrapped = ComposerFunction(operation)
-    COMPOSER_REGISTRY.add(wrapped.registry_name, wrapped)
-    return wrapped
+
+@overload
+def composer(
+    operation: None = None,
+    *,
+    contract: OperationContract,
+) -> Callable[[Callable[..., pl.DataFrame]], ComposerFunction]: ...
+
+
+def composer(
+    operation: Callable[..., pl.DataFrame] | None = None,
+    *,
+    contract: OperationContract | None = None,
+) -> ComposerFunction | Callable[[Callable[..., pl.DataFrame]], ComposerFunction]:
+    """Decorate a frame operation and attach its execution contract."""
+
+    def decorate(func: Callable[..., pl.DataFrame]) -> ComposerFunction:
+        wrapped = ComposerFunction(func, contract=contract)
+        COMPOSER_REGISTRY.add(wrapped.registry_name, wrapped)
+        return wrapped
+
+    return decorate(operation) if operation is not None else decorate

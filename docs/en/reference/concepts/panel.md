@@ -4,7 +4,7 @@
 
 `Panel` is the explicit data object in BagelQuant. Every input panel is
 created through a `Domain`, which defines trading times and asset membership.
-A panel stores long-form data:
+A panel stores a sparse long-form `LazyFrame` plan:
 
 ```text
 time, asset_id, value
@@ -26,11 +26,25 @@ price = Panel.from_domain(
             "asset_id": ["AAPL", "MSFT", "AAPL", "MSFT"],
             "value": [185.0, 370.0, 187.0, 372.0],
         }
-    ),
+    ).lazy(),
     domain,
     name="price",
 )
 ```
+
+`Panel.from_domain` accepts either `DataFrame` or `LazyFrame`, plus optional
+`identity` and `trace_columns`. Construction does not cross join the input to
+the complete domain.
+
+## Collection
+
+```python
+sparse = price.collect(dense=False)
+dense = price.collect()  # domain-aligned compatibility result
+dense_with_traces = price.collect(include_traces=True)
+```
+
+`Panel.data` remains a dense defensive copy for 0.1 compatibility.
 
 ## Role
 
@@ -51,7 +65,7 @@ Panels:
 - Have unique `(time, asset_id)` keys
 - Use `time`, `asset_id`, and `value` columns
 - Contain only numeric values
-- Copy input data at construction
+- Preserve lazy input plans without eager collection
 - Return a defensive copy when data is accessed through `Panel.data`
 - Are immutable from the public API
 - Match their Domain's trading times and asset ids

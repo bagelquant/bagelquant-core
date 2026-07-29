@@ -14,7 +14,7 @@ Transformer and Composer functions
 Graph logic chains
     |
     v
-Internal execution runtime
+Sparse PlanValue / Polars LazyFrame
     |
     v
 Cached Panel outputs
@@ -22,9 +22,10 @@ Cached Panel outputs
 
 ## Panel
 
-A `Panel` is an immutable numeric frame indexed by time and asset. Every input
-is normalized through a `Domain`, which owns its trading sessions and asset
-membership. Panels return a defensive copy through `Panel.data`.
+A `Panel` is an immutable numeric plan indexed by time and asset. Every input
+is normalized through a `Domain`, which owns its trading sessions and compact
+asset membership. Inputs remain sparse; `Panel.data` is the compatibility
+dense, defensive-copy boundary.
 
 ```python
 price = Panel.from_domain(price_df, domain, name="price")
@@ -93,18 +94,18 @@ Users do not construct internal nodes directly.
 
 ## Execution
 
-Calling `Graph.compute()` invokes an internal runtime that recursively
-evaluates dependencies, checks multi-input Domain compatibility, computes
-deterministic cache keys, caches output panels during execution, and updates
-node outputs. Dynamic membership masks are reapplied to derived outputs.
-Within one runtime invocation, shared DAG nodes are evaluated once. When
-composer inputs are already aligned, the runtime reuses the existing frames
-and their stored hashes.
+Calling `Graph.compute()` compiles the DAG into lazy `PlanValue` objects.
+Lazy-compatible nodes fuse into one Polars plan. Dense alignment is inserted
+only for operations whose contracts require it, and NumPy/regression
+operations create explicit eager barriers. Shared nodes execute once and
+multi-output graphs use one final collection boundary.
 
 ```python
 signal.compute()
 panel = signal.output
 ```
 
-Scheduling is sequential in the current implementation. Parallel scheduling,
-persisted caches, and incremental invalidation remain future work.
+`Graph.compile(spec)` validates a declarative graph once. Its
+`CompiledGraph.compute(inputs, runtime=...)` method can be rebound to successive
+input batches. Cache keys use input and Domain identities plus node
+configuration; Core does not hash full payloads during graph execution.

@@ -1,6 +1,14 @@
 # Panel
 
-`Panel` 是 BagelQuant 中显式的数据对象。每个输入 panel 都通过 `Domain` 创建，并继承该研究域的交易日历和资产空间。
+`Panel` 是 BagelQuant 中显式的数据对象。每个输入 panel 都通过 `Domain` 创建，并继承该研究域的交易日历和资产空间。0.2 起内部保存稀疏 `LazyFrame`，构造时不再创建完整 `T×A` 网格。
+
+```python
+panel = Panel.from_domain(lazy_frame, domain, trace_columns=("available_date",))
+sparse = panel.collect(dense=False)
+dense = panel.collect()
+```
+
+`.data` 仍是兼容接口，返回稠密的防御性副本。只有调用方能够保证输入内容不可变且等价时才应传入稳定 `identity`。
 
 ## 角色
 

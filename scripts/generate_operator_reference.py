@@ -12,6 +12,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from bagelquant_core import composer as composer_api  # noqa: E402
 from bagelquant_core import transformer as transformer_api  # noqa: E402
+from bagelquant_core._documentation import (  # noqa: E402
+    OPERATION_DESCRIPTIONS,
+    operation_description,
+)
 
 REFERENCE = ROOT / "docs" / "en" / "reference"
 
@@ -21,58 +25,8 @@ EXCLUDED = {
     "TRANSFORMER_REGISTRY",
     "TransformerFunction",
     "composer",
+    "pct_change_frame",
     "transformer",
-}
-
-DESCRIPTIONS = {
-    "abs": "Return the absolute value of each element.",
-    "and_": "Return one where both corresponding elements are truthy and zero elsewhere.",
-    "arccos": "Return the inverse cosine of each element, masking values outside `[-1, 1]`.",
-    "arcsin": "Return the inverse sine of each element, masking values outside `[-1, 1]`.",
-    "arctan": "Return the inverse tangent of each element.",
-    "arctanh": "Return the inverse hyperbolic tangent of each element, masking values outside `(-1, 1)`.",
-    "coalesce": "Return the first non-missing value from the supplied inputs for each cell.",
-    "cos": "Return the cosine of each element.",
-    "divide": "Alias for [`div`](./div.md). Divide the first input by the second element-wise.",
-    "equal": "Return one where corresponding elements are equal and zero elsewhere.",
-    "greater": "Return one where the first input is greater than the second and zero elsewhere.",
-    "greater_equal": "Return one where the first input is greater than or equal to the second and zero elsewhere.",
-    "group_demean": "Subtract the row-wise group mean from each element.",
-    "group_max": "Replace each element with its row-wise group maximum.",
-    "group_mean": "Replace each element with its row-wise group mean.",
-    "group_median": "Replace each element with its row-wise group median.",
-    "group_min": "Replace each element with its row-wise group minimum.",
-    "group_percentile": "Return row-wise percentile ranks within each group.",
-    "group_rank": "Return row-wise ranks within each group.",
-    "group_rankpct": "Return row-wise dense percentile ranks within each group.",
-    "group_std": "Replace each element with its row-wise group standard deviation.",
-    "group_zscore": "Return row-wise z-scores within each group.",
-    "date_age_constraint": "Mask values until a trailing window contains the required number of valid observations.",
-    "inv_log_sqrt_rank": "Return `-log(rank) / sqrt(rank)` using cross-sectional percentile ranks.",
-    "less": "Return one where the first input is less than the second and zero elsewhere.",
-    "less_equal": "Return one where the first input is less than or equal to the second and zero elsewhere.",
-    "max": "Alias for [`maximum`](./maximum.md). Return element-wise maximum values.",
-    "min": "Alias for [`minimum`](./minimum.md). Return element-wise minimum values.",
-    "multiply": "Alias for [`mul`](./mul.md). Multiply two inputs element-wise.",
-    "net_scale": "Scale positive and negative cross-sectional values independently by their absolute-side sums.",
-    "nonnans": "Replace null and NaN values with zero.",
-    "normalize": "Scale each cross-section linearly to `[-1, 1]`.",
-    "notnan": "Return one for finite or infinite present values and zero for null or NaN values.",
-    "not_": "Return one where elements are falsy and zero where they are truthy.",
-    "or_": "Return one where either corresponding element is truthy and zero elsewhere.",
-    "power": "Raise each element of the first input to the corresponding element of the second input.",
-    "power_df": "Raise each element of the first input to the corresponding element of the second input.",
-    "rate_of_change": "Return the value difference over `interval` rows divided by that interval.",
-    "rolling_elastic_net": "Predict the current target from factors fitted on the prior window with elastic-net regularization.",
-    "rolling_lasso": "Predict the current target from factors fitted on the prior window with L1 regularization.",
-    "rolling_ols": "Predict the current target from one or more factors fitted on the prior window.",
-    "rolling_ridge": "Predict the current target from factors fitted on the prior window with L2 regularization.",
-    "rolling_ew_std": "Alias for [`ewm_std`](./ewm_std.md). Return exponentially weighted standard deviations.",
-    "rolling_ewm": "Alias for [`ewm_mean`](./ewm_mean.md). Return exponentially weighted means.",
-    "sin": "Return the sine of each element.",
-    "subtract": "Alias for [`sub`](./sub.md). Subtract the second input from the first element-wise.",
-    "xand": "Return one where corresponding truth values are equivalent and zero elsewhere.",
-    "xor": "Return one where exactly one corresponding element is truthy and zero elsewhere.",
 }
 
 PARAMETER_DESCRIPTIONS = {
@@ -160,7 +114,9 @@ ROLLING_TRANSFORMERS = {
 }
 
 EWM_TRANSFORMERS = {"ewm_mean", "ewm_std", "ewm_var"}
-GROUP_COMPOSERS = {name for name in DESCRIPTIONS if name.startswith("group_")}
+GROUP_COMPOSERS = {
+    name for name in OPERATION_DESCRIPTIONS if name.startswith("group_")
+}
 ROLLING_RELATIONSHIPS = {"rolling_corr", "rolling_cov"}
 ROLLING_REGRESSIONS = {
     "rolling_elastic_net",
@@ -187,12 +143,24 @@ def _operation(item: Any) -> Any:
 
 
 def _description(name: str, item: Any) -> str:
-    if name in DESCRIPTIONS:
-        return DESCRIPTIONS[name]
+    if name in OPERATION_DESCRIPTIONS:
+        description = OPERATION_DESCRIPTIONS[name]
+        links = {
+            "`div`": "[`div`](./div.md)",
+            "`maximum`": "[`maximum`](./maximum.md)",
+            "`minimum`": "[`minimum`](./minimum.md)",
+            "`mul`": "[`mul`](./mul.md)",
+            "`sub`": "[`sub`](./sub.md)",
+            "`ewm_std`": "[`ewm_std`](./ewm_std.md)",
+            "`ewm_mean`": "[`ewm_mean`](./ewm_mean.md)",
+        }
+        for label, link in links.items():
+            description = description.replace(label, link)
+        return description
     doc = inspect.getdoc(_operation(item))
     if doc:
         return doc.splitlines()[0]
-    return f"Apply `{name}` to long-form panel inputs."
+    return operation_description(name)
 
 
 def _format_annotation(annotation: Any) -> str:

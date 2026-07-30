@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import math
 
 import pytest
 
 from bagelquant_core.composer import (
+    COMPOSER_REGISTRY,
     group_percentile,
     group_rankpct,
     mask,
@@ -15,6 +17,7 @@ from bagelquant_core.composer import (
     xand,
 )
 from bagelquant_core.transformer import (
+    TRANSFORMER_REGISTRY,
     anscombe,
     boxcox,
     date_age_constraint,
@@ -43,6 +46,14 @@ from bagelquant_core.transformer import (
 )
 
 from helpers import panel, values
+
+
+def test_registered_operations_expose_reference_docstrings() -> None:
+    for registry in (TRANSFORMER_REGISTRY, COMPOSER_REGISTRY):
+        for name in registry.names():
+            documentation = inspect.getdoc(registry.get(name).operation)
+            assert documentation, name
+            assert documentation.endswith("."), name
 
 
 def _single_time(values_: list[float | None], *, name: str = "x"):

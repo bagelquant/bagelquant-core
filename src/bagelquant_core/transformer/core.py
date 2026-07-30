@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Mapping, overload
 
 import polars as pl
 
+from .._documentation import ensure_operation_docstring
 from .._operation import as_node, operation_name
 from ..node import Node
 from ..operation_contract import OperationContract, default_operation_contract
@@ -36,6 +37,7 @@ class TransformerFunction:
         registry_name: str | None = None,
         contract: OperationContract | None = None,
     ) -> None:
+        ensure_operation_docstring(operation)
         self.operation = operation
         self.registry_name = registry_name or operation_name(operation)
         self.display_name = operation.__name__

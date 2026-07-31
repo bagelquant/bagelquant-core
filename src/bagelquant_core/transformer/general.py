@@ -7,7 +7,7 @@ from numbers import Real
 import polars as pl
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like, unary
-from .core import transformer
+from .core import _ordered_expression_plan, transformer
 
 
 @transformer
@@ -128,3 +128,90 @@ def _validate_periods(periods: int, *, operation: str) -> None:
         raise TypeError(f"{operation} periods must be an integer")
     if periods <= 0:
         raise ValueError(f"{operation} periods must be positive")
+
+
+def _plan_general_time_series(
+    name: str,
+    frame: pl.LazyFrame,
+    config: dict[str, object],
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    if name in {"delta", "rate_of_change"}:
+        interval = config.get("interval", 1)
+        _validate_periods(interval, operation=name)
+        if name == "delta":
+            expression = (
+                pl.col(VALUE)
+                - pl.col(VALUE).shift(interval).over(ASSET_ID)
+            )
+        else:
+            expression = (
+                pl.col(VALUE).diff(interval).over(ASSET_ID) / interval
+            )
+    elif name == "remove_repeated":
+        previous = pl.col(VALUE).shift(1).over(ASSET_ID)
+        expression = (
+            pl.when(pl.col(VALUE) == previous)
+            .then(None)
+            .otherwise(pl.col(VALUE))
+        )
+    elif name == "date_age_constraint":
+        window = config.get("window")
+        if (
+            not isinstance(window, int)
+            or isinstance(window, bool)
+            or window <= 0
+        ):
+            raise ValueError(
+                "date_age_constraint window must be a positive integer"
+            )
+        raw_required = config.get("min_valid")
+        required = window if raw_required is None else raw_required
+        if (
+            not isinstance(required, int)
+            or isinstance(required, bool)
+            or required <= 0
+            or required > window
+        ):
+            raise ValueError(
+                "date_age_constraint min_valid must be in [1, window]"
+            )
+        valid_count = (
+            (pl.col(VALUE).is_not_null() & ~pl.col(VALUE).is_nan())
+            .cast(pl.Int64)
+            .rolling_sum(window, min_samples=1)
+            .over(ASSET_ID)
+        )
+        expression = (
+            pl.when(valid_count >= required)
+            .then(pl.col(VALUE))
+            .otherwise(None)
+        )
+    else:
+        raise ValueError(f"unsupported time-series plan operation: {name}")
+    return _ordered_expression_plan(
+        frame,
+        expression,
+        order,
+        asset_time_ordered,
+    )
+
+
+for _plan_name, _plan_transformer in {
+    "delta": delta,
+    "rate_of_change": rate_of_change,
+    "remove_repeated": remove_repeated,
+    "date_age_constraint": date_age_constraint,
+}.items():
+    _plan_transformer._set_plan_operation(  # type: ignore[attr-defined]
+        lambda frame, config, order, asset_time_ordered, name=_plan_name: (
+            _plan_general_time_series(
+                name,
+                frame,
+                dict(config),
+                order,
+                asset_time_ordered,
+            )
+        )
+    )

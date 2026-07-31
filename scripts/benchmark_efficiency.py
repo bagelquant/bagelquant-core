@@ -27,8 +27,10 @@ from bagelquant_core.composer import (
     sum_frames,
 )
 from bagelquant_core.transformer import (
+    abs_value,
     constant,
     ewm_mean,
+    negate,
     rolling_mean,
     rolling_percentile,
     rolling_rank,
@@ -91,6 +93,16 @@ AVAILABLE_CASES = (
     "traced_multi_output_5",
     "eager_rank_pair",
     "rolling_chain_10",
+    "pointwise_chain_20",
+    "rolling_chain_20",
+    "ewm_chain_20",
+    "mixed_chain_20",
+    "semantic_cse_5",
+    "dense_exact_output",
+    "sparse_alignment",
+    "rolling_ols_sparse_3f",
+    "rolling_ridge_sparse",
+    "orthogonalize_sparse_3f",
 )
 WINDOW_CASES = {
     "rolling_mean",
@@ -107,6 +119,12 @@ WINDOW_CASES = {
     "traced_multi_output_5",
     "eager_rank_pair",
     "rolling_chain_10",
+    "rolling_chain_20",
+    "mixed_chain_20",
+    "semantic_cse_5",
+    "dense_exact_output",
+    "rolling_ols_sparse_3f",
+    "rolling_ridge_sparse",
 }
 
 
@@ -180,6 +198,22 @@ def _case_runner(
         ),
         base.domain,
         name="cube",
+    )
+    sparse_square = Panel.from_domain(
+        square.lazy(dense=False).filter(
+            pl.col("value").is_not_null()
+            & ((pl.col("value").abs() * 100).cast(pl.Int64) % 3 != 0)
+        ),
+        base.domain,
+        name="sparse_square",
+    )
+    sparse_cube = Panel.from_domain(
+        cube.lazy(dense=False).filter(
+            pl.col("value").is_not_null()
+            & ((pl.col("value").abs() * 100).cast(pl.Int64) % 5 != 0)
+        ),
+        base.domain,
+        name="sparse_cube",
     )
     traced = Panel.from_domain(
         base.lazy(dense=False).with_columns(
@@ -255,8 +289,23 @@ def _case_runner(
                 cube,
                 window=window,
             )
+        elif case == "rolling_ols_sparse_3f":
+            graph = rolling_ols(
+                other,
+                base,
+                sparse_square,
+                sparse_cube,
+                window=window,
+            )
         elif case == "rolling_ridge":
             graph = rolling_ridge(other, base, square, window=window)
+        elif case == "rolling_ridge_sparse":
+            graph = rolling_ridge(
+                other,
+                base,
+                sparse_square,
+                window=window,
+            )
         elif case == "rolling_lasso":
             graph = rolling_lasso(
                 other,
@@ -275,6 +324,13 @@ def _case_runner(
             )
         elif case == "orthogonalize_3f":
             graph = orthogonalize(other, base, square, cube)
+        elif case == "orthogonalize_sparse_3f":
+            graph = orthogonalize(
+                other,
+                base,
+                sparse_square,
+                sparse_cube,
+            )
         elif case == "traced_rolling_mean":
             graph = rolling_mean(
                 traced,
@@ -322,6 +378,61 @@ def _case_runner(
                     window=window,
                     min_periods=min_periods,
                 )
+        elif case == "pointwise_chain_20":
+            graph = base
+            for index in range(20):
+                graph = (
+                    negate(graph)
+                    if index % 2 == 0
+                    else abs_value(graph)
+                )
+        elif case == "rolling_chain_20":
+            graph = base
+            for _ in range(20):
+                graph = rolling_mean(
+                    graph,
+                    window=window,
+                    min_periods=min_periods,
+                )
+        elif case == "ewm_chain_20":
+            graph = base
+            for _ in range(20):
+                graph = ewm_mean(graph, alpha=0.2)
+        elif case == "mixed_chain_20":
+            graph = base
+            for index in range(20):
+                if index % 4 == 0:
+                    graph = rolling_mean(
+                        graph,
+                        window=window,
+                        min_periods=min_periods,
+                    )
+                elif index % 4 == 1:
+                    graph = negate(graph)
+                elif index % 4 == 2:
+                    graph = ewm_mean(graph, alpha=0.2)
+                else:
+                    graph = abs_value(graph)
+        elif case == "semantic_cse_5":
+            graph = Graph(
+                outputs=[
+                    rolling_mean(
+                        base,
+                        window=window,
+                        min_periods=min_periods,
+                        name=f"semantic_cse_{index}",
+                    )
+                    for index in range(5)
+                ]
+            )
+        elif case == "dense_exact_output":
+            graph = rolling_mean(
+                base,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "sparse_alignment":
+            graph = add(sparse_square, sparse_cube)
         elif case == "sum_10":
             graph = sum_frames(*([base, other] * 5))
         elif case == "runtime_cache_miss":
@@ -407,6 +518,11 @@ def _run_worker(args: argparse.Namespace) -> None:
         "materializations": 0 if runtime is None else runtime.materializations,
         "eager_barriers": 0 if runtime is None else runtime.eager_barriers,
         "sort_nodes": _plan_sort_count(output),
+        "runtime_diagnostics": (
+            {}
+            if runtime is None
+            else dict(runtime._diagnostics)
+        ),
         "output": _output_summary(output),
     }
     print(json.dumps(payload, sort_keys=True))
@@ -543,12 +659,16 @@ def main() -> None:
     )
     for item in measurements:
         window = "" if item["window"] is None else f" window={item['window']:3d}"
+        diagnostics = item["runtime_diagnostics"]
         print(
             f"{item['name']:24s} {item['universe']:7s}{window:11s} "
             f"median={item['median_seconds']:8.4f}s "
             f"rss={item['peak_rss_bytes'] / (1024**2):8.1f}MiB "
             f"mat={item['materializations']} eager={item['eager_barriers']} "
-            f"sort={item['sort_nodes']}"
+            f"sort={item['sort_nodes']} "
+            f"elided_sort={diagnostics.get('sorts_elided', 0)} "
+            f"elided_align={diagnostics.get('alignments_elided', 0)} "
+            f"cse={diagnostics.get('semantic_cse_hits', 0)}"
         )
 
 

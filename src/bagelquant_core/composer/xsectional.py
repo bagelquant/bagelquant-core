@@ -14,6 +14,8 @@ from ..frame import (
 )
 from .core import composer
 
+_ORTHOGONALIZE_CONDITION_LIMIT = 1e-3
+
 
 def _grouped(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
     return frame.rename({VALUE: "x"}).join(
@@ -44,6 +46,47 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
             ],
         ]
     ).sort([TIME, ASSET_ID])
+    return _orthogonalize_data(data, factor_columns)
+
+
+def _orthogonalize_aligned(
+    frames: tuple[pl.DataFrame, ...],
+    *,
+    group_offsets: np.ndarray | None = None,
+) -> pl.DataFrame:
+    """Orthogonalize executor-proven positionally aligned frame values."""
+
+    if len(frames) < 2:
+        raise ValueError("orthogonalize requires at least one factor")
+    if len(frames) == 2:
+        return _orthogonalize_one_factor(frames[0], frames[1])
+    factor_columns = [
+        f"f{index}" for index in range(len(frames) - 1)
+    ]
+    data = frames[0].select(TIME, ASSET_ID).with_columns(
+        frames[0].get_column(VALUE).alias("target"),
+        *[
+            frame.get_column(VALUE).alias(column)
+            for frame, column in zip(
+                frames[1:],
+                factor_columns,
+                strict=True,
+            )
+        ],
+    )
+    return _orthogonalize_data(
+        data,
+        factor_columns,
+        group_offsets=group_offsets,
+    )
+
+
+def _orthogonalize_data(
+    data: pl.DataFrame,
+    factor_columns: list[str],
+    *,
+    group_offsets: np.ndarray | None = None,
+) -> pl.DataFrame:
     target = data.get_column("target").to_numpy().astype(float, copy=False)
     features = np.column_stack(
         [
@@ -52,15 +95,23 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
         ]
     )
     residuals = np.full(len(data), np.nan, dtype=float)
-    lengths = (
-        data.group_by(TIME, maintain_order=True)
-        .len()
-        .get_column("len")
-        .to_numpy()
-    )
-    offset = 0
-    for length in lengths:
-        end = offset + int(length)
+    offsets = group_offsets
+    if offsets is None:
+        lengths = (
+            data.group_by(TIME, maintain_order=True)
+            .len()
+            .get_column("len")
+            .to_numpy()
+        )
+        offsets = np.empty(len(lengths) + 1, dtype=np.int64)
+        offsets[0] = 0
+        np.cumsum(lengths, dtype=np.int64, out=offsets[1:])
+    for offset, end in zip(
+        offsets[:-1],
+        offsets[1:],
+        strict=True,
+    ):
+        length = end - offset
         group_y = target[offset:end]
         group_x = features[offset:end]
         valid = np.isfinite(group_y) & np.isfinite(group_x).all(axis=1)
@@ -71,17 +122,38 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
                     group_x[valid],
                 ]
             )
-            coefficients = np.linalg.lstsq(
-                design,
-                group_y[valid],
-                rcond=None,
-            )[0]
+            gram = design.T @ design
+            eigenvalues = np.maximum(
+                np.linalg.eigvalsh(gram),
+                0.0,
+            )
+            singular_values = np.sqrt(eigenvalues)
+            cutoff = (
+                np.finfo(np.float64).eps
+                * max(len(design), design.shape[1])
+                * singular_values[-1]
+            )
+            if (
+                singular_values[0] > cutoff
+                and singular_values[0]
+                > _ORTHOGONALIZE_CONDITION_LIMIT
+                * singular_values[-1]
+            ):
+                coefficients = np.linalg.solve(
+                    gram,
+                    design.T @ group_y[valid],
+                )
+            else:
+                coefficients = np.linalg.lstsq(
+                    design,
+                    group_y[valid],
+                    rcond=None,
+                )[0]
             group_residuals = np.full(int(length), np.nan, dtype=float)
             group_residuals[valid] = (
                 group_y[valid] - design @ coefficients
             )
             residuals[offset:end] = group_residuals
-        offset = end
     return data.select(TIME, ASSET_ID).with_columns(
         pl.Series(VALUE, residuals, nan_to_null=True)
     )

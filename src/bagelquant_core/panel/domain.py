@@ -104,6 +104,29 @@ class Domain:
     def signature(self) -> str:
         return self._signature
 
+    @property
+    def size(self) -> int:
+        if self._is_dynamic:
+            assert self._active_membership is not None
+            return self._active_membership.height
+        return len(self._times) * len(self._asset_ids)
+
+    def _contains_exact_static_keys(self, data: pl.DataFrame) -> bool:
+        if self._is_dynamic or data.height != self.size:
+            return False
+        keys = data.select(TIME, ASSET_ID).with_columns(
+            pl.col(TIME).cast(pl.Date, strict=False),
+            pl.col(ASSET_ID).cast(pl.String),
+        )
+        return bool(
+            keys.select(
+                (
+                    pl.col(TIME).is_in(self._times.implode())
+                    & pl.col(ASSET_ID).is_in(self._asset_ids.implode())
+                ).all()
+            ).item()
+        )
+
     def grid_lazy(self) -> pl.LazyFrame:
         """Return active domain keys without materializing the grid."""
 
@@ -126,8 +149,12 @@ class Domain:
         columns = [TIME, ASSET_ID, VALUE, *trace_columns]
         return (
             self.grid_lazy()
-            .join(data.select(columns), on=[TIME, ASSET_ID], how="left")
-            .sort([TIME, ASSET_ID])
+            .join(
+                data.select(columns),
+                on=[TIME, ASSET_ID],
+                how="left",
+                maintain_order="left",
+            )
         )
 
     def apply_membership_lazy(self, data: pl.LazyFrame) -> pl.LazyFrame:
@@ -136,7 +163,12 @@ class Domain:
                 pl.col(TIME).is_in(self._times.implode())
                 & pl.col(ASSET_ID).is_in(self._asset_ids.implode())
             )
-        return self.grid_lazy().join(data, on=[TIME, ASSET_ID], how="inner")
+        return self.grid_lazy().join(
+            data,
+            on=[TIME, ASSET_ID],
+            how="inner",
+            maintain_order="left",
+        )
 
     def normalize_frame(self, data: pl.DataFrame) -> pl.DataFrame:
         from ..frame import normalize_panel_frame

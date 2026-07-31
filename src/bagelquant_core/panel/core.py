@@ -32,6 +32,9 @@ class Panel(Node):
         _trace_identity: str | None = None,
         _trace_columns: Sequence[str] = (),
         _cached_dense: pl.DataFrame | None = None,
+        _validated_keys: bool = False,
+        _exact_domain: bool = False,
+        _key_identity: str | None = None,
     ) -> None:
         if _token is not _INTERNAL_MATERIALIZATION_TOKEN or _domain is None:
             raise TypeError(
@@ -49,6 +52,9 @@ class Panel(Node):
             else None
         )
         self._cached_dense = _cached_dense
+        self._validated_keys = _validated_keys
+        self._exact_domain = _exact_domain
+        self._key_identity = _key_identity or self._identity
         # Compatibility for code that previously used the payload hash.
         self._data_hash = self._identity
 
@@ -67,7 +73,12 @@ class Panel(Node):
         if not isinstance(domain, Domain):
             raise TypeError("domain must be a Domain")
         traces = tuple(dict.fromkeys(str(value) for value in trace_columns))
+        validated_keys = isinstance(data, pl.DataFrame)
         frame = cls._normalize_source(data, traces)
+        exact_domain = (
+            isinstance(data, pl.DataFrame)
+            and domain._contains_exact_static_keys(data)
+        )
         frame = domain.apply_membership_lazy(frame)
         return cls(
             frame,
@@ -78,6 +89,13 @@ class Panel(Node):
             _identity=identity,
             _trace_identity=trace_identity,
             _trace_columns=traces,
+            _validated_keys=validated_keys,
+            _exact_domain=exact_domain,
+            _key_identity=(
+                f"domain:{domain.signature}"
+                if exact_domain
+                else None
+            ),
         )
 
     @classmethod
@@ -92,6 +110,9 @@ class Panel(Node):
         trace_identity: str | None = None,
         trace_columns: Sequence[str],
         dense_output: bool,
+        validated_keys: bool = False,
+        exact_domain: bool = False,
+        key_identity: str | None = None,
     ) -> "Panel":
         panel = cls(
             frame,
@@ -102,6 +123,9 @@ class Panel(Node):
             _identity=identity,
             _trace_identity=trace_identity,
             _trace_columns=trace_columns,
+            _validated_keys=validated_keys,
+            _exact_domain=exact_domain,
+            _key_identity=key_identity,
         )
         if dense_output:
             panel._cached_dense = panel._collect_and_validate(dense=True)
@@ -183,7 +207,7 @@ class Panel(Node):
                 self._frame, trace_columns=self._trace_columns
             )
             if dense
-            else self._domain.apply_membership_lazy(self._frame)
+            else self._frame
         )
         columns = [TIME, ASSET_ID, VALUE]
         if include_traces:
@@ -223,7 +247,12 @@ class Panel(Node):
                 pl.col(TIME).cast(pl.Date, strict=False),
                 pl.col(ASSET_ID).cast(pl.String),
             )
-            return base.join(traces, on=[TIME, ASSET_ID], how="left").lazy()
+            return base.join(
+                traces,
+                on=[TIME, ASSET_ID],
+                how="left",
+                maintain_order="left",
+            ).lazy()
 
         schema = data.collect_schema()
         missing = sorted(required - set(schema.names()))
@@ -245,7 +274,7 @@ class Panel(Node):
                 self._frame, trace_columns=self._trace_columns
             )
             if dense
-            else self._domain.apply_membership_lazy(self._frame)
+            else self._frame
         )
         return self._validate_collected(frame.collect())
 

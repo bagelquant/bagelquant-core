@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 
 TRANSFORMER_REGISTRY: Registry["TransformerFunction"] = Registry("transformer")
 
+PlanOperation = Callable[
+    [pl.LazyFrame, Mapping[str, Any], str | None, bool],
+    tuple[pl.LazyFrame, str | None, bool],
+]
+
 
 class TransformerFunction:
     """Callable graph builder created by the ``@transformer`` decorator."""
@@ -44,8 +49,12 @@ class TransformerFunction:
         self.contract = contract or default_operation_contract(
             operation, kind="transformer"
         )
+        self._plan_operation: PlanOperation | None = None
         self._counter = count(1)
         update_wrapper(self, operation)
+
+    def _set_plan_operation(self, operation: PlanOperation) -> None:
+        self._plan_operation = operation
 
     def __call__(
         self,
@@ -136,3 +145,24 @@ def transformer(
         return wrapped
 
     return decorate(operation) if operation is not None else decorate
+
+
+def _ordered_expression_plan(
+    frame: pl.LazyFrame,
+    expression: pl.Expr,
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    """Apply an asset-time expression without redundant physical sorting."""
+
+    source = frame if asset_time_ordered else frame.sort(["asset_id", "time"])
+    output_order = order if asset_time_ordered else "asset_time"
+    return (
+        source.with_columns(expression.alias("value")).select(
+            "time",
+            "asset_id",
+            "value",
+        ),
+        output_order,
+        True,
+    )

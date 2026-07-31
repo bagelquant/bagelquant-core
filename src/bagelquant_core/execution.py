@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
+import numpy as np
 import polars as pl
 
 from .frame import ASSET_ID, TIME, VALUE
@@ -42,6 +43,18 @@ class PlanValue:
     order: str | None = None
     trace_key_identity: str | None = None
     trace_order: str | None = None
+    exact_domain: bool = False
+    asset_time_ordered: bool = False
+    validated_keys: bool = False
+    physical_identity: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _EagerLayout:
+    asset_permutation: np.ndarray
+    inverse_permutation: np.ndarray
+    asset_offsets: np.ndarray
+    time_offsets: np.ndarray
 
 
 class ExecutionRuntime:
@@ -52,10 +65,25 @@ class ExecutionRuntime:
             raise ValueError("ExecutionRuntime only supports inner alignment")
         self.cache: dict[str, Panel] = {}
         self._plan_cache: dict[str, PlanValue] = {}
+        self._physical_plan_cache: dict[str, PlanValue] = {}
         self._alignment = alignment
         self._active_eager_inputs: dict[str, pl.DataFrame] | None = None
+        self._active_eager_results: dict[
+            tuple[object, ...],
+            tuple[pl.DataFrame, pl.DataFrame],
+        ] | None = None
+        self._active_eager_layouts: dict[
+            tuple[str, str, str],
+            _EagerLayout,
+        ] | None = None
         self.materializations = 0
         self.eager_barriers = 0
+        self._diagnostics = {
+            "semantic_cse_hits": 0,
+            "alignments_elided": 0,
+            "sorts_elided": 0,
+            "membership_applications": 0,
+        }
 
     def run(
         self,
@@ -68,6 +96,8 @@ class ExecutionRuntime:
         if self._active_eager_inputs is not None:
             raise RuntimeError("ExecutionRuntime does not support nested runs")
         self._active_eager_inputs = {}
+        self._active_eager_results = {}
+        self._active_eager_layouts = {}
         try:
             evaluated: dict[int, PlanValue] = {}
             plans = [
@@ -94,6 +124,8 @@ class ExecutionRuntime:
             return results
         finally:
             self._active_eager_inputs = None
+            self._active_eager_results = None
+            self._active_eager_layouts = None
 
     def _materialize_many(
         self,
@@ -120,14 +152,28 @@ class ExecutionRuntime:
                 trace_identity=plan.trace_identity,
                 trace_columns=plan.trace_columns,
                 dense_output=False,
+                validated_keys=plan.validated_keys,
+                exact_domain=plan.exact_domain,
+                key_identity=plan.key_identity,
             )
             pending.append((node, plan, panel))
 
         if pending:
-            value_plans = [
-                plan.domain.align_lazy(plan.frame)
-                for _, plan, _ in pending
-            ]
+            value_plans: list[pl.LazyFrame] = []
+            key_owner_by_domain: dict[str, int] = {}
+            key_owner_indices: list[int] = []
+            for index, (_, plan, _) in enumerate(pending):
+                dense_plan = self._dense_output_plan(plan, plan.frame)
+                owner_index = key_owner_by_domain.setdefault(
+                    plan.domain.signature,
+                    index,
+                )
+                key_owner_indices.append(owner_index)
+                value_plans.append(
+                    dense_plan
+                    if owner_index == index
+                    else dense_plan.select(VALUE)
+                )
             trace_plans: dict[
                 tuple[str, str, str | None, tuple[str, ...]],
                 pl.LazyFrame,
@@ -151,18 +197,15 @@ class ExecutionRuntime:
                 trace_keys.append(key)
                 trace_plans.setdefault(
                     key,
-                    plan.domain.grid_lazy()
-                    .join(
+                    self._dense_output_plan(
+                        plan,
                         plan.trace_frame.select(
                             TIME,
                             ASSET_ID,
                             *plan.trace_columns,
                         ),
-                        on=[TIME, ASSET_ID],
-                        how="left",
-                        maintain_order="left",
-                    )
-                    .sort([TIME, ASSET_ID]),
+                        order=plan.trace_order,
+                    ),
                 )
             unique_trace_keys = list(trace_plans)
             collected = pl.collect_all(
@@ -181,7 +224,14 @@ class ExecutionRuntime:
                 )
             }
             for index, (node, plan, panel) in enumerate(pending):
-                frame = collected[index]
+                owner_index = key_owner_indices[index]
+                frame = (
+                    collected[index]
+                    if owner_index == index
+                    else collected[owner_index]
+                    .select(TIME, ASSET_ID)
+                    .with_columns(collected[index].get_column(VALUE))
+                )
                 trace_key = trace_keys[index]
                 if trace_key is not None:
                     frame = frame.hstack(
@@ -189,7 +239,22 @@ class ExecutionRuntime:
                             *plan.trace_columns
                         )
                     )
-                panel._cached_dense = panel._validate_collected(frame)
+                if plan.validated_keys:
+                    if (
+                        not plan.categorical
+                        and frame.schema[VALUE].is_float()
+                    ):
+                        frame = frame.with_columns(
+                            pl.col(VALUE).fill_nan(None)
+                        )
+                    panel._cached_dense = frame.select(
+                        TIME,
+                        ASSET_ID,
+                        VALUE,
+                        *plan.trace_columns,
+                    )
+                else:
+                    panel._cached_dense = panel._validate_collected(frame)
                 if plan.cacheable:
                     self.cache[plan.identity] = panel
                 node.set_output(panel)
@@ -198,6 +263,42 @@ class ExecutionRuntime:
             node.name: results[node.name]
             for node, _ in outputs
         }
+
+    def _dense_output_plan(
+        self,
+        plan: PlanValue,
+        frame: pl.LazyFrame,
+        *,
+        order: str | None = None,
+    ) -> pl.LazyFrame:
+        """Align only subset plans and sort exact plans only when required."""
+
+        resolved_order = plan.order if order is None else order
+        if not plan.exact_domain:
+            columns = frame.collect_schema().names()
+            traces = tuple(
+                column
+                for column in columns
+                if column not in {TIME, ASSET_ID, VALUE}
+            )
+            if VALUE in columns:
+                return plan.domain.align_lazy(
+                    frame,
+                    trace_columns=traces,
+                )
+            return (
+                plan.domain.grid_lazy()
+                .join(
+                    frame,
+                    on=[TIME, ASSET_ID],
+                    how="left",
+                    maintain_order="left",
+                )
+            )
+        self._diagnostics["alignments_elided"] += 1
+        if resolved_order == _TIME_ASSET_ORDER:
+            return frame
+        return frame.sort([TIME, ASSET_ID])
 
     def _run_node(
         self,
@@ -223,14 +324,14 @@ class ExecutionRuntime:
                 ),
                 trace_identity=node.trace_identity,
                 categorical=isinstance(node, CategoryPanel),
-                key_identity=hash_mapping(
-                    {"panel_keys": node.identity}
-                ),
+                key_identity=node._key_identity,
                 order=_TIME_ASSET_ORDER,
-                trace_key_identity=hash_mapping(
-                    {"panel_keys": node.identity}
-                ),
+                trace_key_identity=node._key_identity,
                 trace_order=_TIME_ASSET_ORDER,
+                exact_domain=node._exact_domain,
+                asset_time_ordered=True,
+                validated_keys=node._validated_keys,
+                physical_identity=node.identity,
             )
             evaluated[node_id] = value
             return value
@@ -278,13 +379,71 @@ class ExecutionRuntime:
         if cached is not None:
             evaluated[node_id] = cached
             return cached
+        builtin = self._is_builtin_operation(node)
+        physical_identity = self._physical_node_identity(
+            node,
+            prepared,
+            domain,
+        )
+        physical_cached = (
+            self._physical_plan_cache.get(physical_identity)
+            if (
+                cacheable
+                and builtin
+                and contract.execution == ExecutionMode.LAZY
+            )
+            else None
+        )
+        if physical_cached is not None:
+            traces = tuple(
+                dict.fromkeys(
+                    trace
+                    for parent in prepared
+                    for trace in parent.trace_columns
+                )
+            )
+            value = replace(
+                physical_cached,
+                identity=identity,
+                trace_identity=self._trace_plan_identity(
+                    contract,
+                    prepared,
+                    identity,
+                    traces,
+                ),
+                physical_identity=physical_identity,
+            )
+            self._plan_cache[identity] = value
+            self._diagnostics["semantic_cse_hits"] += 1
+            evaluated[node_id] = value
+            return value
 
         inputs = tuple(
             value.frame.select(TIME, ASSET_ID, VALUE) for value in prepared
         )
         eager_result: pl.DataFrame | None = None
+        plan_order: str | None = None
+        plan_asset_time_ordered = False
         if contract.execution == ExecutionMode.LAZY:
-            result = node.compute(*inputs)
+            plan_operation = getattr(
+                getattr(node, "operation", None),
+                "_plan_operation",
+                None,
+            )
+            if (
+                plan_operation is not None
+                and node.node_type == "transformer"
+            ):
+                if prepared[0].asset_time_ordered:
+                    self._diagnostics["sorts_elided"] += 1
+                result, plan_order, plan_asset_time_ordered = plan_operation(
+                    inputs[0],
+                    self._node_parameters(node),
+                    prepared[0].order,
+                    prepared[0].asset_time_ordered,
+                )
+            else:
+                result = node.compute(*inputs)
             if isinstance(result, pl.DataFrame):
                 result = result.lazy()
             if not isinstance(result, pl.LazyFrame):
@@ -295,7 +454,12 @@ class ExecutionRuntime:
         else:
             self.eager_barriers += 1
             eager_inputs = self._collect_eager_inputs(prepared, inputs)
-            result = node.compute(*eager_inputs)
+            result = self._compute_eager(
+                node,
+                prepared,
+                eager_inputs,
+                domain,
+            )
             if not isinstance(result, pl.DataFrame):
                 raise TypeError(
                     f"Node '{node.name}' returned {type(result)}; "
@@ -303,6 +467,9 @@ class ExecutionRuntime:
                 )
             eager_result = result
             result = eager_result.lazy()
+        if not builtin:
+            result = domain.apply_membership_lazy(result)
+            self._diagnostics["membership_applications"] += 1
 
         traces = tuple(
             dict.fromkeys(
@@ -317,10 +484,11 @@ class ExecutionRuntime:
             identity,
         )
         order = (
-            _TIME_ASSET_ORDER
-            if self._is_builtin_operation(node)
-            else None
+            plan_order
+            if plan_asset_time_ordered
+            else (_TIME_ASSET_ORDER if builtin else None)
         )
+        exact_domain = self._result_exact_domain(node, prepared)
         trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
             result,
             prepared,
@@ -350,12 +518,23 @@ class ExecutionRuntime:
             order=order,
             trace_key_identity=trace_key_identity,
             trace_order=trace_order,
+            exact_domain=exact_domain,
+            asset_time_ordered=(
+                plan_asset_time_ordered
+                or order in {_TIME_ASSET_ORDER, _ASSET_TIME_ORDER}
+            ),
+            validated_keys=builtin and all(
+                parent.validated_keys for parent in prepared
+            ),
+            physical_identity=physical_identity,
         )
         if eager_result is not None:
             assert self._active_eager_inputs is not None
             self._active_eager_inputs[identity] = eager_result
         if cacheable:
             self._plan_cache[identity] = value
+            if builtin and contract.execution == ExecutionMode.LAZY:
+                self._physical_plan_cache[physical_identity] = value
         evaluated[node_id] = value
         return value
 
@@ -365,27 +544,286 @@ class ExecutionRuntime:
         inputs: tuple[pl.LazyFrame, ...],
     ) -> tuple[pl.DataFrame, ...]:
         assert self._active_eager_inputs is not None
-        missing_identities: list[str] = []
-        missing_frames: list[pl.LazyFrame] = []
+        owners: dict[tuple[str, str, str], str] = {}
+        missing: list[
+            tuple[str, pl.LazyFrame, str]
+        ] = []
         seen: set[str] = set()
         for value, frame in zip(prepared, inputs, strict=True):
+            layout = (
+                (value.domain.signature, value.key_identity, value.order)
+                if (
+                    value.exact_domain
+                    and value.validated_keys
+                    and value.key_identity is not None
+                    and value.order is not None
+                )
+                else None
+            )
+            owner_identity = (
+                owners.setdefault(layout, value.identity)
+                if layout is not None
+                else value.identity
+            )
             if (
                 value.identity not in self._active_eager_inputs
                 and value.identity not in seen
             ):
                 seen.add(value.identity)
-                missing_identities.append(value.identity)
-                missing_frames.append(frame)
-        if missing_frames:
-            collected = pl.collect_all(missing_frames)
+                missing.append(
+                    (
+                        value.identity,
+                        (
+                            frame
+                            if owner_identity == value.identity
+                            else frame.select(VALUE)
+                        ),
+                        owner_identity,
+                    )
+                )
+        if missing:
+            collected = pl.collect_all([entry[1] for entry in missing])
             self.materializations += 1
-            self._active_eager_inputs.update(
-                zip(missing_identities, collected, strict=True)
-            )
+            for (identity, _, owner_identity), collected_frame in zip(
+                missing, collected, strict=True
+            ):
+                if identity == owner_identity:
+                    self._active_eager_inputs[identity] = collected_frame
+            for (identity, _, owner_identity), collected_frame in zip(
+                missing, collected, strict=True
+            ):
+                if identity == owner_identity:
+                    continue
+                owner = self._active_eager_inputs[owner_identity]
+                self._active_eager_inputs[identity] = owner.select(
+                    TIME, ASSET_ID
+                ).with_columns(collected_frame.get_column(VALUE))
         return tuple(
             self._active_eager_inputs[value.identity]
             for value in prepared
         )
+
+    def _eager_layout(
+        self,
+        value: PlanValue,
+        frame: pl.DataFrame,
+    ) -> _EagerLayout:
+        if (
+            not value.exact_domain
+            or not value.validated_keys
+            or value.key_identity is None
+            or value.order != _TIME_ASSET_ORDER
+        ):
+            raise ValueError("eager layout requires exact time-asset keys")
+        assert self._active_eager_layouts is not None
+        key = (
+            value.domain.signature,
+            value.key_identity,
+            value.order,
+        )
+        cached = self._active_eager_layouts.get(key)
+        if cached is not None:
+            return cached
+
+        index_dtype = (
+            np.uint32
+            if len(frame) <= np.iinfo(np.uint32).max
+            else np.uint64
+        )
+        ordered = (
+            frame.select(TIME, ASSET_ID)
+            .with_row_index("__row")
+            .sort([ASSET_ID, TIME], maintain_order=True)
+        )
+        permutation = ordered.get_column("__row").to_numpy().astype(
+            index_dtype,
+            copy=False,
+        )
+        inverse = np.empty(len(frame), dtype=index_dtype)
+        inverse[permutation] = np.arange(len(frame), dtype=index_dtype)
+        asset_lengths = (
+            ordered.group_by(ASSET_ID, maintain_order=True)
+            .len()
+            .get_column("len")
+            .to_numpy()
+        )
+        time_lengths = (
+            frame.group_by(TIME, maintain_order=True)
+            .len()
+            .get_column("len")
+            .to_numpy()
+        )
+        asset_offsets = np.empty(len(asset_lengths) + 1, dtype=np.int64)
+        asset_offsets[0] = 0
+        np.cumsum(asset_lengths, dtype=np.int64, out=asset_offsets[1:])
+        time_offsets = np.empty(len(time_lengths) + 1, dtype=np.int64)
+        time_offsets[0] = 0
+        np.cumsum(time_lengths, dtype=np.int64, out=time_offsets[1:])
+        layout = _EagerLayout(
+            asset_permutation=permutation,
+            inverse_permutation=inverse,
+            asset_offsets=asset_offsets,
+            time_offsets=time_offsets,
+        )
+        self._active_eager_layouts[key] = layout
+        return layout
+
+    def _compute_eager(
+        self,
+        node: Node,
+        prepared: tuple[PlanValue, ...],
+        inputs: tuple[pl.DataFrame, ...],
+        domain: Domain,
+    ) -> pl.DataFrame:
+        operation = getattr(
+            getattr(node, "operation", None),
+            "display_name",
+            "",
+        )
+        regression_operations = {
+            "rolling_ols",
+            "rolling_ridge",
+            "rolling_lasso",
+            "rolling_elastic_net",
+        }
+        if operation == "orthogonalize":
+            key_identity = prepared[0].key_identity
+            positionally_aligned = (
+                key_identity is not None
+                and all(parent.exact_domain for parent in prepared)
+                and all(parent.validated_keys for parent in prepared)
+                and all(
+                    parent.key_identity == key_identity
+                    and parent.order == _TIME_ASSET_ORDER
+                    for parent in prepared
+                )
+            )
+            if positionally_aligned:
+                from .composer.xsectional import _orthogonalize_aligned
+
+                if domain.is_dynamic:
+                    time_offsets = self._eager_layout(
+                        prepared[0],
+                        inputs[0],
+                    ).time_offsets
+                else:
+                    asset_count = len(domain.asset_ids)
+                    time_offsets = np.arange(
+                        0,
+                        len(inputs[0]) + asset_count,
+                        asset_count,
+                        dtype=np.int64,
+                    )
+                return _orthogonalize_aligned(
+                    inputs,
+                    group_offsets=time_offsets,
+                )
+            return node.compute(*inputs)
+        if operation in regression_operations:
+            key_identity = prepared[0].key_identity
+            positionally_aligned = (
+                key_identity is not None
+                and all(parent.exact_domain for parent in prepared)
+                and all(parent.validated_keys for parent in prepared)
+                and all(
+                    parent.key_identity == key_identity
+                    and parent.order == _TIME_ASSET_ORDER
+                    for parent in prepared
+                )
+            )
+            if positionally_aligned:
+                from .composer.rolling import _rolling_regression_aligned
+
+                static_shape = (
+                    (len(domain.times), len(domain.asset_ids))
+                    if not domain.is_dynamic
+                    else None
+                )
+                layout = (
+                    self._eager_layout(prepared[0], inputs[0])
+                    if domain.is_dynamic
+                    else None
+                )
+                return _rolling_regression_aligned(
+                    inputs,
+                    operation=operation,
+                    config=self._node_parameters(node),
+                    static_shape=static_shape,
+                    asset_permutation=(
+                        None
+                        if layout is None
+                        else layout.asset_permutation
+                    ),
+                    group_offsets=(
+                        None
+                        if layout is None
+                        else layout.asset_offsets
+                    ),
+                )
+            return node.compute(*inputs)
+        if operation not in {"rolling_rank", "rolling_percentile"}:
+            return node.compute(*inputs)
+
+        from .transformer.rolling import (
+            _rolling_last_rank_pair,
+            _validate_window,
+        )
+
+        parameters = self._node_parameters(node)
+        window = parameters.get("window")
+        if not isinstance(window, int) or isinstance(window, bool):
+            return node.compute(*inputs)
+        min_periods = _validate_window(
+            window,
+            parameters.get("min_periods"),
+        )
+        parent = prepared[0]
+        key = (
+            "rolling_rank_pair",
+            parent.identity,
+            domain.signature,
+            window,
+            min_periods,
+        )
+        assert self._active_eager_results is not None
+        pair = self._active_eager_results.get(key)
+        if pair is None:
+            static_shape = (
+                (len(domain.times), len(domain.asset_ids))
+                if (
+                    not domain.is_dynamic
+                    and parent.exact_domain
+                    and parent.validated_keys
+                    and parent.order == _TIME_ASSET_ORDER
+                )
+                else None
+            )
+            layout = (
+                self._eager_layout(parent, inputs[0])
+                if static_shape is None
+                and parent.exact_domain
+                and parent.validated_keys
+                and parent.order == _TIME_ASSET_ORDER
+                else None
+            )
+            pair = _rolling_last_rank_pair(
+                inputs[0],
+                window=window,
+                min_periods=min_periods,
+                static_shape=static_shape,
+                asset_permutation=(
+                    None
+                    if layout is None
+                    else layout.asset_permutation
+                ),
+                group_offsets=(
+                    None
+                    if layout is None
+                    else layout.asset_offsets
+                ),
+            )
+            self._active_eager_results[key] = pair
+        return pair[0] if operation == "rolling_rank" else pair[1]
 
     def _materialize_node(
         self,
@@ -408,6 +846,9 @@ class ExecutionRuntime:
             trace_identity=plan.trace_identity,
             trace_columns=plan.trace_columns,
             dense_output=dense_output,
+            validated_keys=plan.validated_keys,
+            exact_domain=plan.exact_domain,
+            key_identity=plan.key_identity,
         )
         if dense_output:
             self.materializations += 1
@@ -520,6 +961,11 @@ class ExecutionRuntime:
             order=other.order,
             trace_key_identity=trace_key_identity,
             trace_order=trace_order,
+            exact_domain=other.exact_domain,
+            asset_time_ordered=other.asset_time_ordered,
+            validated_keys=(
+                constant_source.validated_keys and other.validated_keys
+            ),
         )
         if cacheable:
             self._plan_cache[identity] = value
@@ -595,6 +1041,9 @@ class ExecutionRuntime:
                 order=parent.order,
                 trace_key_identity=trace_key_identity,
                 trace_order=trace_order,
+                exact_domain=parent.exact_domain,
+                asset_time_ordered=parent.asset_time_ordered,
+                validated_keys=parent.validated_keys,
             )
             if cacheable:
                 self._plan_cache[identity] = value
@@ -692,6 +1141,12 @@ class ExecutionRuntime:
             key_identity=key_identity,
             trace_key_identity=trace_key_identity,
             trace_order=trace_order,
+            exact_domain=(
+                default is not None
+                and all(parent.exact_domain for parent in parents)
+            ),
+            asset_time_ordered=False,
+            validated_keys=all(parent.validated_keys for parent in parents),
         )
         if cacheable:
             self._plan_cache[identity] = value
@@ -778,6 +1233,9 @@ class ExecutionRuntime:
             order=_TIME_ASSET_ORDER,
             trace_key_identity=identity,
             trace_order=_TIME_ASSET_ORDER,
+            exact_domain=False,
+            asset_time_ordered=True,
+            validated_keys=parent.validated_keys,
         )
         if cacheable:
             self._plan_cache[identity] = value
@@ -812,10 +1270,7 @@ class ExecutionRuntime:
         return None
 
     def _ensure_dense(self, value: PlanValue) -> PlanValue:
-        if (
-            value.density == InputDensity.DENSE_REQUIRED
-            and value.default_value is None
-        ):
+        if value.exact_domain and value.default_value is None:
             return value
         if value.default_value is not None:
             return self._expand_implicit(value)
@@ -836,6 +1291,7 @@ class ExecutionRuntime:
                     value.trace_frame,
                     on=[TIME, ASSET_ID],
                     how="left",
+                    maintain_order="left",
                 )
                 if value.trace_frame is not None
                 else None
@@ -846,7 +1302,10 @@ class ExecutionRuntime:
             key_identity=f"domain:{value.domain.signature}",
             order=_TIME_ASSET_ORDER,
             trace_key_identity=f"domain:{value.domain.signature}",
-            trace_order=value.trace_order,
+            trace_order=_TIME_ASSET_ORDER,
+            exact_domain=True,
+            asset_time_ordered=True,
+            validated_keys=value.validated_keys,
         )
         self._plan_cache[identity] = result
         return result
@@ -878,6 +1337,7 @@ class ExecutionRuntime:
                     value.trace_frame,
                     on=[TIME, ASSET_ID],
                     how="left",
+                    maintain_order="left",
                 )
                 if value.trace_frame is not None
                 else None
@@ -888,7 +1348,10 @@ class ExecutionRuntime:
             key_identity=f"domain:{value.domain.signature}",
             order=_TIME_ASSET_ORDER,
             trace_key_identity=f"domain:{value.domain.signature}",
-            trace_order=value.trace_order,
+            trace_order=_TIME_ASSET_ORDER,
+            exact_domain=True,
+            asset_time_ordered=True,
+            validated_keys=value.validated_keys,
         )
         if value.cacheable:
             self._plan_cache[identity] = result
@@ -962,10 +1425,20 @@ class ExecutionRuntime:
         assert parent.trace_frame is not None
         base = parent.trace_frame.select(TIME, ASSET_ID, *available)
         needs_asset_time = rule != TraceRule.PASSTHROUGH
-        if needs_asset_time and parent.trace_order != _ASSET_TIME_ORDER:
+        trace_time_ordered = parent.trace_order in {
+            _TIME_ASSET_ORDER,
+            _ASSET_TIME_ORDER,
+        }
+        if needs_asset_time and not trace_time_ordered:
             base = base.sort([ASSET_ID, TIME])
+        elif needs_asset_time:
+            self._diagnostics["sorts_elided"] += 1
         transformed_order = (
-            _ASSET_TIME_ORDER
+            (
+                parent.trace_order
+                if trace_time_ordered
+                else _ASSET_TIME_ORDER
+            )
             if needs_asset_time
             else parent.trace_order
         )
@@ -1121,6 +1594,7 @@ class ExecutionRuntime:
     def clear_cache(self) -> None:
         self.cache.clear()
         self._plan_cache.clear()
+        self._physical_plan_cache.clear()
 
     @staticmethod
     def _is_builtin_operation(node: Node) -> bool:
@@ -1141,6 +1615,46 @@ class ExecutionRuntime:
         ):
             return parents[0].key_identity
         return self._combined_key_identity(parents, node_identity)
+
+    def _physical_node_identity(
+        self,
+        node: Node,
+        parents: tuple[PlanValue, ...],
+        domain: Domain,
+    ) -> str:
+        operation = getattr(node, "operation", None)
+        function = getattr(operation, "operation", None)
+        return hash_mapping(
+            {
+                "node_type": node.node_type,
+                "operation": (
+                    getattr(function, "__module__", ""),
+                    getattr(operation, "display_name", ""),
+                ),
+                "config": self._node_parameters(node),
+                "parents": [
+                    parent.physical_identity or parent.identity
+                    for parent in parents
+                ],
+                "domain": domain.signature,
+            }
+        )
+
+    def _result_exact_domain(
+        self,
+        node: Node,
+        parents: tuple[PlanValue, ...],
+    ) -> bool:
+        if not parents or not self._is_builtin_operation(node):
+            return False
+        if node.node_type == "transformer":
+            return parents[0].exact_domain
+        key_identity = parents[0].key_identity
+        return (
+            key_identity is not None
+            and all(parent.exact_domain for parent in parents)
+            and all(parent.key_identity == key_identity for parent in parents)
+        )
 
     @staticmethod
     def _combined_key_identity(

@@ -129,6 +129,8 @@ def _rolling_ols(
     factors: tuple[pl.DataFrame, ...],
     *,
     window: int,
+    static_shape: tuple[int, int] | None = None,
+    group_offsets: np.ndarray | None = None,
 ) -> pl.DataFrame:
     """Predict with batched prior-window least squares per asset."""
 
@@ -143,6 +145,8 @@ def _rolling_ols(
             data,
             factor_column=factor_columns[0],
             window=window,
+            static_shape=static_shape,
+            group_offsets=group_offsets,
         )
 
     return _rolling_gram_regression(
@@ -150,6 +154,8 @@ def _rolling_ols(
         factor_columns=factor_columns,
         window=window,
         method="ols",
+        static_shape=static_shape,
+        group_offsets=group_offsets,
     )
 
 
@@ -163,12 +169,17 @@ def _rolling_gram_regression(
     l1_ratio: float = 0.0,
     max_iter: int = 0,
     tolerance: float = 0.0,
+    static_shape: tuple[int, int] | None = None,
+    group_offsets: np.ndarray | None = None,
 ) -> pl.DataFrame:
     """Predict rolling regressions from bounded sufficient statistics."""
 
     coefficient_count = len(factor_columns) + 1
+    triangle = np.triu_indices(coefficient_count)
+    triangle_size = len(triangle[0])
     arrays_per_row = (
-        2 * coefficient_count * coefficient_count
+        2 * triangle_size
+        + coefficient_count * coefficient_count
         + 6 * coefficient_count
         + 8
     )
@@ -189,18 +200,48 @@ def _rolling_gram_regression(
         ]
     )
     prediction = np.full(len(data), np.nan, dtype=float)
-    lengths = (
-        data.group_by(ASSET_ID, maintain_order=True)
-        .len()
-        .get_column("len")
-        .to_numpy()
-    )
-    group_offset = 0
-    for length in lengths:
-        group_end = group_offset + int(length)
-        group_y = target_values[group_offset:group_end]
-        group_x = features[group_offset:group_end]
-        prediction_count = int(length) - window
+    if static_shape is None:
+        offsets = group_offsets
+        if offsets is None:
+            lengths = (
+                data.group_by(ASSET_ID, maintain_order=True)
+                .len()
+                .get_column("len")
+                .to_numpy()
+            )
+            offsets = np.empty(len(lengths) + 1, dtype=np.int64)
+            offsets[0] = 0
+            np.cumsum(lengths, dtype=np.int64, out=offsets[1:])
+        groups = (
+            (
+                target_values[offsets[index] : offsets[index + 1]],
+                features[offsets[index] : offsets[index + 1]],
+                prediction[offsets[index] : offsets[index + 1]],
+            )
+            for index in range(len(offsets) - 1)
+        )
+    else:
+        time_count, asset_count = static_shape
+        if len(data) != time_count * asset_count:
+            raise ValueError("static regression layout does not match domain size")
+        target_matrix = target_values.reshape(time_count, asset_count)
+        feature_tensor = features.reshape(
+            time_count,
+            asset_count,
+            len(factor_columns),
+        )
+        prediction_matrix = prediction.reshape(time_count, asset_count)
+        groups = (
+            (
+                target_matrix[:, asset_index],
+                feature_tensor[:, asset_index, :],
+                prediction_matrix[:, asset_index],
+            )
+            for asset_index in range(asset_count)
+        )
+
+    for group_y, group_x, group_prediction in groups:
+        prediction_count = len(group_y) - window
 
         for start in range(0, max(prediction_count, 0), rows_per_batch):
             end = min(start + rows_per_batch, prediction_count)
@@ -214,11 +255,17 @@ def _rolling_gram_regression(
             valid_y = np.where(valid, segment_y, 0.0)
 
             counts = _window_sum(valid.astype(np.int64), window, batch_size)
-            gram = _window_sum(
-                np.einsum("ni,nj->nij", design, design),
+            gram_triangle = _window_sum(
+                design[:, triangle[0]] * design[:, triangle[1]],
                 window,
                 batch_size,
             )
+            gram = np.empty(
+                (batch_size, coefficient_count, coefficient_count),
+                dtype=float,
+            )
+            gram[:, triangle[0], triangle[1]] = gram_triangle
+            gram[:, triangle[1], triangle[0]] = gram_triangle
             rhs = _window_sum(
                 design * valid_y[:, None],
                 window,
@@ -282,25 +329,26 @@ def _rolling_gram_regression(
                     )
 
             values = np.einsum("ij,ij->i", current_design, coefficients)
-            prediction_start = group_offset + window + start
-            prediction_end = group_offset + window + end
-            prediction[prediction_start:prediction_end] = np.where(
+            group_prediction[window + start : window + end] = np.where(
                 eligible,
                 values,
                 np.nan,
             )
-        group_offset = group_end
 
     if data.is_empty():
         return pl.DataFrame(
             schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
         )
-    return (
+    output = (
         data.select(TIME, ASSET_ID)
         .with_columns(
             pl.Series(VALUE, prediction, nan_to_null=True)
         )
-        .sort([TIME, ASSET_ID])
+    )
+    return (
+        output.sort([TIME, ASSET_ID])
+        if static_shape is None
+        else output
     )
 
 
@@ -311,7 +359,7 @@ def _solve_ols_from_gram(
     counts: np.ndarray,
     eligible: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    eigenvalues, eigenvectors = np.linalg.eigh(gram)
+    eigenvalues = np.linalg.eigvalsh(gram)
     eigenvalues = np.maximum(eigenvalues, 0.0)
     singular_values = np.sqrt(eigenvalues)
     cutoff = (
@@ -325,22 +373,12 @@ def _solve_ols_from_gram(
         > _GRAM_CONDITION_LIMIT * singular_values[:, -1]
     )
     fast = eligible & full_rank & well_conditioned
-    inverse = np.divide(
-        1.0,
-        eigenvalues,
-        out=np.zeros_like(eigenvalues),
-        where=fast[:, None],
-    )
-    projected = np.einsum(
-        "bij,bj->bi",
-        eigenvectors.swapaxes(-2, -1),
-        rhs,
-    )
-    coefficients = np.einsum(
-        "bij,bj->bi",
-        eigenvectors,
-        inverse * projected,
-    )
+    coefficients = np.zeros_like(rhs)
+    if fast.any():
+        coefficients[fast] = np.linalg.solve(
+            gram[fast],
+            rhs[fast, :, None],
+        )[:, :, 0]
     return coefficients, fast
 
 
@@ -354,7 +392,7 @@ def _solve_ridge_from_gram(
     penalized = gram.copy()
     diagonal = np.arange(1, gram.shape[-1])
     penalized[:, diagonal, diagonal] += alpha
-    eigenvalues, eigenvectors = np.linalg.eigh(penalized)
+    eigenvalues = np.linalg.eigvalsh(penalized)
     eigenvalues = np.maximum(eigenvalues, 0.0)
     fast = (
         eligible
@@ -364,23 +402,44 @@ def _solve_ridge_from_gram(
             > _RIDGE_CONDITION_LIMIT * eigenvalues[:, -1]
         )
     )
-    inverse = np.divide(
-        1.0,
-        eigenvalues,
-        out=np.zeros_like(eigenvalues),
-        where=fast[:, None],
-    )
-    projected = np.einsum(
-        "bij,bj->bi",
-        eigenvectors.swapaxes(-2, -1),
-        rhs,
-    )
-    coefficients = np.einsum(
-        "bij,bj->bi",
-        eigenvectors,
-        inverse * projected,
-    )
+    coefficients = np.zeros_like(rhs)
+    if fast.any():
+        coefficients[fast] = _batched_cholesky_solve(
+            penalized[fast],
+            rhs[fast],
+        )
     return coefficients, fast
+
+
+def _batched_cholesky_solve(
+    matrices: np.ndarray,
+    rhs: np.ndarray,
+) -> np.ndarray:
+    """Solve small positive-definite batches without generic solve overhead."""
+
+    lower = np.linalg.cholesky(matrices)
+    width = lower.shape[-1]
+    projected = np.empty_like(rhs)
+    for index in range(width):
+        projected[:, index] = (
+            rhs[:, index]
+            - np.einsum(
+                "bi,bi->b",
+                lower[:, index, :index],
+                projected[:, :index],
+            )
+        ) / lower[:, index, index]
+    solution = np.empty_like(rhs)
+    for index in range(width - 1, -1, -1):
+        solution[:, index] = (
+            projected[:, index]
+            - np.einsum(
+                "bi,bi->b",
+                lower[:, index + 1 :, index],
+                solution[:, index + 1 :],
+            )
+        ) / lower[:, index, index]
+    return solution
 
 
 def _solve_elastic_from_gram(
@@ -407,45 +466,49 @@ def _solve_elastic_from_gram(
     ridge_penalty = alpha * (1.0 - l1_ratio)
 
     for _ in range(max_iter):
-        previous = coefficients.copy()
+        active_indices = np.flatnonzero(active)
+        if not len(active_indices):
+            break
+        previous = coefficients[active_indices].copy()
         for index in range(coefficient_count):
             numerator = (
-                rhs[:, index]
+                rhs[active_indices, index]
                 - np.einsum(
                     "bi,bi->b",
-                    gram[:, index, :],
-                    coefficients,
+                    gram[active_indices, index, :],
+                    coefficients[active_indices],
                 )
-                + gram[:, index, index] * coefficients[:, index]
+                + gram[active_indices, index, index]
+                * coefficients[active_indices, index]
             )
             if index == 0:
                 updated = np.divide(
                     numerator,
-                    gram[:, index, index],
-                    out=np.full(len(gram), np.nan),
-                    where=gram[:, index, index] != 0,
+                    gram[active_indices, index, index],
+                    out=np.full(len(active_indices), np.nan),
+                    where=gram[active_indices, index, index] != 0,
                 )
             else:
-                denominator = gram[:, index, index] + ridge_penalty
+                denominator = (
+                    gram[active_indices, index, index]
+                    + ridge_penalty
+                )
                 updated = np.divide(
                     np.sign(numerator)
                     * np.maximum(np.abs(numerator) - shrinkage, 0.0),
                     denominator,
-                    out=np.full(len(gram), np.nan),
+                    out=np.full(len(active_indices), np.nan),
                     where=denominator != 0,
                 )
-            coefficients[:, index] = np.where(
-                active,
-                updated,
-                coefficients[:, index],
-            )
+            coefficients[active_indices, index] = updated
         converged = (
-            np.max(np.abs(coefficients - previous), axis=1)
+            np.max(
+                np.abs(coefficients[active_indices] - previous),
+                axis=1,
+            )
             <= tolerance
         )
-        active &= ~converged
-        if not active.any():
-            break
+        active[active_indices[converged]] = False
     return coefficients
 
 
@@ -454,6 +517,8 @@ def _rolling_single_factor_ols(
     *,
     factor_column: str,
     window: int,
+    static_shape: tuple[int, int] | None = None,
+    group_offsets: np.ndarray | None = None,
 ) -> pl.DataFrame:
     """Predict single-factor OLS from prior-window sufficient statistics."""
 
@@ -471,18 +536,44 @@ def _rolling_single_factor_ols(
         float, copy=False
     )
     prediction = np.full(len(data), np.nan, dtype=float)
-    lengths = (
-        data.group_by(ASSET_ID, maintain_order=True)
-        .len()
-        .get_column("len")
-        .to_numpy()
-    )
-    group_offset = 0
-    for length in lengths:
-        group_end = group_offset + int(length)
-        group_y = target_values[group_offset:group_end]
-        group_x = factor_values[group_offset:group_end]
-        prediction_count = int(length) - window
+    if static_shape is None:
+        offsets = group_offsets
+        if offsets is None:
+            lengths = (
+                data.group_by(ASSET_ID, maintain_order=True)
+                .len()
+                .get_column("len")
+                .to_numpy()
+            )
+            offsets = np.empty(len(lengths) + 1, dtype=np.int64)
+            offsets[0] = 0
+            np.cumsum(lengths, dtype=np.int64, out=offsets[1:])
+        groups = (
+            (
+                target_values[offsets[index] : offsets[index + 1]],
+                factor_values[offsets[index] : offsets[index + 1]],
+                prediction[offsets[index] : offsets[index + 1]],
+            )
+            for index in range(len(offsets) - 1)
+        )
+    else:
+        time_count, asset_count = static_shape
+        if len(data) != time_count * asset_count:
+            raise ValueError("static regression layout does not match domain size")
+        target_matrix = target_values.reshape(time_count, asset_count)
+        factor_matrix = factor_values.reshape(time_count, asset_count)
+        prediction_matrix = prediction.reshape(time_count, asset_count)
+        groups = (
+            (
+                target_matrix[:, asset_index],
+                factor_matrix[:, asset_index],
+                prediction_matrix[:, asset_index],
+            )
+            for asset_index in range(asset_count)
+        )
+
+    for group_y, group_x, group_prediction in groups:
+        prediction_count = len(group_y) - window
 
         for start in range(0, max(prediction_count, 0), rows_per_batch):
             end = min(start + rows_per_batch, prediction_count)
@@ -521,23 +612,28 @@ def _rolling_single_factor_ols(
                 + counts * factor_shift * factor_shift
             )
 
-            gram = np.empty((batch_size, 2, 2), dtype=float)
-            gram[:, 0, 0] = counts
-            gram[:, 0, 1] = sum_x
-            gram[:, 1, 0] = sum_x
-            gram[:, 1, 1] = sum_xx
-            eigenvalues = np.linalg.eigvalsh(gram)
-            eigenvalues = np.maximum(eigenvalues, 0.0)
-            singular_values = np.sqrt(eigenvalues)
+            half_trace = 0.5 * (counts + sum_xx)
+            radius = np.hypot(0.5 * (counts - sum_xx), sum_x)
+            eigenvalue_max = np.maximum(half_trace + radius, 0.0)
+            determinant = counts * sum_xx - sum_x * sum_x
+            eigenvalue_min = np.divide(
+                determinant,
+                eigenvalue_max,
+                out=np.zeros(batch_size, dtype=float),
+                where=eigenvalue_max > 0,
+            )
+            eigenvalue_min = np.maximum(eigenvalue_min, 0.0)
+            singular_value_min = np.sqrt(eigenvalue_min)
+            singular_value_max = np.sqrt(eigenvalue_max)
             cutoff = (
                 epsilon
                 * np.maximum(counts, 2)
-                * singular_values[:, 1]
+                * singular_value_max
             )
-            full_rank = singular_values[:, 0] > cutoff
+            full_rank = singular_value_min > cutoff
             well_conditioned = (
-                singular_values[:, 0]
-                > np.sqrt(epsilon) * singular_values[:, 1]
+                singular_value_min
+                > np.sqrt(epsilon) * singular_value_max
             )
 
             safe_counts = np.maximum(counts, 1)
@@ -595,21 +691,22 @@ def _rolling_single_factor_ols(
                     + current_x[index] * coefficients[1]
                 )
 
-            prediction_start = group_offset + window + start
-            prediction_end = group_offset + window + end
-            prediction[prediction_start:prediction_end] = values
-        group_offset = group_end
+            group_prediction[window + start : window + end] = values
 
     if data.is_empty():
         return pl.DataFrame(
             schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
         )
-    return (
+    output = (
         data.select(TIME, ASSET_ID)
         .with_columns(
             pl.Series(VALUE, prediction, nan_to_null=True)
         )
-        .sort([TIME, ASSET_ID])
+    )
+    return (
+        output.sort([TIME, ASSET_ID])
+        if static_shape is None
+        else output
     )
 
 
@@ -644,6 +741,104 @@ def _ridge_fit(alpha: float) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
         )
 
     return fit
+
+
+def _rolling_regression_aligned(
+    frames: tuple[pl.DataFrame, ...],
+    *,
+    operation: str,
+    config: dict[str, object],
+    static_shape: tuple[int, int] | None,
+    asset_permutation: np.ndarray | None = None,
+    group_offsets: np.ndarray | None = None,
+) -> pl.DataFrame:
+    """Run a regression on executor-proven positionally aligned inputs."""
+
+    if len(frames) < 2:
+        raise ValueError("rolling regression requires at least one factor")
+    window = config.get("window")
+    if not isinstance(window, int) or isinstance(window, bool):
+        raise ValueError("window must be positive")
+    _validate_window(window, window)
+    factor_columns = [
+        f"factor_{index}" for index in range(len(frames) - 1)
+    ]
+    data = frames[0].select(TIME, ASSET_ID).with_columns(
+        frames[0].get_column(VALUE).alias("target"),
+        *[
+            frame.get_column(VALUE).alias(column)
+            for frame, column in zip(
+                frames[1:],
+                factor_columns,
+                strict=True,
+            )
+        ],
+    )
+    if asset_permutation is not None:
+        data = data[asset_permutation]
+    elif static_shape is None:
+        data = data.sort([ASSET_ID, TIME])
+    if operation == "rolling_ols":
+        if len(factor_columns) == 1:
+            return _rolling_single_factor_ols(
+                data,
+                factor_column=factor_columns[0],
+                window=window,
+                static_shape=static_shape,
+                group_offsets=group_offsets,
+            )
+        return _rolling_gram_regression(
+            data,
+            factor_columns=factor_columns,
+            window=window,
+            method="ols",
+            static_shape=static_shape,
+            group_offsets=group_offsets,
+        )
+
+    alpha = config.get("alpha", 1.0)
+    _validate_non_negative_real(alpha, name=f"{operation} alpha")
+    if operation == "rolling_ridge":
+        return _rolling_gram_regression(
+            data,
+            factor_columns=factor_columns,
+            window=window,
+            method="ridge",
+            alpha=float(alpha),
+            static_shape=static_shape,
+            group_offsets=group_offsets,
+        )
+
+    l1_ratio = (
+        1.0
+        if operation == "rolling_lasso"
+        else config.get("l1_ratio", 0.5)
+    )
+    if (
+        not isinstance(l1_ratio, Real)
+        or isinstance(l1_ratio, bool)
+        or not 0 <= l1_ratio <= 1
+    ):
+        raise ValueError(
+            "rolling_elastic_net requires alpha >= 0 "
+            "and l1_ratio in [0, 1]"
+        )
+    max_iter = config.get("max_iter", 1000)
+    tolerance = config.get("tolerance", 1e-8)
+    _validate_positive_integer(max_iter, name=f"{operation} max_iter")
+    _validate_non_negative_real(tolerance, name=f"{operation} tolerance")
+    return _rolling_gram_regression(
+        data,
+        factor_columns=factor_columns,
+        window=window,
+        method="elastic",
+        alpha=float(alpha),
+        l1_ratio=float(l1_ratio),
+        max_iter=max_iter,
+        tolerance=float(tolerance),
+        static_shape=static_shape,
+        group_offsets=group_offsets,
+    )
 
 
 @composer

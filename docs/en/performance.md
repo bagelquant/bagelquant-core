@@ -27,6 +27,24 @@ uv run python scripts/benchmark_efficiency.py \
   --case orthogonalize_3f \
   --case traced_multi_output_5 \
   --case eager_rank_pair
+uv run python scripts/benchmark_efficiency.py \
+  --profile comparison \
+  --case rolling_chain_20 \
+  --case ewm_chain_20 \
+  --case mixed_chain_20 \
+  --case semantic_cse_5 \
+  --case dense_exact_output \
+  --case sparse_alignment
+uv run python scripts/benchmark_efficiency.py \
+  --profile cn-daily \
+  --windows 252 \
+  --universe both \
+  --case rolling_rank \
+  --case eager_rank_pair \
+  --case rolling_ols_3f \
+  --case rolling_ridge \
+  --case orthogonalize_3f \
+  --case traced_multi_output_5
 ```
 
 Use `--universe dynamic` or `--universe both` to exercise sparse dynamic
@@ -36,9 +54,11 @@ membership. The `cn-daily` profile represents 6.25 million requested rows,
 
 The JSON output records same-machine best, median, and mean wall time; peak RSS;
 output row/null/value summaries; runtime materialization and eager-barrier
-counts; and sort counts for inspectable lazy output plans. Time-based thresholds
-remain outside CI. Structural tests assert that lazy graphs have one final
-materialization and eager graphs add exactly their declared barriers.
+counts; sort counts for inspectable lazy output plans; and internal counts for
+elided sorts, elided alignments, membership applications, and semantic CSE
+hits. Time-based thresholds remain outside CI. Structural tests assert that
+lazy graphs have one final materialization and eager graphs add exactly their
+declared barriers.
 
 ## July 2026 comparison
 
@@ -105,3 +125,54 @@ The execution runtime deduplicates eager inputs within one run and collects
 shared trace plans once per domain, key lineage, trace identity, and column
 set. A rank-plus-percentile graph now uses two materializations instead of
 three, while dense multi-output graphs retain one final collection boundary.
+
+## July 2026 execution-plan and memory pass
+
+The third pass carries private key coverage, membership, and ordering lineage
+through the runtime. Proven exact-domain plans skip final alignment, and
+per-asset rolling, EWM, fill, difference, and rate kernels reuse existing
+monotonic order. Unknown or custom operations retain the conservative
+membership, validation, alignment, and sort path. Public operation calls
+continue to return `(time, asset_id)` order.
+
+Same-machine 500,000-row medians with a 20-session window were:
+
+| Case | Previous pass | Third pass | Change |
+| --- | ---: | ---: | ---: |
+| `rolling_rank` | 0.217s | 0.125s | 43% faster |
+| `rolling_percentile` | 0.216s | 0.121s | 44% faster |
+| rank + percentile sibling graph | approximately 0.401s | 0.122s | 70% faster |
+| three-factor `orthogonalize` | 0.142s | 0.120s | 15% faster |
+| traced five-output rolling graph | 0.336s | 0.247s | 26% faster |
+| ten-layer rolling chain | approximately 0.215s | 0.092s | 57% faster |
+| five semantically equal rolling outputs | five independent kernels | 0.029s | four CSE hits |
+
+The ten-layer rolling chain contains no physical sort node, down from eleven
+before order lineage was introduced. A 20-layer rolling chain similarly
+contains no sort and completed in 0.171 seconds. Semantic CSE excludes output
+names and metadata from physical identity while keeping public Panel
+identities, names, metadata, GraphSpec, and runtime cache keys distinct.
+
+For eager operations, exact same-key parents now collect one immutable key
+layout and value-only sibling columns. Static exact domains use time-major
+arrays with strided per-asset views; dynamic and sparse inputs reuse a stable
+asset permutation inside one runtime. Rank and percentile share one exact
+comparison kernel while retaining two logical eager barriers. Regression
+inputs bypass wide DataFrame joins when key lineage proves positional
+alignment.
+
+The 6.25-million-row, 5,000-asset, 252-session static profile showed the
+following peak-RSS reductions relative to the second pass:
+
+| Case | Previous peak RSS | Third-pass peak RSS | Reduction | Third-pass time |
+| --- | ---: | ---: | ---: | ---: |
+| `rolling_rank` | 2.34 GiB | 1.48 GiB | 37% | 3.09s |
+| three-factor `rolling_ols` | 6.11 GiB | 3.28 GiB | 46% | 8.16s |
+| two-factor `rolling_ridge` | 4.34 GiB | 2.02 GiB | 53% | 5.43s |
+| traced five-output graph | 8.22 GiB | 3.50 GiB | 57% | 3.58s |
+
+The same dynamic-universe profile also completed: rank in 2.93 seconds,
+three-factor OLS in 7.35 seconds, ridge in 4.82 seconds, and traced five-output
+execution in 2.78 seconds. Explicit rolling numeric workspaces remain bounded;
+none of these cases creates a materialized total-row-count by window-size
+array.

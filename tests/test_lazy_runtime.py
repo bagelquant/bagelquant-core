@@ -218,6 +218,94 @@ def test_multiple_outputs_reuse_exact_trace_plan() -> None:
         ]
 
 
+def test_semantically_equal_named_nodes_share_physical_plan() -> None:
+    source = _traced_panel()
+    runtime = ExecutionRuntime()
+    graph = Graph(
+        outputs=[
+            rolling_mean(
+                source,
+                window=2,
+                min_periods=1,
+                name=f"mean_{index}",
+                metadata={"index": index},
+            )
+            for index in range(5)
+        ]
+    )
+
+    outputs = graph.compute(runtime=runtime)
+
+    assert list(outputs) == [f"mean_{index}" for index in range(5)]
+    assert len({panel.identity for panel in outputs.values()}) == 5
+    assert [
+        panel.metadata["index"] for panel in outputs.values()
+    ] == list(range(5))
+    expected = outputs["mean_0"].collect(include_traces=True)
+    assert all(
+        panel.collect(include_traces=True).equals(expected)
+        for panel in outputs.values()
+    )
+    assert runtime._diagnostics["semantic_cse_hits"] == 4
+    assert runtime.materializations == 1
+
+
+def test_custom_operation_remains_scoped_sorted_and_conservative() -> None:
+    days = [date(2024, 3, day) for day in (1, 2)]
+    domain = Domain(calendar=days, universe=["A"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": days,
+                "asset_id": ["A", "A"],
+                "value": [1.0, 2.0],
+            }
+        ),
+        domain,
+    )
+
+    @transformer
+    def disorder(frame: pl.DataFrame) -> pl.DataFrame:
+        return pl.concat(
+            [
+                frame.reverse(),
+                pl.DataFrame(
+                    {
+                        "time": [date(2024, 3, 3)],
+                        "asset_id": ["OUTSIDE"],
+                        "value": [99.0],
+                    }
+                ),
+            ]
+        )
+
+    output = disorder(source).compute().data
+
+    assert output.select("time", "asset_id").rows() == [
+        (days[0], "A"),
+        (days[1], "A"),
+    ]
+    assert output["value"].to_list() == [1.0, 2.0]
+
+
+def test_direct_rolling_operation_preserves_public_sorting() -> None:
+    frame = pl.DataFrame(
+        {
+            "time": [date(2024, 4, 2), date(2024, 4, 1)],
+            "asset_id": ["A", "A"],
+            "value": [2.0, 1.0],
+        }
+    )
+
+    output = rolling_mean.operation(
+        frame,
+        window=2,
+        min_periods=1,
+    )
+
+    assert output["time"].to_list() == sorted(output["time"].to_list())
+
+
 def test_graph_execution_never_hashes_full_frames(monkeypatch) -> None:
     source = _traced_panel()
 

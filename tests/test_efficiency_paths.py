@@ -5,8 +5,9 @@ import math
 import numpy as np
 import polars as pl
 import pytest
+import bagelquant_core.transformer.rolling as rolling_module
 
-from bagelquant_core import ExecutionRuntime
+from bagelquant_core import ExecutionRuntime, Graph
 from bagelquant_core.composer import (
     orthogonalize,
     rolling_corr,
@@ -62,6 +63,47 @@ def test_rolling_rank_and_percentile_fast_paths() -> None:
 
     assert values(ranked.output.data)[("2024-01-03", "a")] == 2.0
     assert values(pct.output.data)[("2024-01-02", "a")] == 0.5
+
+
+def test_rank_and_percentile_siblings_share_comparison_kernel(
+    monkeypatch,
+) -> None:
+    source = panel(
+        [
+            ("2024-01-01", "a", 2.0),
+            ("2024-01-02", "a", 1.0),
+            ("2024-01-03", "a", 3.0),
+        ]
+    )
+    original = rolling_module._rolling_last_rank_pair
+    calls = {"count": 0}
+
+    def counted(*args, **kwargs):
+        calls["count"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        rolling_module,
+        "_rolling_last_rank_pair",
+        counted,
+    )
+    runtime = ExecutionRuntime()
+
+    Graph(
+        outputs=[
+            rolling_rank(source, window=2, min_periods=1, name="rank"),
+            rolling_percentile(
+                source,
+                window=2,
+                min_periods=1,
+                name="percentile",
+            ),
+        ]
+    ).compute(runtime=runtime)
+
+    assert calls["count"] == 1
+    assert runtime.eager_barriers == 2
+    assert runtime.materializations == 2
 
 
 def test_ewm_mean_honors_adjusted_and_recursive_weighting() -> None:

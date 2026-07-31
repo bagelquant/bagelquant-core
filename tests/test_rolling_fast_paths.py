@@ -7,7 +7,12 @@ import polars as pl
 import pytest
 
 from bagelquant_core import Domain, Panel
-from bagelquant_core.composer import rolling_ols
+from bagelquant_core.composer import (
+    rolling_elastic_net,
+    rolling_lasso,
+    rolling_ols,
+    rolling_ridge,
+)
 from bagelquant_core.transformer import (
     rolling_percentile,
     rolling_rank,
@@ -142,6 +147,66 @@ def test_rolling_rank_fast_paths_match_reference(min_periods: int) -> None:
     )
 
 
+def test_rolling_rank_randomized_groups_match_reference_exactly() -> None:
+    rng = np.random.default_rng(90210)
+    group_size = 70
+    assets = ["a", "b", "c", "d"]
+    dates = [
+        str(date(2024, 3, 1) + timedelta(days=offset))
+        for offset in range(group_size)
+    ]
+    raw = rng.integers(-3, 4, size=group_size * len(assets)).astype(float)
+    raw[rng.choice(len(raw), size=35, replace=False)] = np.nan
+    source = _static_panel(
+        [
+            (time, asset, None if np.isnan(value) else float(value))
+            for (asset, time), value in zip(
+                (
+                    (asset, time)
+                    for asset in assets
+                    for time in dates
+                ),
+                raw,
+                strict=True,
+            )
+        ],
+        name="random_rank",
+    )
+    dense = _dense_values(source)
+
+    actual_rank = rolling_rank(
+        source,
+        window=17,
+        min_periods=5,
+    ).compute()
+    actual_pct = rolling_percentile(
+        source,
+        window=17,
+        min_periods=5,
+    ).compute()
+
+    np.testing.assert_array_equal(
+        _dense_values(actual_rank),
+        _rolling_rank_reference(
+            dense,
+            group_size=group_size,
+            window=17,
+            min_periods=5,
+            pct=False,
+        ),
+    )
+    np.testing.assert_array_equal(
+        _dense_values(actual_pct),
+        _rolling_rank_reference(
+            dense,
+            group_size=group_size,
+            window=17,
+            min_periods=5,
+            pct=True,
+        ),
+    )
+
+
 @pytest.mark.parametrize(("min_periods", "ddof"), [(0, 0), (1, 1), (3, 1)])
 def test_rolling_zscore_native_path_matches_reference(
     min_periods: int,
@@ -219,6 +284,84 @@ def _rolling_ols_reference(
     return output
 
 
+def _rolling_regularized_reference(
+    target: np.ndarray,
+    factors: np.ndarray,
+    *,
+    group_size: int,
+    window: int,
+    method: str,
+    alpha: float,
+    l1_ratio: float = 0.0,
+    max_iter: int = 100,
+    tolerance: float = 1e-8,
+) -> np.ndarray:
+    output = np.full(len(target), np.nan)
+    for group_start in range(0, len(target), group_size):
+        group_y = target[group_start : group_start + group_size]
+        group_x = factors[group_start : group_start + group_size]
+        for current in range(window, group_size):
+            if not np.isfinite(group_x[current]).all():
+                continue
+            train_y = group_y[current - window : current]
+            train_x = group_x[current - window : current]
+            valid = np.isfinite(train_y) & np.isfinite(train_x).all(axis=1)
+            if not valid.any():
+                continue
+            design = np.column_stack(
+                [np.ones(valid.sum()), train_x[valid]]
+            )
+            selected_y = train_y[valid]
+            if method == "ridge":
+                penalty = np.eye(design.shape[1])
+                penalty[0, 0] = 0.0
+                coefficients = (
+                    np.linalg.pinv(
+                        design.T @ design + alpha * penalty
+                    )
+                    @ design.T
+                    @ selected_y
+                )
+            else:
+                coefficients = np.zeros(design.shape[1])
+                coefficients[0] = selected_y.mean()
+                for _ in range(max_iter):
+                    previous = coefficients.copy()
+                    for index in range(design.shape[1]):
+                        residual = (
+                            selected_y
+                            - design @ coefficients
+                            + design[:, index] * coefficients[index]
+                        )
+                        numerator = design[:, index] @ residual
+                        if index == 0:
+                            coefficients[index] = numerator / (
+                                design[:, index] @ design[:, index]
+                            )
+                            continue
+                        denominator = (
+                            design[:, index] @ design[:, index]
+                            + alpha * (1.0 - l1_ratio)
+                        )
+                        coefficients[index] = (
+                            np.sign(numerator)
+                            * max(
+                                abs(numerator) - alpha * l1_ratio,
+                                0.0,
+                            )
+                            / denominator
+                        )
+                    if (
+                        np.max(np.abs(coefficients - previous))
+                        <= tolerance
+                    ):
+                        break
+            output[group_start + current] = (
+                np.r_[1.0, group_x[current]] @ coefficients
+            )
+    return output
+
+
 def test_rolling_ols_batched_path_matches_lstsq_reference() -> None:
     rng = np.random.default_rng(42)
     group_size = 18
@@ -272,6 +415,157 @@ def test_rolling_ols_batched_path_matches_lstsq_reference() -> None:
         expected,
         rtol=1e-10,
         atol=1e-12,
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize("factor_count", [2, 4, 8])
+def test_rolling_ols_multi_factor_gram_path_matches_reference(
+    factor_count: int,
+) -> None:
+    rng = np.random.default_rng(100 + factor_count)
+    group_size = 32
+    dates = [
+        str(date(2024, 1, 1) + timedelta(days=offset))
+        for offset in range(group_size)
+    ]
+    rows = [
+        (time, asset)
+        for asset in ("a", "b")
+        for time in dates
+    ]
+    factor_values = rng.normal(
+        size=(group_size * 2, factor_count)
+    )
+    target_values = (
+        2.0
+        + factor_values
+        @ np.linspace(-1.0, 1.0, factor_count)
+        + rng.normal(scale=0.01, size=group_size * 2)
+    )
+    target_values[[3, 35]] = np.nan
+    factor_values[7, 0] = np.nan
+    factor_values[44, -1] = np.nan
+
+    def build(values: np.ndarray, name: str) -> Panel:
+        return _static_panel(
+            [
+                (time, asset, None if np.isnan(value) else float(value))
+                for (time, asset), value in zip(rows, values, strict=True)
+            ],
+            name=name,
+        )
+
+    target = build(target_values, "target")
+    factors = [
+        build(factor_values[:, index], f"factor_{index}")
+        for index in range(factor_count)
+    ]
+    expected = _rolling_ols_reference(
+        _dense_values(target),
+        np.column_stack([_dense_values(factor) for factor in factors]),
+        group_size=group_size,
+        window=12,
+    )
+
+    actual = rolling_ols(target, *factors, window=12).compute()
+
+    np.testing.assert_allclose(
+        _dense_values(actual),
+        expected,
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "operation",
+        "method",
+        "alpha",
+        "l1_ratio",
+        "max_iter",
+        "tolerance",
+    ),
+    [
+        (rolling_ridge, "ridge", 0.0, 0.0, 80, 1e-10),
+        (rolling_ridge, "ridge", 10.0, 0.0, 80, 1e-10),
+        (rolling_lasso, "elastic", 0.7, 1.0, 1, 0.0),
+        (rolling_elastic_net, "elastic", 0.7, 0.35, 80, 1e-10),
+    ],
+)
+def test_regularized_rolling_paths_match_row_reference(
+    operation,
+    method: str,
+    alpha: float,
+    l1_ratio: float,
+    max_iter: int,
+    tolerance: float,
+) -> None:
+    rng = np.random.default_rng(86)
+    group_size = 28
+    dates = [
+        str(date(2024, 2, 1) + timedelta(days=offset))
+        for offset in range(group_size)
+    ]
+    rows = [
+        (time, asset)
+        for asset in ("a", "b")
+        for time in dates
+    ]
+    factors_raw = rng.normal(size=(group_size * 2, 2))
+    target_raw = (
+        1.5
+        + 0.8 * factors_raw[:, 0]
+        - 0.3 * factors_raw[:, 1]
+        + rng.normal(scale=0.03, size=group_size * 2)
+    )
+    target_raw[[2, 31]] = np.nan
+    factors_raw[8, 0] = np.nan
+    factors_raw[46, 1] = np.nan
+
+    def build(values: np.ndarray, name: str) -> Panel:
+        return _static_panel(
+            [
+                (time, asset, None if np.isnan(value) else float(value))
+                for (time, asset), value in zip(rows, values, strict=True)
+            ],
+            name=name,
+        )
+
+    target = build(target_raw, "target")
+    factors = [
+        build(factors_raw[:, index], f"factor_{index}")
+        for index in range(2)
+    ]
+    expected = _rolling_regularized_reference(
+        _dense_values(target),
+        np.column_stack([_dense_values(factor) for factor in factors]),
+        group_size=group_size,
+        window=10,
+        method=method,
+        alpha=alpha,
+        l1_ratio=l1_ratio,
+        max_iter=max_iter,
+        tolerance=tolerance,
+    )
+    config = {
+        "window": 10,
+        "alpha": alpha,
+    }
+    if method == "elastic":
+        config.update(max_iter=max_iter, tolerance=tolerance)
+        if operation is rolling_elastic_net:
+            config["l1_ratio"] = l1_ratio
+
+    actual = operation(target, *factors, **config).compute()
+
+    np.testing.assert_allclose(
+        _dense_values(actual),
+        expected,
+        rtol=1e-9,
+        atol=1e-11,
         equal_nan=True,
     )
 

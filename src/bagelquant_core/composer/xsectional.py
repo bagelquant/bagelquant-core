@@ -5,7 +5,13 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 
-from ..frame import ASSET_ID, TIME, VALUE, panel_like
+from ..frame import (
+    ASSET_ID,
+    TIME,
+    VALUE,
+    _balanced_inner_join,
+    panel_like,
+)
 from .core import composer
 
 
@@ -24,45 +30,61 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
     if len(factors) == 1:
         return _orthogonalize_one_factor(frame, factors[0])
 
-    data = frame.rename({VALUE: "target"})
-    for index, factor in enumerate(factors):
-        data = data.join(
-            factor.rename({VALUE: f"f{index}"}),
-            on=[TIME, ASSET_ID],
-            how="inner",
-        )
-    rows: list[dict[str, object]] = []
     factor_columns = [f"f{index}" for index in range(len(factors))]
-    for time, group in data.partition_by(TIME, as_dict=True).items():
-        target = np.array(group["target"], dtype=float)
-        features = np.column_stack(
-            [np.array(group[column], dtype=float) for column in factor_columns]
-        )
-        valid = np.isfinite(target) & np.isfinite(features).all(axis=1)
-        if valid.sum() <= len(factor_columns):
-            for row in group.iter_rows(named=True):
-                rows.append({TIME: _key(time), ASSET_ID: row[ASSET_ID], VALUE: None})
-            continue
-        x = np.column_stack(
-            [
-                np.ones(valid.sum()),
-                features[valid],
-            ]
-        )
-        y = target[valid]
-        beta, *_ = np.linalg.lstsq(x, y, rcond=None)
-        residuals = y - x @ beta
-        valid_assets = np.array(group[ASSET_ID], dtype=object)[valid]
-        by_asset = dict(zip(valid_assets, residuals, strict=True))
-        for row in group.iter_rows(named=True):
-            rows.append(
-                {
-                    TIME: _key(time),
-                    ASSET_ID: row[ASSET_ID],
-                    VALUE: by_asset.get(row[ASSET_ID]),
-                }
+    data = _balanced_inner_join(
+        [
+            frame.rename({VALUE: "target"}),
+            *[
+                factor.rename({VALUE: column})
+                for factor, column in zip(
+                    factors,
+                    factor_columns,
+                    strict=True,
+                )
+            ],
+        ]
+    ).sort([TIME, ASSET_ID])
+    target = data.get_column("target").to_numpy().astype(float, copy=False)
+    features = np.column_stack(
+        [
+            data.get_column(column).to_numpy().astype(float, copy=False)
+            for column in factor_columns
+        ]
+    )
+    residuals = np.full(len(data), np.nan, dtype=float)
+    lengths = (
+        data.group_by(TIME, maintain_order=True)
+        .len()
+        .get_column("len")
+        .to_numpy()
+    )
+    offset = 0
+    for length in lengths:
+        end = offset + int(length)
+        group_y = target[offset:end]
+        group_x = features[offset:end]
+        valid = np.isfinite(group_y) & np.isfinite(group_x).all(axis=1)
+        if valid.sum() > len(factor_columns):
+            design = np.column_stack(
+                [
+                    np.ones(valid.sum()),
+                    group_x[valid],
+                ]
             )
-    return pl.DataFrame(rows).sort([TIME, ASSET_ID])
+            coefficients = np.linalg.lstsq(
+                design,
+                group_y[valid],
+                rcond=None,
+            )[0]
+            group_residuals = np.full(int(length), np.nan, dtype=float)
+            group_residuals[valid] = (
+                group_y[valid] - design @ coefficients
+            )
+            residuals[offset:end] = group_residuals
+        offset = end
+    return data.select(TIME, ASSET_ID).with_columns(
+        pl.Series(VALUE, residuals, nan_to_null=True)
+    )
 
 
 def _orthogonalize_one_factor(frame: pl.DataFrame, factor: pl.DataFrame) -> pl.DataFrame:
@@ -165,11 +187,3 @@ def group_percentile(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
         pl.col("x").rank("average").over(TIME, "group")
         / pl.col("x").count().over(TIME, "group"),
     )
-
-
-def _key(value: object) -> object:
-    if isinstance(value, tuple):
-        return value[0]
-    if isinstance(value, list):
-        return value[0]
-    return value

@@ -10,7 +10,7 @@ from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from .core import transformer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
-_RANK_BYTES_PER_WINDOW_VALUE = 16
+_RANK_BYTES_PER_WINDOW_VALUE = 8
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -313,10 +313,20 @@ def _rolling_last_rank_numpy(
 ) -> pl.DataFrame:
     """Rank the last non-null window value in bounded vectorized batches."""
 
-    output: list[pl.DataFrame] = []
-    for group in frame.sort([ASSET_ID, TIME]).partition_by(ASSET_ID):
-        values = group.get_column(VALUE).to_numpy().astype(float, copy=False)
-        result = np.full(len(values), np.nan, dtype=float)
+    ordered = frame.sort([ASSET_ID, TIME])
+    all_values = ordered.get_column(VALUE).to_numpy().astype(float, copy=False)
+    result = np.full(len(all_values), np.nan, dtype=float)
+    lengths = (
+        ordered.group_by(ASSET_ID, maintain_order=True)
+        .len()
+        .get_column("len")
+        .to_numpy()
+    )
+    offset = 0
+    for length in lengths:
+        end_offset = offset + int(length)
+        values = all_values[offset:end_offset]
+        finite = ~np.isnan(values)
         padded = np.pad(
             values,
             (window - 1, 0),
@@ -324,6 +334,17 @@ def _rolling_last_rank_numpy(
             constant_values=np.nan,
         )
         windows = sliding_window_view(padded, window)
+        prefix = np.empty(len(values) + 1, dtype=np.int64)
+        prefix[0] = 0
+        np.cumsum(finite, out=prefix[1:])
+        positions = np.arange(len(values))
+        starts = np.maximum(positions + 1 - window, 0)
+        counts = prefix[positions + 1] - prefix[starts]
+        last_indices = np.where(finite, positions, -1)
+        np.maximum.accumulate(last_indices, out=last_indices)
+        last_values = np.full(len(values), np.nan, dtype=float)
+        has_value = last_indices >= 0
+        last_values[has_value] = values[last_indices[has_value]]
         rows_per_batch = max(
             1,
             _MAX_WORKING_BYTES
@@ -332,25 +353,31 @@ def _rolling_last_rank_numpy(
         for start in range(0, len(values), rows_per_batch):
             end = min(start + rows_per_batch, len(values))
             batch = windows[start:end]
-            valid = ~np.isnan(batch)
-            counts = valid.sum(axis=1)
-            last_indices = window - 1 - np.argmax(valid[:, ::-1], axis=1)
-            last_values = batch[np.arange(end - start), last_indices]
-            less = ((batch < last_values[:, None]) & valid).sum(axis=1)
-            equal = ((batch == last_values[:, None]) & valid).sum(axis=1)
+            batch_last = last_values[start:end]
+            batch_counts = counts[start:end]
+            less = np.count_nonzero(batch < batch_last[:, None], axis=1)
+            equal = np.count_nonzero(batch == batch_last[:, None], axis=1)
             ranks = less + (equal + 1.0) / 2.0
-            eligible = (counts >= min_periods) & (counts > 0)
+            eligible = (batch_counts >= min_periods) & (batch_counts > 0)
             if pct:
                 ranks = np.divide(
                     ranks,
-                    counts,
+                    batch_counts,
                     out=np.full_like(ranks, np.nan, dtype=float),
                     where=eligible,
                 )
-            result[start:end] = np.where(eligible, ranks, np.nan)
-        output.append(
-            group.select(TIME, ASSET_ID).with_columns(pl.Series(VALUE, result))
+            result[offset + start : offset + end] = np.where(
+                eligible,
+                ranks,
+                np.nan,
+            )
+        offset = end_offset
+    if ordered.is_empty():
+        return pl.DataFrame(
+            schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
         )
-    if not output:
-        return pl.DataFrame(schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64})
-    return pl.concat(output).sort([TIME, ASSET_ID])
+    return (
+        ordered.select(TIME, ASSET_ID)
+        .with_columns(pl.Series(VALUE, result, nan_to_null=True))
+        .sort([TIME, ASSET_ID])
+    )

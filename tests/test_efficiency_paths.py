@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -165,3 +166,62 @@ def test_one_factor_orthogonalize_uses_closed_form_residuals() -> None:
     graph.compute()
 
     assert all(math.isclose(value, 0.0, abs_tol=1e-12) for value in values(graph.output.data).values())
+
+
+def test_multi_factor_orthogonalize_matches_lstsq_reference() -> None:
+    rng = np.random.default_rng(11)
+    times = ["2024-01-01"] * 3 + ["2024-01-02"] * 8
+    assets = [f"a{index}" for index in range(3)] + [
+        f"b{index}" for index in range(8)
+    ]
+    first = rng.normal(size=len(times))
+    second = rng.normal(size=len(times))
+    target = 1.0 + 0.7 * first - 1.2 * second
+    target += rng.normal(scale=0.02, size=len(times))
+    target[5] = np.nan
+    first[8] = np.nan
+
+    def frame(values_: np.ndarray) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "time": times[::-1],
+                "asset_id": assets[::-1],
+                "value": values_[::-1],
+            }
+        )
+
+    actual = orthogonalize.operation(
+        frame(target),
+        frame(first),
+        frame(second),
+    )
+    expected = np.full(len(times), np.nan)
+    for time in sorted(set(times)):
+        indices = np.flatnonzero(np.array(times) == time)
+        group_y = target[indices]
+        group_x = np.column_stack([first[indices], second[indices]])
+        valid = np.isfinite(group_y) & np.isfinite(group_x).all(axis=1)
+        if valid.sum() <= 2:
+            continue
+        design = np.column_stack([np.ones(valid.sum()), group_x[valid]])
+        coefficients = np.linalg.lstsq(
+            design,
+            group_y[valid],
+            rcond=None,
+        )[0]
+        expected[indices[valid]] = group_y[valid] - design @ coefficients
+
+    actual_values = (
+        actual.sort(["time", "asset_id"])
+        .get_column("value")
+        .to_numpy()
+        .astype(float, copy=False)
+    )
+    expected_order = np.lexsort((np.array(assets), np.array(times)))
+    np.testing.assert_allclose(
+        actual_values,
+        expected[expected_order],
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )

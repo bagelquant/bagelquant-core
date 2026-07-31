@@ -14,7 +14,17 @@ from bagelquant_core import (
     TraceRule,
 )
 from bagelquant_core.composer import add, mul
-from bagelquant_core.transformer import constant, pct_change, rolling_rank
+from bagelquant_core.transformer import (
+    bfill,
+    constant,
+    ffill,
+    identity,
+    lag,
+    pct_change,
+    rolling_mean,
+    rolling_percentile,
+    rolling_rank,
+)
 from bagelquant_core.transformer.core import transformer
 
 
@@ -89,6 +99,47 @@ def test_trace_rules_cover_window_and_parent_max() -> None:
     ]
 
 
+def test_trace_rules_preserve_exact_shift_fill_and_rolling_dates() -> None:
+    days = [date(2024, 2, day) for day in (1, 2, 3)]
+    domain = Domain(calendar=days, universe=["A"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": days,
+                "asset_id": ["A"] * 3,
+                "value": [1.0, None, 3.0],
+                "observation_date": days,
+                "base_available_date": [days[0], None, days[2]],
+            }
+        ),
+        domain,
+        trace_columns=("observation_date", "base_available_date"),
+    )
+
+    outputs = {
+        "passthrough": identity(source),
+        "shift": lag(source, periods=1),
+        "forward": ffill(source),
+        "backward": bfill(source),
+        "rolling": rolling_mean(source, window=2, min_periods=1),
+    }
+    actual = {
+        name: graph.compute()
+        .collect(include_traces=True)
+        .get_column("base_available_date")
+        .to_list()
+        for name, graph in outputs.items()
+    }
+
+    assert actual == {
+        "passthrough": [days[0], None, days[2]],
+        "shift": [None, days[0], None],
+        "forward": [days[0], days[0], days[2]],
+        "backward": [days[0], days[2], days[2]],
+        "rolling": [days[0], days[0], days[2]],
+    }
+
+
 def test_custom_operator_with_traces_must_declare_trace_rule() -> None:
     @transformer
     def unsafe(frame: pl.DataFrame) -> pl.DataFrame:
@@ -131,6 +182,40 @@ def test_multiple_outputs_share_one_final_collection() -> None:
 
     assert list(result) == ["sum", "product"]
     assert runtime.materializations == 1
+
+
+def test_sibling_eager_outputs_reuse_materialized_input() -> None:
+    source = _traced_panel()
+    runtime = ExecutionRuntime()
+
+    Graph(
+        outputs=[
+            rolling_rank(source, window=2, name="rank"),
+            rolling_percentile(source, window=2, name="percentile"),
+        ]
+    ).compute(runtime=runtime)
+
+    assert runtime.eager_barriers == 2
+    assert runtime.materializations == 2
+
+
+def test_multiple_outputs_reuse_exact_trace_plan() -> None:
+    source = _traced_panel()
+    changed = pct_change(source, periods=1, name="changed")
+    first = add(changed, source, name="first")
+    second = mul(changed, source, name="second")
+    runtime = ExecutionRuntime()
+
+    outputs = Graph(outputs=[first, second]).compute(runtime=runtime)
+
+    assert runtime.materializations == 1
+    for output in outputs.values():
+        traced = output.collect(include_traces=True)
+        assert traced.get_column("base_available_date").to_list() == [
+            date(2024, 1, 2),
+            date(2024, 1, 3),
+            date(2024, 1, 4),
+        ]
 
 
 def test_graph_execution_never_hashes_full_frames(monkeypatch) -> None:

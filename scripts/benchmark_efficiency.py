@@ -7,7 +7,7 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,9 +15,19 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from bagelquant_core import Domain, ExecutionRuntime, Panel
-from bagelquant_core.composer import add, rolling_corr, rolling_ols, sum_frames
+from bagelquant_core import Domain, ExecutionRuntime, Graph, Panel
+from bagelquant_core.composer import (
+    add,
+    orthogonalize,
+    rolling_corr,
+    rolling_elastic_net,
+    rolling_lasso,
+    rolling_ols,
+    rolling_ridge,
+    sum_frames,
+)
 from bagelquant_core.transformer import (
+    constant,
     ewm_mean,
     rolling_mean,
     rolling_percentile,
@@ -70,6 +80,18 @@ DEFAULT_CASES = (
     "runtime_cache_miss",
     "runtime_cache_hit",
 )
+AVAILABLE_CASES = (
+    *DEFAULT_CASES,
+    "rolling_ols_3f",
+    "rolling_ridge",
+    "rolling_lasso",
+    "rolling_elastic_net",
+    "orthogonalize_3f",
+    "traced_rolling_mean",
+    "traced_multi_output_5",
+    "eager_rank_pair",
+    "rolling_chain_10",
+)
 WINDOW_CASES = {
     "rolling_mean",
     "rolling_rank",
@@ -77,6 +99,14 @@ WINDOW_CASES = {
     "rolling_zscore",
     "rolling_corr",
     "rolling_ols",
+    "rolling_ols_3f",
+    "rolling_ridge",
+    "rolling_lasso",
+    "rolling_elastic_net",
+    "traced_rolling_mean",
+    "traced_multi_output_5",
+    "eager_rank_pair",
+    "rolling_chain_10",
 }
 
 
@@ -132,8 +162,34 @@ def _case_runner(
     other: Panel,
     *,
     window: int,
-) -> Callable[[], tuple[Panel, ExecutionRuntime | None]]:
+) -> Callable[
+    [],
+    tuple[Panel | Mapping[str, Panel], ExecutionRuntime | None],
+]:
     min_periods = max(1, (window * 4 + 4) // 5)
+    square = Panel.from_domain(
+        base.lazy(dense=False).with_columns(
+            (pl.col("value") ** 2).alias("value")
+        ),
+        base.domain,
+        name="square",
+    )
+    cube = Panel.from_domain(
+        base.lazy(dense=False).with_columns(
+            (pl.col("value") ** 3).alias("value")
+        ),
+        base.domain,
+        name="cube",
+    )
+    traced = Panel.from_domain(
+        base.lazy(dense=False).with_columns(
+            pl.col("time").alias("observation_date"),
+            pl.col("time").alias("base_available_date"),
+        ),
+        base.domain,
+        name="traced",
+        trace_columns=("observation_date", "base_available_date"),
+    )
     if case == "runtime_cache_hit":
         graph = zscore(add(base, other), name="cached_zscore")
         runtime = ExecutionRuntime()
@@ -144,7 +200,10 @@ def _case_runner(
 
         return cached
 
-    def execute() -> tuple[Panel, ExecutionRuntime | None]:
+    def execute() -> tuple[
+        Panel | Mapping[str, Panel],
+        ExecutionRuntime | None,
+    ]:
         if case == "domain_materialization":
             output = Panel.from_domain(base.data, base.domain).output
             output.data
@@ -188,6 +247,81 @@ def _case_runner(
             )
         elif case == "rolling_ols":
             graph = rolling_ols(other, base, window=window)
+        elif case == "rolling_ols_3f":
+            graph = rolling_ols(
+                other,
+                base,
+                square,
+                cube,
+                window=window,
+            )
+        elif case == "rolling_ridge":
+            graph = rolling_ridge(other, base, square, window=window)
+        elif case == "rolling_lasso":
+            graph = rolling_lasso(
+                other,
+                base,
+                square,
+                window=window,
+                max_iter=100,
+            )
+        elif case == "rolling_elastic_net":
+            graph = rolling_elastic_net(
+                other,
+                base,
+                square,
+                window=window,
+                max_iter=100,
+            )
+        elif case == "orthogonalize_3f":
+            graph = orthogonalize(other, base, square, cube)
+        elif case == "traced_rolling_mean":
+            graph = rolling_mean(
+                traced,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "traced_multi_output_5":
+            shared = rolling_mean(
+                traced,
+                window=window,
+                min_periods=min_periods,
+            )
+            graph = Graph(
+                outputs=[
+                    add(
+                        shared,
+                        constant(shared, value=float(index)),
+                        name=f"traced_output_{index}",
+                    )
+                    for index in range(5)
+                ]
+            )
+        elif case == "eager_rank_pair":
+            graph = Graph(
+                outputs=[
+                    rolling_rank(
+                        base,
+                        window=window,
+                        min_periods=min_periods,
+                        name="rank",
+                    ),
+                    rolling_percentile(
+                        base,
+                        window=window,
+                        min_periods=min_periods,
+                        name="percentile",
+                    ),
+                ]
+            )
+        elif case == "rolling_chain_10":
+            graph = base
+            for _ in range(10):
+                graph = rolling_mean(
+                    graph,
+                    window=window,
+                    min_periods=min_periods,
+                )
         elif case == "sum_10":
             graph = sum_frames(*([base, other] * 5))
         elif case == "runtime_cache_miss":
@@ -199,7 +333,7 @@ def _case_runner(
     return execute
 
 
-def _output_summary(output: Panel) -> dict[str, int | float | None]:
+def _panel_summary(output: Panel) -> dict[str, int | float | None]:
     frame = output.collect(dense=False)
     values = frame.get_column("value")
     numeric = values.fill_nan(None)
@@ -209,6 +343,28 @@ def _output_summary(output: Panel) -> dict[str, int | float | None]:
         "sum": numeric.sum(),
         "mean": numeric.mean(),
     }
+
+
+def _output_summary(
+    output: Panel | Mapping[str, Panel],
+) -> dict[str, Any]:
+    if isinstance(output, Panel):
+        return _panel_summary(output)
+    return {
+        name: _panel_summary(panel)
+        for name, panel in output.items()
+    }
+
+
+def _plan_sort_count(output: Panel | Mapping[str, Panel]) -> int:
+    panels = [output] if isinstance(output, Panel) else output.values()
+    return sum(
+        panel.lazy(dense=False)
+        .explain(optimized=True)
+        .upper()
+        .count("SORT BY")
+        for panel in panels
+    )
 
 
 def _peak_rss_bytes() -> int:
@@ -229,7 +385,7 @@ def _run_worker(args: argparse.Namespace) -> None:
         window=args.worker_window,
     )
     timings: list[float] = []
-    output: Panel | None = None
+    output: Panel | Mapping[str, Panel] | None = None
     runtime: ExecutionRuntime | None = None
     for _ in range(args.repeats):
         start = time.perf_counter()
@@ -250,6 +406,7 @@ def _run_worker(args: argparse.Namespace) -> None:
         "peak_rss_bytes": _peak_rss_bytes(),
         "materializations": 0 if runtime is None else runtime.materializations,
         "eager_barriers": 0 if runtime is None else runtime.eager_barriers,
+        "sort_nodes": _plan_sort_count(output),
         "output": _output_summary(output),
     }
     print(json.dumps(payload, sort_keys=True))
@@ -295,7 +452,7 @@ def _selected_universes(value: str) -> tuple[str, ...]:
 
 def _selected_cases(values: Sequence[str] | None) -> tuple[str, ...]:
     selected = DEFAULT_CASES if not values else tuple(values)
-    unknown = sorted(set(selected) - set(DEFAULT_CASES))
+    unknown = sorted(set(selected) - set(AVAILABLE_CASES))
     if unknown:
         raise ValueError(f"unknown benchmark cases: {unknown}")
     return selected
@@ -390,7 +547,8 @@ def main() -> None:
             f"{item['name']:24s} {item['universe']:7s}{window:11s} "
             f"median={item['median_seconds']:8.4f}s "
             f"rss={item['peak_rss_bytes'] / (1024**2):8.1f}MiB "
-            f"mat={item['materializations']} eager={item['eager_barriers']}"
+            f"mat={item['materializations']} eager={item['eager_barriers']} "
+            f"sort={item['sort_nodes']}"
         )
 
 

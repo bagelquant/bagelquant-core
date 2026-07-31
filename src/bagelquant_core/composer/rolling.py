@@ -7,14 +7,20 @@ from numbers import Real
 
 import numpy as np
 import polars as pl
-from numpy.lib.stride_tricks import sliding_window_view
 
-from ..frame import ASSET_ID, TIME, VALUE, panel_like
+from ..frame import (
+    ASSET_ID,
+    TIME,
+    VALUE,
+    _balanced_inner_join,
+    panel_like,
+)
 from .core import composer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
-_OLS_ARRAY_COPIES = 4
 _SINGLE_FACTOR_OLS_ARRAYS = 16
+_GRAM_CONDITION_LIMIT = 1e-3
+_RIDGE_CONDITION_LIMIT = 1e-10
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -102,62 +108,20 @@ def _validate_positive_integer(value: int, *, name: str) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
-def _rolling_regression(
+def _joined_regression_data(
     target: pl.DataFrame,
     factors: tuple[pl.DataFrame, ...],
-    *,
-    window: int,
-    fit: Callable[[np.ndarray, np.ndarray], np.ndarray],
-) -> pl.DataFrame:
-    _validate_window(window, window)
+) -> tuple[pl.DataFrame, list[str]]:
     if not factors:
         raise ValueError("rolling regression requires at least one factor")
 
-    data = target.rename({VALUE: "target"})
-    factor_columns: list[str] = []
-    for index, factor in enumerate(factors):
-        column = f"factor_{index}"
-        factor_columns.append(column)
-        data = data.join(
-            factor.rename({VALUE: column}),
-            on=[TIME, ASSET_ID],
-            how="inner",
-        )
-    data = data.sort([ASSET_ID, TIME])
-
-    rows: list[dict[str, object]] = []
-    for group in data.partition_by(ASSET_ID):
-        target_values = np.array(group["target"], dtype=float)
-        features = np.column_stack(
-            [np.array(group[column], dtype=float) for column in factor_columns]
-        )
-        for current, row in enumerate(group.iter_rows(named=True)):
-            prediction: float | None = None
-            if current >= window and np.isfinite(features[current]).all():
-                train_y = target_values[current - window : current]
-                train_x = features[current - window : current]
-                valid = np.isfinite(train_y) & np.isfinite(train_x).all(axis=1)
-                if valid.any():
-                    design = np.column_stack([np.ones(valid.sum()), train_x[valid]])
-                    coefficients = fit(design, train_y[valid])
-                    prediction = float(
-                        np.r_[1.0, features[current]] @ coefficients
-                    )
-            rows.append(
-                {
-                    TIME: row[TIME],
-                    ASSET_ID: row[ASSET_ID],
-                    VALUE: prediction,
-                }
-            )
-    return pl.DataFrame(
-        rows,
-        schema={
-            TIME: data.schema[TIME],
-            ASSET_ID: data.schema[ASSET_ID],
-            VALUE: pl.Float64,
-        },
-    ).sort([TIME, ASSET_ID])
+    factor_columns = [f"factor_{index}" for index in range(len(factors))]
+    frames = [target.rename({VALUE: "target"})]
+    frames.extend(
+        factor.rename({VALUE: column})
+        for factor, column in zip(factors, factor_columns, strict=True)
+    )
+    return _balanced_inner_join(frames).sort([ASSET_ID, TIME]), factor_columns
 
 
 def _rolling_ols(
@@ -172,17 +136,7 @@ def _rolling_ols(
     if not factors:
         raise ValueError("rolling regression requires at least one factor")
 
-    data = target.rename({VALUE: "target"})
-    factor_columns: list[str] = []
-    for index, factor in enumerate(factors):
-        column = f"factor_{index}"
-        factor_columns.append(column)
-        data = data.join(
-            factor.rename({VALUE: column}),
-            on=[TIME, ASSET_ID],
-            how="inner",
-        )
-    data = data.sort([ASSET_ID, TIME])
+    data, factor_columns = _joined_regression_data(target, factors)
 
     if len(factor_columns) == 1:
         return _rolling_single_factor_ols(
@@ -191,99 +145,308 @@ def _rolling_ols(
             window=window,
         )
 
-    output: list[pl.DataFrame] = []
-    feature_count = len(factor_columns)
-    coefficient_count = feature_count + 1
-    bytes_per_prediction = (
-        window
-        * coefficient_count
-        * np.dtype(np.float64).itemsize
-        * _OLS_ARRAY_COPIES
+    return _rolling_gram_regression(
+        data,
+        factor_columns=factor_columns,
+        window=window,
+        method="ols",
+    )
+
+
+def _rolling_gram_regression(
+    data: pl.DataFrame,
+    *,
+    factor_columns: list[str],
+    window: int,
+    method: str,
+    alpha: float = 0.0,
+    l1_ratio: float = 0.0,
+    max_iter: int = 0,
+    tolerance: float = 0.0,
+) -> pl.DataFrame:
+    """Predict rolling regressions from bounded sufficient statistics."""
+
+    coefficient_count = len(factor_columns) + 1
+    arrays_per_row = (
+        2 * coefficient_count * coefficient_count
+        + 6 * coefficient_count
+        + 8
     )
     rows_per_batch = max(
         1,
-        _MAX_WORKING_BYTES // max(bytes_per_prediction, 1),
+        _MAX_WORKING_BYTES
+        // (np.dtype(np.float64).itemsize * arrays_per_row)
+        - window,
     )
 
-    for group in data.partition_by(ASSET_ID):
-        target_values = group.get_column("target").to_numpy().astype(
-            float, copy=False
-        )
-        features = np.column_stack(
-            [
-                group.get_column(column).to_numpy().astype(float, copy=False)
-                for column in factor_columns
-            ]
-        )
-        prediction = np.full(len(group), np.nan, dtype=float)
-        prediction_count = len(group) - window
-        if prediction_count > 0:
-            target_windows = sliding_window_view(target_values, window)
-            feature_windows = sliding_window_view(
-                features,
-                (window, feature_count),
-            )[:, 0, :, :]
+    target_values = data.get_column("target").to_numpy().astype(
+        float, copy=False
+    )
+    features = np.column_stack(
+        [
+            data.get_column(column).to_numpy().astype(float, copy=False)
+            for column in factor_columns
+        ]
+    )
+    prediction = np.full(len(data), np.nan, dtype=float)
+    lengths = (
+        data.group_by(ASSET_ID, maintain_order=True)
+        .len()
+        .get_column("len")
+        .to_numpy()
+    )
+    group_offset = 0
+    for length in lengths:
+        group_end = group_offset + int(length)
+        group_y = target_values[group_offset:group_end]
+        group_x = features[group_offset:group_end]
+        prediction_count = int(length) - window
 
-            for start in range(0, prediction_count, rows_per_batch):
-                end = min(start + rows_per_batch, prediction_count)
-                train_y = target_windows[start:end]
-                train_x = feature_windows[start:end]
-                current_x = features[window + start : window + end]
-                valid = np.isfinite(train_y) & np.isfinite(train_x).all(axis=2)
+        for start in range(0, max(prediction_count, 0), rows_per_batch):
+            end = min(start + rows_per_batch, prediction_count)
+            batch_size = end - start
+            segment_y = group_y[start : window + end]
+            segment_x = group_x[start : window + end]
+            valid = np.isfinite(segment_y) & np.isfinite(segment_x).all(axis=1)
+            design = np.zeros((len(segment_y), coefficient_count), dtype=float)
+            design[:, 0] = valid
+            design[:, 1:] = np.where(valid[:, None], segment_x, 0.0)
+            valid_y = np.where(valid, segment_y, 0.0)
 
-                design = np.zeros(
-                    (end - start, window, coefficient_count),
-                    dtype=float,
+            counts = _window_sum(valid.astype(np.int64), window, batch_size)
+            gram = _window_sum(
+                np.einsum("ni,nj->nij", design, design),
+                window,
+                batch_size,
+            )
+            rhs = _window_sum(
+                design * valid_y[:, None],
+                window,
+                batch_size,
+            )
+            current_x = group_x[window + start : window + end]
+            eligible = (counts > 0) & np.isfinite(current_x).all(axis=1)
+            current_design = np.column_stack(
+                [np.ones(batch_size), current_x]
+            )
+
+            if method == "ols":
+                coefficients, fast = _solve_ols_from_gram(
+                    gram,
+                    rhs,
+                    counts=counts,
+                    eligible=eligible,
                 )
-                design[:, :, 0] = valid
-                design[:, :, 1:] = np.where(valid[:, :, None], train_x, 0.0)
-                valid_target = np.where(valid, train_y, 0.0)
-                valid_counts = valid.sum(axis=1)
-                coefficients, ambiguous = _batched_lstsq(
-                    design,
-                    valid_target,
-                    row_counts=valid_counts,
+                fallback = eligible & ~fast
+            elif method == "ridge":
+                coefficients, fast = _solve_ridge_from_gram(
+                    gram,
+                    rhs,
+                    eligible=eligible,
+                    alpha=alpha,
                 )
-                eligible = valid.any(axis=1) & np.isfinite(current_x).all(axis=1)
+                fallback = eligible & ~fast
+            else:
+                coefficients = _solve_elastic_from_gram(
+                    gram,
+                    rhs,
+                    counts=counts,
+                    eligible=eligible,
+                    alpha=alpha,
+                    l1_ratio=l1_ratio,
+                    max_iter=max_iter,
+                    tolerance=tolerance,
+                )
+                fallback = np.zeros(batch_size, dtype=bool)
 
-                for index in np.flatnonzero(ambiguous & eligible):
-                    selected = valid[index]
-                    exact_design = np.column_stack(
-                        [
-                            np.ones(selected.sum()),
-                            train_x[index][selected],
-                        ]
-                    )
+            for index in np.flatnonzero(fallback):
+                window_start = start + index
+                exact_y = group_y[window_start : window_start + window]
+                exact_x = group_x[window_start : window_start + window]
+                exact_valid = (
+                    np.isfinite(exact_y)
+                    & np.isfinite(exact_x).all(axis=1)
+                )
+                exact_design = np.column_stack(
+                    [np.ones(exact_valid.sum()), exact_x[exact_valid]]
+                )
+                if method == "ols":
                     coefficients[index] = _ols_fit(
                         exact_design,
-                        train_y[index][selected],
+                        exact_y[exact_valid],
+                    )
+                else:
+                    coefficients[index] = _ridge_fit(alpha)(
+                        exact_design,
+                        exact_y[exact_valid],
                     )
 
-                current_design = np.column_stack(
-                    [np.ones(end - start), current_x]
-                )
-                values = np.einsum(
-                    "ij,ij->i",
-                    current_design,
-                    coefficients,
-                )
-                prediction[window + start : window + end] = np.where(
-                    eligible,
-                    values,
-                    np.nan,
-                )
-
-        output.append(
-            group.select(TIME, ASSET_ID).with_columns(
-                pl.Series(VALUE, prediction, nan_to_null=True)
+            values = np.einsum("ij,ij->i", current_design, coefficients)
+            prediction_start = group_offset + window + start
+            prediction_end = group_offset + window + end
+            prediction[prediction_start:prediction_end] = np.where(
+                eligible,
+                values,
+                np.nan,
             )
-        )
+        group_offset = group_end
 
-    if not output:
+    if data.is_empty():
         return pl.DataFrame(
             schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
         )
-    return pl.concat(output).sort([TIME, ASSET_ID])
+    return (
+        data.select(TIME, ASSET_ID)
+        .with_columns(
+            pl.Series(VALUE, prediction, nan_to_null=True)
+        )
+        .sort([TIME, ASSET_ID])
+    )
+
+
+def _solve_ols_from_gram(
+    gram: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    counts: np.ndarray,
+    eligible: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    eigenvalues, eigenvectors = np.linalg.eigh(gram)
+    eigenvalues = np.maximum(eigenvalues, 0.0)
+    singular_values = np.sqrt(eigenvalues)
+    cutoff = (
+        np.finfo(np.float64).eps
+        * np.maximum(counts, gram.shape[-1])[:, None]
+        * singular_values[:, -1:]
+    )
+    full_rank = (singular_values > cutoff).all(axis=1)
+    well_conditioned = (
+        singular_values[:, 0]
+        > _GRAM_CONDITION_LIMIT * singular_values[:, -1]
+    )
+    fast = eligible & full_rank & well_conditioned
+    inverse = np.divide(
+        1.0,
+        eigenvalues,
+        out=np.zeros_like(eigenvalues),
+        where=fast[:, None],
+    )
+    projected = np.einsum(
+        "bij,bj->bi",
+        eigenvectors.swapaxes(-2, -1),
+        rhs,
+    )
+    coefficients = np.einsum(
+        "bij,bj->bi",
+        eigenvectors,
+        inverse * projected,
+    )
+    return coefficients, fast
+
+
+def _solve_ridge_from_gram(
+    gram: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    eligible: np.ndarray,
+    alpha: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    penalized = gram.copy()
+    diagonal = np.arange(1, gram.shape[-1])
+    penalized[:, diagonal, diagonal] += alpha
+    eigenvalues, eigenvectors = np.linalg.eigh(penalized)
+    eigenvalues = np.maximum(eigenvalues, 0.0)
+    fast = (
+        eligible
+        & (eigenvalues[:, 0] > 0)
+        & (
+            eigenvalues[:, 0]
+            > _RIDGE_CONDITION_LIMIT * eigenvalues[:, -1]
+        )
+    )
+    inverse = np.divide(
+        1.0,
+        eigenvalues,
+        out=np.zeros_like(eigenvalues),
+        where=fast[:, None],
+    )
+    projected = np.einsum(
+        "bij,bj->bi",
+        eigenvectors.swapaxes(-2, -1),
+        rhs,
+    )
+    coefficients = np.einsum(
+        "bij,bj->bi",
+        eigenvectors,
+        inverse * projected,
+    )
+    return coefficients, fast
+
+
+def _solve_elastic_from_gram(
+    gram: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    counts: np.ndarray,
+    eligible: np.ndarray,
+    alpha: float,
+    l1_ratio: float,
+    max_iter: int,
+    tolerance: float,
+) -> np.ndarray:
+    coefficient_count = gram.shape[-1]
+    coefficients = np.zeros((len(gram), coefficient_count), dtype=float)
+    coefficients[:, 0] = np.divide(
+        rhs[:, 0],
+        counts,
+        out=np.zeros(len(gram), dtype=float),
+        where=counts > 0,
+    )
+    active = eligible.copy()
+    shrinkage = alpha * l1_ratio
+    ridge_penalty = alpha * (1.0 - l1_ratio)
+
+    for _ in range(max_iter):
+        previous = coefficients.copy()
+        for index in range(coefficient_count):
+            numerator = (
+                rhs[:, index]
+                - np.einsum(
+                    "bi,bi->b",
+                    gram[:, index, :],
+                    coefficients,
+                )
+                + gram[:, index, index] * coefficients[:, index]
+            )
+            if index == 0:
+                updated = np.divide(
+                    numerator,
+                    gram[:, index, index],
+                    out=np.full(len(gram), np.nan),
+                    where=gram[:, index, index] != 0,
+                )
+            else:
+                denominator = gram[:, index, index] + ridge_penalty
+                updated = np.divide(
+                    np.sign(numerator)
+                    * np.maximum(np.abs(numerator) - shrinkage, 0.0),
+                    denominator,
+                    out=np.full(len(gram), np.nan),
+                    where=denominator != 0,
+                )
+            coefficients[:, index] = np.where(
+                active,
+                updated,
+                coefficients[:, index],
+            )
+        converged = (
+            np.max(np.abs(coefficients - previous), axis=1)
+            <= tolerance
+        )
+        active &= ~converged
+        if not active.any():
+            break
+    return coefficients
 
 
 def _rolling_single_factor_ols(
@@ -294,7 +457,6 @@ def _rolling_single_factor_ols(
 ) -> pl.DataFrame:
     """Predict single-factor OLS from prior-window sufficient statistics."""
 
-    output: list[pl.DataFrame] = []
     itemsize = np.dtype(np.float64).itemsize
     rows_per_batch = max(
         1,
@@ -302,21 +464,31 @@ def _rolling_single_factor_ols(
     )
     epsilon = np.finfo(np.float64).eps
 
-    for group in data.partition_by(ASSET_ID):
-        target_values = group.get_column("target").to_numpy().astype(
-            float, copy=False
-        )
-        factor_values = group.get_column(factor_column).to_numpy().astype(
-            float, copy=False
-        )
-        prediction = np.full(len(group), np.nan, dtype=float)
-        prediction_count = len(group) - window
+    target_values = data.get_column("target").to_numpy().astype(
+        float, copy=False
+    )
+    factor_values = data.get_column(factor_column).to_numpy().astype(
+        float, copy=False
+    )
+    prediction = np.full(len(data), np.nan, dtype=float)
+    lengths = (
+        data.group_by(ASSET_ID, maintain_order=True)
+        .len()
+        .get_column("len")
+        .to_numpy()
+    )
+    group_offset = 0
+    for length in lengths:
+        group_end = group_offset + int(length)
+        group_y = target_values[group_offset:group_end]
+        group_x = factor_values[group_offset:group_end]
+        prediction_count = int(length) - window
 
         for start in range(0, max(prediction_count, 0), rows_per_batch):
             end = min(start + rows_per_batch, prediction_count)
             batch_size = end - start
-            train_y = target_values[start : window + end]
-            train_x = factor_values[start : window + end]
+            train_y = group_y[start : window + end]
+            train_x = group_x[start : window + end]
             valid = np.isfinite(train_y) & np.isfinite(train_x)
             valid_y = np.where(valid, train_y, 0.0)
             valid_count = valid.sum()
@@ -340,7 +512,7 @@ def _rolling_single_factor_ols(
                 window,
                 batch_size,
             )
-            current_x = factor_values[window + start : window + end]
+            current_x = group_x[window + start : window + end]
             eligible = (counts > 0) & np.isfinite(current_x)
             sum_x = sum_shifted_x + counts * factor_shift
             sum_xx = (
@@ -411,8 +583,8 @@ def _rolling_single_factor_ols(
 
             for index in np.flatnonzero(eligible & ~fast):
                 window_start = start + index
-                exact_y = target_values[window_start : window_start + window]
-                exact_x = factor_values[window_start : window_start + window]
+                exact_y = group_y[window_start : window_start + window]
+                exact_x = group_x[window_start : window_start + window]
                 exact_valid = np.isfinite(exact_y) & np.isfinite(exact_x)
                 design = np.column_stack(
                     [np.ones(exact_valid.sum()), exact_x[exact_valid]]
@@ -423,19 +595,22 @@ def _rolling_single_factor_ols(
                     + current_x[index] * coefficients[1]
                 )
 
-            prediction[window + start : window + end] = values
+            prediction_start = group_offset + window + start
+            prediction_end = group_offset + window + end
+            prediction[prediction_start:prediction_end] = values
+        group_offset = group_end
 
-        output.append(
-            group.select(TIME, ASSET_ID).with_columns(
-                pl.Series(VALUE, prediction, nan_to_null=True)
-            )
-        )
-
-    if not output:
+    if data.is_empty():
         return pl.DataFrame(
             schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
         )
-    return pl.concat(output).sort([TIME, ASSET_ID])
+    return (
+        data.select(TIME, ASSET_ID)
+        .with_columns(
+            pl.Series(VALUE, prediction, nan_to_null=True)
+        )
+        .sort([TIME, ASSET_ID])
+    )
 
 
 def _window_sum(
@@ -445,44 +620,13 @@ def _window_sum(
 ) -> np.ndarray:
     """Return fixed-size rolling sums without materializing window views."""
 
-    prefix = np.empty(len(values) + 1, dtype=values.dtype)
+    prefix = np.empty(
+        (len(values) + 1, *values.shape[1:]),
+        dtype=values.dtype,
+    )
     prefix[0] = 0
-    np.cumsum(values, out=prefix[1:])
+    np.cumsum(values, axis=0, out=prefix[1:])
     return prefix[window : window + output_size] - prefix[:output_size]
-
-
-def _batched_lstsq(
-    design: np.ndarray,
-    target: np.ndarray,
-    *,
-    row_counts: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Solve minimum-norm least squares with NumPy's default rank cutoff."""
-
-    left, singular_values, right = np.linalg.svd(
-        design,
-        full_matrices=False,
-    )
-    relative_cutoff = np.finfo(design.dtype).eps * np.maximum(
-        row_counts,
-        design.shape[-1],
-    )
-    cutoff = relative_cutoff[:, None] * singular_values[:, :1]
-    inverse = np.divide(
-        1.0,
-        singular_values,
-        out=np.zeros_like(singular_values),
-        where=singular_values > cutoff,
-    )
-    projected = np.einsum("bwi,bw->bi", left, target)
-    coefficients = np.einsum(
-        "bij,bj->bi",
-        right.swapaxes(-2, -1),
-        inverse * projected,
-    )
-    tolerance = np.maximum(cutoff, np.finfo(design.dtype).tiny) * 1e-8
-    ambiguous = (np.abs(singular_values - cutoff) <= tolerance).any(axis=1)
-    return coefficients, ambiguous
 
 
 def _ols_fit(design: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -502,47 +646,6 @@ def _ridge_fit(alpha: float) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
     return fit
 
 
-def _elastic_fit(
-    *,
-    alpha: float,
-    l1_ratio: float,
-    max_iter: int,
-    tolerance: float,
-) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
-    def fit(design: np.ndarray, target: np.ndarray) -> np.ndarray:
-        coefficients = np.zeros(design.shape[1])
-        coefficients[0] = target.mean()
-        for _ in range(max_iter):
-            previous = coefficients.copy()
-            for index in range(design.shape[1]):
-                residual = (
-                    target
-                    - design @ coefficients
-                    + design[:, index] * coefficients[index]
-                )
-                numerator = design[:, index] @ residual
-                if index == 0:
-                    coefficients[index] = numerator / (
-                        design[:, index] @ design[:, index]
-                    )
-                    continue
-                denominator = (
-                    design[:, index] @ design[:, index]
-                    + alpha * (1.0 - l1_ratio)
-                )
-                shrinkage = alpha * l1_ratio
-                coefficients[index] = (
-                    np.sign(numerator)
-                    * max(abs(numerator) - shrinkage, 0.0)
-                    / denominator
-                )
-            if np.max(np.abs(coefficients - previous)) <= tolerance:
-                break
-        return coefficients
-
-    return fit
-
-
 @composer
 def rolling_ols(
     target: pl.DataFrame, *factors: pl.DataFrame, window: int
@@ -558,8 +661,14 @@ def rolling_ridge(
     alpha: float = 1.0,
 ) -> pl.DataFrame:
     _validate_non_negative_real(alpha, name="rolling_ridge alpha")
-    return _rolling_regression(
-        target, factors, window=window, fit=_ridge_fit(float(alpha))
+    _validate_window(window, window)
+    data, factor_columns = _joined_regression_data(target, factors)
+    return _rolling_gram_regression(
+        data,
+        factor_columns=factor_columns,
+        window=window,
+        method="ridge",
+        alpha=float(alpha),
     )
 
 
@@ -584,16 +693,17 @@ def rolling_elastic_net(
         )
     _validate_positive_integer(max_iter, name="rolling_elastic_net max_iter")
     _validate_non_negative_real(tolerance, name="rolling_elastic_net tolerance")
-    return _rolling_regression(
-        target,
-        factors,
+    _validate_window(window, window)
+    data, factor_columns = _joined_regression_data(target, factors)
+    return _rolling_gram_regression(
+        data,
+        factor_columns=factor_columns,
         window=window,
-        fit=_elastic_fit(
-            alpha=float(alpha),
-            l1_ratio=float(l1_ratio),
-            max_iter=max_iter,
-            tolerance=float(tolerance),
-        ),
+        method="elastic",
+        alpha=float(alpha),
+        l1_ratio=float(l1_ratio),
+        max_iter=max_iter,
+        tolerance=float(tolerance),
     )
 
 

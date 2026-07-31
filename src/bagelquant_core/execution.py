@@ -22,6 +22,9 @@ from .panel import CategoryPanel, Domain, Panel
 
 logger = logging.getLogger(__name__)
 
+_TIME_ASSET_ORDER = "time_asset"
+_ASSET_TIME_ORDER = "asset_time"
+
 
 @dataclass(frozen=True, slots=True)
 class PlanValue:
@@ -35,6 +38,10 @@ class PlanValue:
     default_value: float | None = None
     categorical: bool = False
     cacheable: bool = True
+    key_identity: str | None = None
+    order: str | None = None
+    trace_key_identity: str | None = None
+    trace_order: str | None = None
 
 
 class ExecutionRuntime:
@@ -46,6 +53,7 @@ class ExecutionRuntime:
         self.cache: dict[str, Panel] = {}
         self._plan_cache: dict[str, PlanValue] = {}
         self._alignment = alignment
+        self._active_eager_inputs: dict[str, pl.DataFrame] | None = None
         self.materializations = 0
         self.eager_barriers = 0
 
@@ -57,34 +65,35 @@ class ExecutionRuntime:
     ) -> Panel | Mapping[str, Panel]:
         if not isinstance(graph, Graph):
             raise TypeError("ExecutionRuntime.run expects a Graph")
-        evaluated: dict[int, PlanValue] = {}
-        if len(graph._outputs) == 1:
-            node = graph._outputs[0]
-            output = self._materialize_node(
-                node,
-                self._run_node(node, evaluated),
-                dense_output=dense_output,
-            )
-            node.set_output(output)
-            return output
+        if self._active_eager_inputs is not None:
+            raise RuntimeError("ExecutionRuntime does not support nested runs")
+        self._active_eager_inputs = {}
+        try:
+            evaluated: dict[int, PlanValue] = {}
+            plans = [
+                (node, self._run_node(node, evaluated))
+                for node in graph._outputs
+            ]
+            if dense_output:
+                results = self._materialize_many(plans)
+                if len(plans) == 1:
+                    return results[plans[0][0].name]
+                return results
 
-        plans = [
-            (node, self._run_node(node, evaluated))
-            for node in graph._outputs
-        ]
-        if dense_output:
-            return self._materialize_many(plans)
-
-        results: dict[str, Panel] = {}
-        for node, plan in plans:
-            output = self._materialize_node(
-                node,
-                plan,
-                dense_output=dense_output,
-            )
-            node.set_output(output)
-            results[node.name] = output
-        return results
+            results: dict[str, Panel] = {}
+            for node, plan in plans:
+                output = self._materialize_node(
+                    node,
+                    plan,
+                    dense_output=False,
+                )
+                node.set_output(output)
+                results[node.name] = output
+            if len(plans) == 1:
+                return results[plans[0][0].name]
+            return results
+        finally:
+            self._active_eager_inputs = None
 
     def _materialize_many(
         self,
@@ -95,6 +104,7 @@ class ExecutionRuntime:
         results: dict[str, Panel] = {}
         pending: list[tuple[Node, PlanValue, Panel]] = []
         for node, plan in outputs:
+            plan = self._expand_implicit(plan)
             cached = self.cache.get(plan.identity) if plan.cacheable else None
             if cached is not None:
                 node.set_output(cached)
@@ -114,19 +124,71 @@ class ExecutionRuntime:
             pending.append((node, plan, panel))
 
         if pending:
+            value_plans = [
+                plan.domain.align_lazy(plan.frame)
+                for _, plan, _ in pending
+            ]
+            trace_plans: dict[
+                tuple[str, str, str | None, tuple[str, ...]],
+                pl.LazyFrame,
+            ] = {}
+            trace_keys: list[
+                tuple[str, str, str | None, tuple[str, ...]] | None
+            ] = []
+            for _, plan, _ in pending:
+                if (
+                    plan.trace_frame is None
+                    or plan.trace_identity is None
+                ):
+                    trace_keys.append(None)
+                    continue
+                key = (
+                    plan.domain.signature,
+                    plan.trace_identity,
+                    plan.trace_key_identity,
+                    plan.trace_columns,
+                )
+                trace_keys.append(key)
+                trace_plans.setdefault(
+                    key,
+                    plan.domain.grid_lazy()
+                    .join(
+                        plan.trace_frame.select(
+                            TIME,
+                            ASSET_ID,
+                            *plan.trace_columns,
+                        ),
+                        on=[TIME, ASSET_ID],
+                        how="left",
+                        maintain_order="left",
+                    )
+                    .sort([TIME, ASSET_ID]),
+                )
+            unique_trace_keys = list(trace_plans)
             collected = pl.collect_all(
                 [
-                    plan.domain.align_lazy(
-                        self._frame_with_traces(plan),
-                        trace_columns=plan.trace_columns,
-                    )
-                    for _, plan, _ in pending
+                    *value_plans,
+                    *(trace_plans[key] for key in unique_trace_keys),
                 ]
             )
             self.materializations += 1
-            for (node, plan, panel), frame in zip(
-                pending, collected, strict=True
-            ):
+            trace_frames = {
+                key: frame
+                for key, frame in zip(
+                    unique_trace_keys,
+                    collected[len(pending) :],
+                    strict=True,
+                )
+            }
+            for index, (node, plan, panel) in enumerate(pending):
+                frame = collected[index]
+                trace_key = trace_keys[index]
+                if trace_key is not None:
+                    frame = frame.hstack(
+                        trace_frames[trace_key].select(
+                            *plan.trace_columns
+                        )
+                    )
                 panel._cached_dense = panel._validate_collected(frame)
                 if plan.cacheable:
                     self.cache[plan.identity] = panel
@@ -161,6 +223,14 @@ class ExecutionRuntime:
                 ),
                 trace_identity=node.trace_identity,
                 categorical=isinstance(node, CategoryPanel),
+                key_identity=hash_mapping(
+                    {"panel_keys": node.identity}
+                ),
+                order=_TIME_ASSET_ORDER,
+                trace_key_identity=hash_mapping(
+                    {"panel_keys": node.identity}
+                ),
+                trace_order=_TIME_ASSET_ORDER,
             )
             evaluated[node_id] = value
             return value
@@ -212,6 +282,7 @@ class ExecutionRuntime:
         inputs = tuple(
             value.frame.select(TIME, ASSET_ID, VALUE) for value in prepared
         )
+        eager_result: pl.DataFrame | None = None
         if contract.execution == ExecutionMode.LAZY:
             result = node.compute(*inputs)
             if isinstance(result, pl.DataFrame):
@@ -223,15 +294,15 @@ class ExecutionRuntime:
                 )
         else:
             self.eager_barriers += 1
-            self.materializations += 1
-            eager_inputs = tuple(pl.collect_all(inputs))
+            eager_inputs = self._collect_eager_inputs(prepared, inputs)
             result = node.compute(*eager_inputs)
             if not isinstance(result, pl.DataFrame):
                 raise TypeError(
                     f"Node '{node.name}' returned {type(result)}; "
                     "expected DataFrame at eager barrier"
                 )
-            result = result.lazy()
+            eager_result = result
+            result = eager_result.lazy()
 
         traces = tuple(
             dict.fromkeys(
@@ -240,12 +311,24 @@ class ExecutionRuntime:
                 for trace in parent.trace_columns
             )
         )
-        trace_frame = self._build_trace_plan(
+        key_identity = self._result_key_identity(
+            node,
+            prepared,
+            identity,
+        )
+        order = (
+            _TIME_ASSET_ORDER
+            if self._is_builtin_operation(node)
+            else None
+        )
+        trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
             result,
             prepared,
             contract,
             self._node_parameters(node),
             traces,
+            result_key_identity=key_identity,
+            result_order=order,
         )
         value = PlanValue(
             frame=result,
@@ -263,11 +346,46 @@ class ExecutionRuntime:
                 else False
             ),
             cacheable=cacheable,
+            key_identity=key_identity,
+            order=order,
+            trace_key_identity=trace_key_identity,
+            trace_order=trace_order,
         )
+        if eager_result is not None:
+            assert self._active_eager_inputs is not None
+            self._active_eager_inputs[identity] = eager_result
         if cacheable:
             self._plan_cache[identity] = value
         evaluated[node_id] = value
         return value
+
+    def _collect_eager_inputs(
+        self,
+        prepared: tuple[PlanValue, ...],
+        inputs: tuple[pl.LazyFrame, ...],
+    ) -> tuple[pl.DataFrame, ...]:
+        assert self._active_eager_inputs is not None
+        missing_identities: list[str] = []
+        missing_frames: list[pl.LazyFrame] = []
+        seen: set[str] = set()
+        for value, frame in zip(prepared, inputs, strict=True):
+            if (
+                value.identity not in self._active_eager_inputs
+                and value.identity not in seen
+            ):
+                seen.add(value.identity)
+                missing_identities.append(value.identity)
+                missing_frames.append(frame)
+        if missing_frames:
+            collected = pl.collect_all(missing_frames)
+            self.materializations += 1
+            self._active_eager_inputs.update(
+                zip(missing_identities, collected, strict=True)
+            )
+        return tuple(
+            self._active_eager_inputs[value.identity]
+            for value in prepared
+        )
 
     def _materialize_node(
         self,
@@ -373,12 +491,15 @@ class ExecutionRuntime:
                 (*constant_source.trace_columns, *other.trace_columns)
             )
         )
-        trace_frame = self._build_trace_plan(
+        key_identity = other.key_identity
+        trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
             result,
             (constant_source, other),
             contract,
             self._node_parameters(node),
             traces,
+            result_key_identity=key_identity,
+            result_order=other.order,
         )
         value = PlanValue(
             frame=result,
@@ -395,6 +516,10 @@ class ExecutionRuntime:
             ),
             categorical=False,
             cacheable=cacheable,
+            key_identity=key_identity,
+            order=other.order,
+            trace_key_identity=trace_key_identity,
+            trace_order=trace_order,
         )
         if cacheable:
             self._plan_cache[identity] = value
@@ -444,12 +569,14 @@ class ExecutionRuntime:
                 TIME, ASSET_ID, expression.alias(VALUE)
             )
             traces = parent.trace_columns
-            trace_frame = self._build_trace_plan(
+            trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
                 frame,
                 (parent,),
                 contract,
                 parameters,
                 traces,
+                result_key_identity=parent.key_identity,
+                result_order=parent.order,
             )
             value = PlanValue(
                 frame=frame,
@@ -464,6 +591,10 @@ class ExecutionRuntime:
                 default_value=default,
                 categorical=parent.categorical,
                 cacheable=cacheable,
+                key_identity=parent.key_identity,
+                order=parent.order,
+                trace_key_identity=trace_key_identity,
+                trace_order=trace_order,
             )
             if cacheable:
                 self._plan_cache[identity] = value
@@ -532,12 +663,15 @@ class ExecutionRuntime:
                 for trace in parent.trace_columns
             )
         )
-        trace_frame = self._build_trace_plan(
+        key_identity = self._combined_key_identity(parents, identity)
+        trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
             result,
             parents,
             contract,
             self._node_parameters(node),
             traces,
+            result_key_identity=key_identity,
+            result_order=None,
         )
         value = PlanValue(
             frame=result,
@@ -555,6 +689,9 @@ class ExecutionRuntime:
             ),
             default_value=default,
             cacheable=cacheable,
+            key_identity=key_identity,
+            trace_key_identity=trace_key_identity,
+            trace_order=trace_order,
         )
         if cacheable:
             self._plan_cache[identity] = value
@@ -637,6 +774,10 @@ class ExecutionRuntime:
             default_value=parent.default_value,
             categorical=parent.categorical,
             cacheable=cacheable,
+            key_identity=identity,
+            order=_TIME_ASSET_ORDER,
+            trace_key_identity=identity,
+            trace_order=_TIME_ASSET_ORDER,
         )
         if cacheable:
             self._plan_cache[identity] = value
@@ -702,6 +843,10 @@ class ExecutionRuntime:
             trace_identity=value.trace_identity,
             categorical=value.categorical,
             cacheable=value.cacheable,
+            key_identity=f"domain:{value.domain.signature}",
+            order=_TIME_ASSET_ORDER,
+            trace_key_identity=f"domain:{value.domain.signature}",
+            trace_order=value.trace_order,
         )
         self._plan_cache[identity] = result
         return result
@@ -740,6 +885,10 @@ class ExecutionRuntime:
             trace_identity=value.trace_identity,
             categorical=value.categorical,
             cacheable=value.cacheable,
+            key_identity=f"domain:{value.domain.signature}",
+            order=_TIME_ASSET_ORDER,
+            trace_key_identity=f"domain:{value.domain.signature}",
+            trace_order=value.trace_order,
         )
         if value.cacheable:
             self._plan_cache[identity] = result
@@ -752,27 +901,39 @@ class ExecutionRuntime:
         contract: OperationContract,
         config: dict[str, Any],
         traces: tuple[str, ...],
-    ) -> pl.LazyFrame | None:
+        *,
+        result_key_identity: str | None,
+        result_order: str | None,
+    ) -> tuple[pl.LazyFrame | None, str | None, str | None]:
         if not traces:
-            return None
+            return None, None, None
         if contract.trace_rule == TraceRule.NONE:
             raise ValueError(
                 "operation with traced inputs must declare a trace rule"
             )
         if contract.trace_rule == TraceRule.CUSTOM:
             assert contract.trace_function is not None
-            return contract.trace_function(
-                tuple(self._frame_with_traces(value) for value in parents),
-                result,
-                config,
-                traces,
+            return (
+                contract.trace_function(
+                    tuple(self._frame_with_traces(value) for value in parents),
+                    result,
+                    config,
+                    traces,
+                ),
+                result_key_identity,
+                None,
             )
 
         keys = result.select(TIME, ASSET_ID)
-        trace_plan = self._trace_plan(
-            keys, parents, contract.trace_rule, config, traces
+        return self._trace_plan(
+            keys,
+            parents,
+            contract.trace_rule,
+            config,
+            traces,
+            result_key_identity=result_key_identity,
+            result_order=result_order,
         )
-        return trace_plan
 
     def _trace_plan(
         self,
@@ -781,18 +942,33 @@ class ExecutionRuntime:
         rule: TraceRule,
         config: dict[str, Any],
         traces: tuple[str, ...],
-    ) -> pl.LazyFrame:
+        *,
+        result_key_identity: str | None,
+        result_order: str | None,
+    ) -> tuple[pl.LazyFrame, str | None, str | None]:
         if rule == TraceRule.PARENT_MAX:
-            return self._parent_max_traces(keys, parents, traces)
+            return self._parent_max_traces(
+                keys,
+                parents,
+                traces,
+                result_key_identity=result_key_identity,
+                result_order=result_order,
+            )
 
         parent = parents[0]
         available = [
             trace for trace in traces if trace in parent.trace_columns
         ]
         assert parent.trace_frame is not None
-        base = parent.trace_frame.select(
-            TIME, ASSET_ID, *available
-        ).sort([ASSET_ID, TIME])
+        base = parent.trace_frame.select(TIME, ASSET_ID, *available)
+        needs_asset_time = rule != TraceRule.PASSTHROUGH
+        if needs_asset_time and parent.trace_order != _ASSET_TIME_ORDER:
+            base = base.sort([ASSET_ID, TIME])
+        transformed_order = (
+            _ASSET_TIME_ORDER
+            if needs_asset_time
+            else parent.trace_order
+        )
         if rule == TraceRule.PASSTHROUGH:
             transformed = base
         elif rule == TraceRule.SHIFT:
@@ -835,14 +1011,35 @@ class ExecutionRuntime:
             )
         else:
             transformed = base
-        return keys.join(transformed, on=[TIME, ASSET_ID], how="left")
+        if (
+            result_key_identity is not None
+            and result_key_identity == parent.trace_key_identity
+        ):
+            return (
+                transformed.select(TIME, ASSET_ID, *available),
+                result_key_identity,
+                transformed_order,
+            )
+        return (
+            keys.join(
+                transformed,
+                on=[TIME, ASSET_ID],
+                how="left",
+                maintain_order="left",
+            ),
+            result_key_identity,
+            result_order,
+        )
 
     @staticmethod
     def _parent_max_traces(
         keys: pl.LazyFrame,
         parents: tuple[PlanValue, ...],
         traces: tuple[str, ...],
-    ) -> pl.LazyFrame:
+        *,
+        result_key_identity: str | None,
+        result_order: str | None,
+    ) -> tuple[pl.LazyFrame, str | None, str | None]:
         traced = [
             parent for parent in parents if parent.trace_frame is not None
         ]
@@ -856,14 +1053,18 @@ class ExecutionRuntime:
             and all(
                 trace in traced[0].trace_columns for trace in traces
             )
+            and result_key_identity is not None
+            and result_key_identity == traced[0].trace_key_identity
         ):
             assert traced[0].trace_frame is not None
-            return keys.join(
+            return (
                 traced[0].trace_frame.select(
-                    TIME, ASSET_ID, *traces
+                    TIME,
+                    ASSET_ID,
+                    *traces,
                 ),
-                on=[TIME, ASSET_ID],
-                how="left",
+                result_key_identity,
+                traced[0].trace_order,
             )
         frame = keys
         output_expressions: list[pl.Expr] = []
@@ -893,8 +1094,14 @@ class ExecutionRuntime:
                 output_expressions.append(
                     pl.max_horizontal(*names).alias(trace)
                 )
-        return frame.with_columns(output_expressions).select(
-            TIME, ASSET_ID, *traces
+        return (
+            frame.with_columns(output_expressions).select(
+                TIME,
+                ASSET_ID,
+                *traces,
+            ),
+            result_key_identity,
+            result_order,
         )
 
     def _frame_with_traces(self, plan: PlanValue) -> pl.LazyFrame:
@@ -914,6 +1121,41 @@ class ExecutionRuntime:
     def clear_cache(self) -> None:
         self.cache.clear()
         self._plan_cache.clear()
+
+    @staticmethod
+    def _is_builtin_operation(node: Node) -> bool:
+        operation = getattr(node, "operation", None)
+        function = getattr(operation, "operation", None)
+        module = getattr(function, "__module__", "")
+        return module.startswith("bagelquant_core.")
+
+    def _result_key_identity(
+        self,
+        node: Node,
+        parents: tuple[PlanValue, ...],
+        node_identity: str,
+    ) -> str | None:
+        if (
+            node.node_type == "transformer"
+            and self._is_builtin_operation(node)
+        ):
+            return parents[0].key_identity
+        return self._combined_key_identity(parents, node_identity)
+
+    @staticmethod
+    def _combined_key_identity(
+        parents: tuple[PlanValue, ...],
+        node_identity: str,
+    ) -> str:
+        identities = [parent.key_identity for parent in parents]
+        if identities and identities[0] is not None and len(set(identities)) == 1:
+            return identities[0]
+        return hash_mapping(
+            {
+                "result_keys": node_identity,
+                "parents": identities,
+            }
+        )
 
     @staticmethod
     def _trace_plan_identity(

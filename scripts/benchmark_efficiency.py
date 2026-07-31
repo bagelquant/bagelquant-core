@@ -2,102 +2,392 @@ from __future__ import annotations
 
 import argparse
 import json
+import resource
 import statistics
+import subprocess
+import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import polars as pl
 
 from bagelquant_core import Domain, ExecutionRuntime, Panel
 from bagelquant_core.composer import add, rolling_corr, rolling_ols
-from bagelquant_core.transformer import ewm_mean, rolling_mean, rolling_rank, zscore
+from bagelquant_core.transformer import (
+    ewm_mean,
+    rolling_mean,
+    rolling_percentile,
+    rolling_rank,
+    rolling_zscore,
+    zscore,
+)
 
 
-def make_panel(rows: int, assets: int) -> Panel:
+@dataclass(frozen=True, slots=True)
+class BenchmarkProfile:
+    rows: int
+    assets: int
+    repeats: int
+    windows: tuple[int, ...]
+
+
+PROFILES = {
+    "smoke": BenchmarkProfile(
+        rows=100_000,
+        assets=500,
+        repeats=3,
+        windows=(20,),
+    ),
+    "comparison": BenchmarkProfile(
+        rows=500_000,
+        assets=2_000,
+        repeats=3,
+        windows=(20,),
+    ),
+    "cn-daily": BenchmarkProfile(
+        rows=6_250_000,
+        assets=5_000,
+        repeats=1,
+        windows=(20, 60, 252),
+    ),
+}
+
+DEFAULT_CASES = (
+    "domain_materialization",
+    "rolling_mean",
+    "rolling_rank",
+    "rolling_percentile",
+    "rolling_zscore",
+    "ewm_mean",
+    "zscore_add",
+    "rolling_corr",
+    "rolling_ols",
+    "runtime_cache_miss",
+    "runtime_cache_hit",
+)
+WINDOW_CASES = {
+    "rolling_mean",
+    "rolling_rank",
+    "rolling_percentile",
+    "rolling_zscore",
+    "rolling_corr",
+    "rolling_ols",
+}
+
+
+def make_panels(
+    rows: int,
+    assets: int,
+    *,
+    dynamic: bool,
+) -> tuple[Panel, Panel]:
+    if rows <= 0:
+        raise ValueError("rows must be positive")
+    if assets <= 0:
+        raise ValueError("assets must be positive")
     periods = max(rows // assets, 1)
     dates = pl.date_range(
-        start=pl.date(2020, 1, 1),
-        end=pl.date(2020, 1, 1) + pl.duration(days=periods - 1),
+        start=pl.date(2010, 1, 1),
+        end=pl.date(2010, 1, 1) + pl.duration(days=periods - 1),
         interval="1d",
         eager=True,
     )
     asset_ids = [f"asset_{index:05d}" for index in range(assets)]
-    domain = Domain(calendar=dates, universe=asset_ids)
-    frame = domain.membership.select("time", "asset_id").with_columns(
-        pl.Series("value", np.random.default_rng(0).normal(size=periods * assets))
+    static_domain = Domain(calendar=dates, universe=asset_ids)
+    keys = static_domain.grid_lazy().collect().with_row_index("__row")
+    if dynamic:
+        membership = keys.select(
+            "time",
+            "asset_id",
+            ((pl.col("__row") * 7 + 3) % 10 < 7).alias("active"),
+        )
+        domain = Domain(calendar=dates, universe=membership)
+        keys = domain.grid_lazy().collect().with_row_index("__row")
+    else:
+        domain = static_domain
+
+    values = np.random.default_rng(0).normal(size=len(keys))
+    values[::29] = 0.0
+    values[::97] = np.nan
+    frame = keys.select("time", "asset_id").with_columns(
+        pl.Series("value", values)
     )
-    return Panel.from_domain(frame, domain, name="benchmark")
+    base = Panel.from_domain(frame, domain, name="benchmark")
+    other = Panel.from_domain(
+        frame.with_columns((pl.col("value") * 1.5 + 2.0).alias("value")),
+        domain,
+        name="other",
+    )
+    return base, other
 
 
-def measure(
-    label: str, func: Callable[[], object], repeats: int
-) -> dict[str, float | str]:
-    timings: list[float] = []
-    for _ in range(repeats):
-        start = time.perf_counter()
-        func()
-        timings.append(time.perf_counter() - start)
+def _case_runner(
+    case: str,
+    base: Panel,
+    other: Panel,
+    *,
+    window: int,
+) -> Callable[[], tuple[Panel, ExecutionRuntime | None]]:
+    min_periods = max(1, (window * 4 + 4) // 5)
+    if case == "runtime_cache_hit":
+        graph = zscore(add(base, other), name="cached_zscore")
+        runtime = ExecutionRuntime()
+        graph.compute(runtime=runtime)
+
+        def cached() -> tuple[Panel, ExecutionRuntime]:
+            return graph.compute(runtime=runtime), runtime
+
+        return cached
+
+    def execute() -> tuple[Panel, ExecutionRuntime | None]:
+        if case == "domain_materialization":
+            output = Panel.from_domain(base.data, base.domain).output
+            output.data
+            return output, None
+
+        runtime = ExecutionRuntime()
+        if case == "rolling_mean":
+            graph = rolling_mean(
+                base,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "rolling_rank":
+            graph = rolling_rank(
+                base,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "rolling_percentile":
+            graph = rolling_percentile(
+                base,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "rolling_zscore":
+            graph = rolling_zscore(
+                base,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "ewm_mean":
+            graph = ewm_mean(base, alpha=0.2)
+        elif case == "zscore_add":
+            graph = zscore(add(base, other))
+        elif case == "rolling_corr":
+            graph = rolling_corr(
+                base,
+                other,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "rolling_ols":
+            graph = rolling_ols(other, base, window=window)
+        elif case == "runtime_cache_miss":
+            graph = zscore(add(base, other), name="cached_zscore")
+        else:
+            raise ValueError(f"unknown benchmark case: {case}")
+        return graph.compute(runtime=runtime), runtime
+
+    return execute
+
+
+def _output_summary(output: Panel) -> dict[str, int | float | None]:
+    frame = output.collect(dense=False)
+    values = frame.get_column("value")
+    numeric = values.fill_nan(None)
     return {
-        "name": label,
-        "best_seconds": min(timings),
-        "median_seconds": statistics.median(timings),
-        "mean_seconds": statistics.fmean(timings),
+        "rows": frame.height,
+        "nulls": numeric.null_count(),
+        "sum": numeric.sum(),
+        "mean": numeric.mean(),
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="BagelQuant efficiency smoke benchmark")
-    parser.add_argument("--rows", type=int, default=100_000)
-    parser.add_argument("--assets", type=int, default=500)
-    parser.add_argument("--repeats", type=int, default=3)
+def _peak_rss_bytes() -> int:
+    value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(value if sys.platform == "darwin" else value * 1024)
+
+
+def _run_worker(args: argparse.Namespace) -> None:
+    base, other = make_panels(
+        args.rows,
+        args.assets,
+        dynamic=args.worker_universe == "dynamic",
+    )
+    runner = _case_runner(
+        args.worker_case,
+        base,
+        other,
+        window=args.worker_window,
+    )
+    timings: list[float] = []
+    output: Panel | None = None
+    runtime: ExecutionRuntime | None = None
+    for _ in range(args.repeats):
+        start = time.perf_counter()
+        output, runtime = runner()
+        timings.append(time.perf_counter() - start)
+    assert output is not None
+    payload = {
+        "name": args.worker_case,
+        "universe": args.worker_universe,
+        "window": (
+            args.worker_window
+            if args.worker_case in WINDOW_CASES
+            else None
+        ),
+        "best_seconds": min(timings),
+        "median_seconds": statistics.median(timings),
+        "mean_seconds": statistics.fmean(timings),
+        "peak_rss_bytes": _peak_rss_bytes(),
+        "materializations": 0 if runtime is None else runtime.materializations,
+        "eager_barriers": 0 if runtime is None else runtime.eager_barriers,
+        "output": _output_summary(output),
+    }
+    print(json.dumps(payload, sort_keys=True))
+
+
+def _run_isolated(
+    *,
+    case: str,
+    universe: str,
+    window: int,
+    rows: int,
+    assets: int,
+    repeats: int,
+) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--worker-case",
+        case,
+        "--worker-universe",
+        universe,
+        "--worker-window",
+        str(window),
+        "--rows",
+        str(rows),
+        "--assets",
+        str(assets),
+        "--repeats",
+        str(repeats),
+    ]
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def _selected_universes(value: str) -> tuple[str, ...]:
+    return ("static", "dynamic") if value == "both" else (value,)
+
+
+def _selected_cases(values: Sequence[str] | None) -> tuple[str, ...]:
+    selected = DEFAULT_CASES if not values else tuple(values)
+    unknown = sorted(set(selected) - set(DEFAULT_CASES))
+    if unknown:
+        raise ValueError(f"unknown benchmark cases: {unknown}")
+    return selected
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="BagelQuant isolated computation benchmarks"
+    )
+    parser.add_argument(
+        "--profile",
+        choices=tuple(PROFILES),
+        default="smoke",
+    )
+    parser.add_argument("--rows", type=int)
+    parser.add_argument("--assets", type=int)
+    parser.add_argument("--repeats", type=int)
+    parser.add_argument("--windows", type=int, nargs="+")
+    parser.add_argument(
+        "--universe",
+        choices=("static", "dynamic", "both"),
+        default="static",
+    )
+    parser.add_argument(
+        "--case",
+        action="append",
+        help="benchmark one named case; repeat to select multiple cases",
+    )
     parser.add_argument(
         "--json",
         action="store_true",
-        help="emit a machine-readable baseline",
+        help="emit a machine-readable result",
     )
-    args = parser.parse_args()
+    parser.add_argument("--worker-case", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--worker-universe",
+        choices=("static", "dynamic"),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--worker-window", type=int, help=argparse.SUPPRESS)
+    return parser
 
-    base = make_panel(args.rows, args.assets)
-    other = Panel.from_domain(
-        base.data.with_columns((pl.col("value") * 1.5 + 2.0).alias("value")),
-        base.domain,
-        name="other",
-    )
-    runtime = ExecutionRuntime()
 
-    measurements = [
-        measure("domain materialization", lambda: Panel.from_domain(base.data, base.domain), args.repeats),
-        measure("rolling_mean", lambda: rolling_mean(base, window=20).compute(), args.repeats),
-        measure("rolling_rank", lambda: rolling_rank(base, window=20).compute(), args.repeats),
-        measure("ewm_mean", lambda: ewm_mean(base, alpha=0.2).compute(), args.repeats),
-        measure("zscore(add)", lambda: zscore(add(base, other)).compute(), args.repeats),
-        measure("rolling_corr", lambda: rolling_corr(base, other, window=20).compute(), args.repeats),
-        measure("rolling_ols", lambda: rolling_ols(other, base, window=20).compute(), args.repeats),
-    ]
-    cached = zscore(add(base, other), name="cached_zscore")
-    measurements.extend(
-        [
-            measure("runtime cache miss", lambda: cached.compute(runtime=runtime), 1),
-            measure("runtime cache hit", lambda: cached.compute(runtime=runtime), args.repeats),
-        ]
-    )
+def main() -> None:
+    args = _parser().parse_args()
+    profile = PROFILES[args.profile]
+    args.rows = profile.rows if args.rows is None else args.rows
+    args.assets = profile.assets if args.assets is None else args.assets
+    args.repeats = profile.repeats if args.repeats is None else args.repeats
+    windows = profile.windows if args.windows is None else tuple(args.windows)
+    if args.worker_case:
+        if args.worker_universe is None or args.worker_window is None:
+            raise ValueError("worker universe and window are required")
+        _run_worker(args)
+        return
+
+    measurements: list[dict[str, Any]] = []
+    for universe in _selected_universes(args.universe):
+        for case in _selected_cases(args.case):
+            case_windows = windows if case in WINDOW_CASES else (windows[0],)
+            for window in case_windows:
+                measurements.append(
+                    _run_isolated(
+                        case=case,
+                        universe=universe,
+                        window=window,
+                        rows=args.rows,
+                        assets=args.assets,
+                        repeats=args.repeats,
+                    )
+                )
+
     payload = {
-        "rows": base.data.height,
+        "profile": args.profile,
+        "requested_rows": args.rows,
         "assets": args.assets,
         "repeats": args.repeats,
+        "windows": list(windows),
         "measurements": measurements,
     }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
-    print(f"rows={base.data.height} assets={args.assets} repeats={args.repeats}")
+
+    print(
+        f"profile={args.profile} requested_rows={args.rows} "
+        f"assets={args.assets} repeats={args.repeats}"
+    )
     for item in measurements:
+        window = "" if item["window"] is None else f" window={item['window']:3d}"
         print(
-            f"{item['name']:28s} "
-            f"best={item['best_seconds']:8.4f}s "
+            f"{item['name']:24s} {item['universe']:7s}{window:11s} "
             f"median={item['median_seconds']:8.4f}s "
-            f"mean={item['mean_seconds']:8.4f}s"
+            f"rss={item['peak_rss_bytes'] / (1024**2):8.1f}MiB "
+            f"mat={item['materializations']} eager={item['eager_barriers']}"
         )
 
 

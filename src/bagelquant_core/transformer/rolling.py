@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import numpy as np
 import polars as pl
+from numpy.lib.stride_tricks import sliding_window_view
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from .core import transformer
+
+_MAX_WORKING_BYTES = 64 * 1024 * 1024
+_RANK_BYTES_PER_WINDOW_VALUE = 16
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -29,23 +31,6 @@ def _validate_window(window: int, min_periods: int | None) -> int:
 
 def _rolling_expr(frame: pl.DataFrame, expr: pl.Expr) -> pl.DataFrame:
     return panel_like(frame.sort([ASSET_ID, TIME]), expr.over(ASSET_ID))
-
-
-def _rolling_map_expr(
-    window: int,
-    min_periods: int,
-    func: Callable[[np.ndarray], float],
-) -> pl.Expr:
-    def apply_window(sample: pl.Series) -> float:
-        values = sample.to_numpy().astype(float, copy=False)
-        values = values[~np.isnan(values)]
-        return np.nan if len(values) < min_periods else func(values)
-
-    return pl.col(VALUE).rolling_map(
-        apply_window,
-        window_size=window,
-        min_samples=min_periods,
-    )
 
 
 @transformer
@@ -179,8 +164,20 @@ def rolling_zscore(
     frame: pl.DataFrame, *, window: int, min_periods: int | None = None, ddof: int = 1
 ) -> pl.DataFrame:
     minp = _validate_window(window, min_periods)
+    values = pl.col(VALUE).fill_nan(None)
+    valid_count = (
+        values.is_not_null()
+        .cast(pl.UInt32)
+        .rolling_sum(window, min_samples=0)
+    )
+    mean = values.rolling_mean(window, min_samples=minp)
+    std = values.rolling_std(window, min_samples=minp, ddof=ddof)
+    last_valid = values.forward_fill()
     return _rolling_expr(
-        frame, _rolling_map_expr(window, minp, lambda sample: _zscore_last(sample, ddof))
+        frame,
+        pl.when((valid_count >= minp) & (valid_count > ddof) & (std != 0))
+        .then((last_valid - mean) / std)
+        .otherwise(None),
     )
 
 
@@ -307,21 +304,6 @@ def rolling_ewm_fw(
     return ewm_mean.operation(frame, halflife=halflife, min_periods=min_periods)
 
 
-def _last_rank(sample: np.ndarray) -> float:
-    less = np.sum(sample < sample[-1])
-    equal = np.sum(sample == sample[-1])
-    return float(less + (equal + 1.0) / 2.0)
-
-
-def _last_percentile(sample: np.ndarray) -> float:
-    return _last_rank(sample) / len(sample)
-
-
-def _zscore_last(sample: np.ndarray, ddof: int) -> float:
-    std = sample.std(ddof=ddof)
-    return np.nan if std == 0 else float((sample[-1] - sample.mean()) / std)
-
-
 def _rolling_last_rank_numpy(
     frame: pl.DataFrame,
     *,
@@ -329,20 +311,43 @@ def _rolling_last_rank_numpy(
     min_periods: int,
     pct: bool,
 ) -> pl.DataFrame:
-    """Rank the last non-null window value with one NumPy pass per asset."""
+    """Rank the last non-null window value in bounded vectorized batches."""
 
     output: list[pl.DataFrame] = []
     for group in frame.sort([ASSET_ID, TIME]).partition_by(ASSET_ID):
         values = group.get_column(VALUE).to_numpy().astype(float, copy=False)
         result = np.full(len(values), np.nan, dtype=float)
-        for index in range(len(values)):
-            start = max(0, index - window + 1)
-            sample = values[start : index + 1]
-            sample = sample[~np.isnan(sample)]
-            if len(sample) < min_periods:
-                continue
-            rank = _last_rank(sample)
-            result[index] = rank / len(sample) if pct else rank
+        padded = np.pad(
+            values,
+            (window - 1, 0),
+            mode="constant",
+            constant_values=np.nan,
+        )
+        windows = sliding_window_view(padded, window)
+        rows_per_batch = max(
+            1,
+            _MAX_WORKING_BYTES
+            // max(window * _RANK_BYTES_PER_WINDOW_VALUE, 1),
+        )
+        for start in range(0, len(values), rows_per_batch):
+            end = min(start + rows_per_batch, len(values))
+            batch = windows[start:end]
+            valid = ~np.isnan(batch)
+            counts = valid.sum(axis=1)
+            last_indices = window - 1 - np.argmax(valid[:, ::-1], axis=1)
+            last_values = batch[np.arange(end - start), last_indices]
+            less = ((batch < last_values[:, None]) & valid).sum(axis=1)
+            equal = ((batch == last_values[:, None]) & valid).sum(axis=1)
+            ranks = less + (equal + 1.0) / 2.0
+            eligible = (counts >= min_periods) & (counts > 0)
+            if pct:
+                ranks = np.divide(
+                    ranks,
+                    counts,
+                    out=np.full_like(ranks, np.nan, dtype=float),
+                    where=eligible,
+                )
+            result[start:end] = np.where(eligible, ranks, np.nan)
         output.append(
             group.select(TIME, ASSET_ID).with_columns(pl.Series(VALUE, result))
         )

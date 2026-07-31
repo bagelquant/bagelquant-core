@@ -7,9 +7,13 @@ from numbers import Real
 
 import numpy as np
 import polars as pl
+from numpy.lib.stride_tricks import sliding_window_view
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from .core import composer
+
+_MAX_WORKING_BYTES = 64 * 1024 * 1024
+_OLS_ARRAY_COPIES = 4
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -155,6 +159,159 @@ def _rolling_regression(
     ).sort([TIME, ASSET_ID])
 
 
+def _rolling_ols(
+    target: pl.DataFrame,
+    factors: tuple[pl.DataFrame, ...],
+    *,
+    window: int,
+) -> pl.DataFrame:
+    """Predict with batched prior-window least squares per asset."""
+
+    _validate_window(window, window)
+    if not factors:
+        raise ValueError("rolling regression requires at least one factor")
+
+    data = target.rename({VALUE: "target"})
+    factor_columns: list[str] = []
+    for index, factor in enumerate(factors):
+        column = f"factor_{index}"
+        factor_columns.append(column)
+        data = data.join(
+            factor.rename({VALUE: column}),
+            on=[TIME, ASSET_ID],
+            how="inner",
+        )
+    data = data.sort([ASSET_ID, TIME])
+
+    output: list[pl.DataFrame] = []
+    feature_count = len(factor_columns)
+    coefficient_count = feature_count + 1
+    bytes_per_prediction = (
+        window
+        * coefficient_count
+        * np.dtype(np.float64).itemsize
+        * _OLS_ARRAY_COPIES
+    )
+    rows_per_batch = max(
+        1,
+        _MAX_WORKING_BYTES // max(bytes_per_prediction, 1),
+    )
+
+    for group in data.partition_by(ASSET_ID):
+        target_values = group.get_column("target").to_numpy().astype(
+            float, copy=False
+        )
+        features = np.column_stack(
+            [
+                group.get_column(column).to_numpy().astype(float, copy=False)
+                for column in factor_columns
+            ]
+        )
+        prediction = np.full(len(group), np.nan, dtype=float)
+        prediction_count = len(group) - window
+        if prediction_count > 0:
+            target_windows = sliding_window_view(target_values, window)
+            feature_windows = sliding_window_view(
+                features,
+                (window, feature_count),
+            )[:, 0, :, :]
+
+            for start in range(0, prediction_count, rows_per_batch):
+                end = min(start + rows_per_batch, prediction_count)
+                train_y = target_windows[start:end]
+                train_x = feature_windows[start:end]
+                current_x = features[window + start : window + end]
+                valid = np.isfinite(train_y) & np.isfinite(train_x).all(axis=2)
+
+                design = np.zeros(
+                    (end - start, window, coefficient_count),
+                    dtype=float,
+                )
+                design[:, :, 0] = valid
+                design[:, :, 1:] = np.where(valid[:, :, None], train_x, 0.0)
+                valid_target = np.where(valid, train_y, 0.0)
+                valid_counts = valid.sum(axis=1)
+                coefficients, ambiguous = _batched_lstsq(
+                    design,
+                    valid_target,
+                    row_counts=valid_counts,
+                )
+                eligible = valid.any(axis=1) & np.isfinite(current_x).all(axis=1)
+
+                for index in np.flatnonzero(ambiguous & eligible):
+                    selected = valid[index]
+                    exact_design = np.column_stack(
+                        [
+                            np.ones(selected.sum()),
+                            train_x[index][selected],
+                        ]
+                    )
+                    coefficients[index] = _ols_fit(
+                        exact_design,
+                        train_y[index][selected],
+                    )
+
+                current_design = np.column_stack(
+                    [np.ones(end - start), current_x]
+                )
+                values = np.einsum(
+                    "ij,ij->i",
+                    current_design,
+                    coefficients,
+                )
+                prediction[window + start : window + end] = np.where(
+                    eligible,
+                    values,
+                    np.nan,
+                )
+
+        output.append(
+            group.select(TIME, ASSET_ID).with_columns(
+                pl.Series(VALUE, prediction, nan_to_null=True)
+            )
+        )
+
+    if not output:
+        return pl.DataFrame(
+            schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
+        )
+    return pl.concat(output).sort([TIME, ASSET_ID])
+
+
+def _batched_lstsq(
+    design: np.ndarray,
+    target: np.ndarray,
+    *,
+    row_counts: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Solve minimum-norm least squares with NumPy's default rank cutoff."""
+
+    left, singular_values, right = np.linalg.svd(
+        design,
+        full_matrices=False,
+    )
+    relative_cutoff = np.finfo(design.dtype).eps * np.maximum(
+        row_counts,
+        design.shape[-1],
+    )
+    cutoff = relative_cutoff[:, None] * singular_values[:, :1]
+    inverse = np.divide(
+        1.0,
+        singular_values,
+        out=np.zeros_like(singular_values),
+        where=singular_values > cutoff,
+    )
+    projected = np.einsum("bwi,bw->bi", left, target)
+    coefficients = np.einsum(
+        "bij,bj->bi",
+        right.swapaxes(-2, -1),
+        inverse * projected,
+    )
+    tolerance = np.maximum(cutoff, np.finfo(design.dtype).tiny) * 1e-8
+    ambiguous = (np.abs(singular_values - cutoff) <= tolerance).any(axis=1)
+    return coefficients, ambiguous
+
+
 def _ols_fit(design: np.ndarray, target: np.ndarray) -> np.ndarray:
     return np.linalg.lstsq(design, target, rcond=None)[0]
 
@@ -217,7 +374,7 @@ def _elastic_fit(
 def rolling_ols(
     target: pl.DataFrame, *factors: pl.DataFrame, window: int
 ) -> pl.DataFrame:
-    return _rolling_regression(target, factors, window=window, fit=_ols_fit)
+    return _rolling_ols(target, factors, window=window)
 
 
 @composer

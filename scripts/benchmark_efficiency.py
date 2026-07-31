@@ -18,13 +18,16 @@ import polars as pl
 from bagelquant_core import Domain, ExecutionRuntime, Graph, Panel
 from bagelquant_core.composer import (
     add,
+    coalesce,
     orthogonalize,
     rolling_corr,
+    rolling_cov,
     rolling_elastic_net,
     rolling_lasso,
     rolling_ols,
     rolling_ridge,
     sum_frames,
+    weighted_sum,
 )
 from bagelquant_core.transformer import (
     abs_value,
@@ -35,6 +38,8 @@ from bagelquant_core.transformer import (
     rolling_percentile,
     rolling_rank,
     rolling_zscore,
+    rank as cross_section_rank,
+    winsorize,
     zscore,
 )
 
@@ -103,6 +108,20 @@ AVAILABLE_CASES = (
     "rolling_ols_sparse_3f",
     "rolling_ridge_sparse",
     "orthogonalize_sparse_3f",
+    "rolling_lasso_1f",
+    "rolling_lasso_8f",
+    "rolling_lasso_iter_1",
+    "rolling_lasso_iter_1000",
+    "rolling_elastic_net_1f",
+    "rolling_elastic_net_8f",
+    "same_key_weighted_10",
+    "same_key_coalesce_10",
+    "sparse_sum_10",
+    "rolling_cov",
+    "cross_section_chain_20",
+    "eager_cse_ols_5",
+    "eager_cse_lasso_5",
+    "eager_cse_orthogonalize_5",
 )
 WINDOW_CASES = {
     "rolling_mean",
@@ -125,6 +144,15 @@ WINDOW_CASES = {
     "dense_exact_output",
     "rolling_ols_sparse_3f",
     "rolling_ridge_sparse",
+    "rolling_lasso_1f",
+    "rolling_lasso_8f",
+    "rolling_lasso_iter_1",
+    "rolling_lasso_iter_1000",
+    "rolling_elastic_net_1f",
+    "rolling_elastic_net_8f",
+    "rolling_cov",
+    "eager_cse_ols_5",
+    "eager_cse_lasso_5",
 }
 
 
@@ -215,6 +243,26 @@ def _case_runner(
         base.domain,
         name="sparse_cube",
     )
+    independent_factors: tuple[Panel, ...] = ()
+    if case in {
+        "rolling_lasso_8f",
+        "rolling_elastic_net_8f",
+    }:
+        keys = base.data.select("time", "asset_id")
+        factors: list[Panel] = []
+        for index in range(8):
+            factor_values = np.random.default_rng(100 + index).normal(
+                size=len(keys)
+            )
+            factor_values[(index + 17) :: 131] = np.nan
+            factors.append(
+                Panel.from_domain(
+                    keys.with_columns(pl.Series("value", factor_values)),
+                    base.domain,
+                    name=f"independent_factor_{index}",
+                )
+            )
+        independent_factors = tuple(factors)
     traced = Panel.from_domain(
         base.lazy(dense=False).with_columns(
             pl.col("time").alias("observation_date"),
@@ -314,11 +362,48 @@ def _case_runner(
                 window=window,
                 max_iter=100,
             )
+        elif case in {
+            "rolling_lasso_1f",
+            "rolling_lasso_iter_1",
+            "rolling_lasso_iter_1000",
+        }:
+            iterations = {
+                "rolling_lasso_1f": 100,
+                "rolling_lasso_iter_1": 1,
+                "rolling_lasso_iter_1000": 1000,
+            }[case]
+            graph = rolling_lasso(
+                other,
+                base,
+                window=window,
+                max_iter=iterations,
+            )
+        elif case == "rolling_lasso_8f":
+            graph = rolling_lasso(
+                other,
+                *independent_factors,
+                window=window,
+                max_iter=100,
+            )
         elif case == "rolling_elastic_net":
             graph = rolling_elastic_net(
                 other,
                 base,
                 square,
+                window=window,
+                max_iter=100,
+            )
+        elif case == "rolling_elastic_net_1f":
+            graph = rolling_elastic_net(
+                other,
+                base,
+                window=window,
+                max_iter=100,
+            )
+        elif case == "rolling_elastic_net_8f":
+            graph = rolling_elastic_net(
+                other,
+                *independent_factors,
                 window=window,
                 max_iter=100,
             )
@@ -330,6 +415,46 @@ def _case_runner(
                 base,
                 sparse_square,
                 sparse_cube,
+            )
+        elif case == "eager_cse_ols_5":
+            graph = Graph(
+                outputs=[
+                    rolling_ols(
+                        other,
+                        base,
+                        square,
+                        window=window,
+                        name=f"eager_ols_{index}",
+                    )
+                    for index in range(5)
+                ]
+            )
+        elif case == "eager_cse_lasso_5":
+            graph = Graph(
+                outputs=[
+                    rolling_lasso(
+                        other,
+                        base,
+                        square,
+                        window=window,
+                        max_iter=100,
+                        name=f"eager_lasso_{index}",
+                    )
+                    for index in range(5)
+                ]
+            )
+        elif case == "eager_cse_orthogonalize_5":
+            graph = Graph(
+                outputs=[
+                    orthogonalize(
+                        other,
+                        base,
+                        square,
+                        cube,
+                        name=f"eager_orthogonalize_{index}",
+                    )
+                    for index in range(5)
+                ]
             )
         elif case == "traced_rolling_mean":
             graph = rolling_mean(
@@ -433,6 +558,30 @@ def _case_runner(
             )
         elif case == "sparse_alignment":
             graph = add(sparse_square, sparse_cube)
+        elif case == "same_key_weighted_10":
+            graph = weighted_sum(
+                *([base, other] * 5),
+                weights=[0.1] * 10,
+            )
+        elif case == "same_key_coalesce_10":
+            graph = coalesce(*([base, other] * 5))
+        elif case == "sparse_sum_10":
+            graph = sum_frames(*([sparse_square, sparse_cube] * 5))
+        elif case == "rolling_cov":
+            graph = rolling_cov(
+                base,
+                other,
+                window=window,
+                min_periods=min_periods,
+            )
+        elif case == "cross_section_chain_20":
+            graph = base
+            for index in range(20):
+                graph = (
+                    cross_section_rank(graph)
+                    if index % 2 == 0
+                    else winsorize(graph)
+                )
         elif case == "sum_10":
             graph = sum_frames(*([base, other] * 5))
         elif case == "runtime_cache_miss":
@@ -668,7 +817,10 @@ def main() -> None:
             f"sort={item['sort_nodes']} "
             f"elided_sort={diagnostics.get('sorts_elided', 0)} "
             f"elided_align={diagnostics.get('alignments_elided', 0)} "
-            f"cse={diagnostics.get('semantic_cse_hits', 0)}"
+            f"cse={diagnostics.get('semantic_cse_hits', 0)} "
+            f"pos={diagnostics.get('positional_composer_hits', 0)} "
+            f"eager_cse={diagnostics.get('eager_cse_hits', 0)} "
+            f"solver_batches={diagnostics.get('solver_batches', 0)}"
         )
 
 

@@ -77,7 +77,7 @@ class Panel(Node):
         frame = cls._normalize_source(data, traces)
         exact_domain = (
             isinstance(data, pl.DataFrame)
-            and domain._contains_exact_static_keys(data)
+            and domain._contains_exact_keys(data)
         )
         frame = domain.apply_membership_lazy(frame)
         return cls(

@@ -7,7 +7,7 @@ from numbers import Real
 import polars as pl
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like, unary
-from .core import _ordered_expression_plan, transformer
+from .core import _expression_plan, _ordered_expression_plan, transformer
 
 
 @transformer
@@ -207,6 +207,70 @@ for _plan_name, _plan_transformer in {
     _plan_transformer._set_plan_operation(  # type: ignore[attr-defined]
         lambda frame, config, order, asset_time_ordered, name=_plan_name: (
             _plan_general_time_series(
+                name,
+                frame,
+                dict(config),
+                order,
+                asset_time_ordered,
+            )
+        )
+    )
+
+
+def _plan_general_pointwise(
+    name: str,
+    frame: pl.LazyFrame,
+    config: dict[str, object],
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    value = pl.col(VALUE)
+    if name == "nonnans":
+        expression = value.fill_nan(None).fill_null(0.0)
+    elif name == "notnan":
+        expression = (value.is_not_null() & ~value.is_nan()).cast(pl.Float64)
+    elif name == "denoise":
+        threshold = config.get("threshold", 1e-12)
+        if (
+            not isinstance(threshold, Real)
+            or isinstance(threshold, bool)
+            or threshold < 0
+        ):
+            raise ValueError("denoise threshold must be a non-negative real number")
+        expression = (
+            pl.when(value.abs() < float(threshold)).then(0.0).otherwise(value)
+        )
+    elif name == "posonly":
+        expression = pl.when(value >= 0).then(value).otherwise(None)
+    elif name == "negonly":
+        expression = pl.when(value <= 0).then(value).otherwise(None)
+    elif name == "constant":
+        scalar = config.get("value", 1)
+        if not isinstance(scalar, Real) or isinstance(scalar, bool):
+            raise TypeError("constant value must be a real number")
+        expression = pl.lit(float(scalar))
+    else:
+        expression = pl.when(value.is_infinite()).then(None).otherwise(value)
+    return _expression_plan(
+        frame,
+        expression,
+        order,
+        asset_time_ordered,
+    )
+
+
+for _plan_name, _plan_transformer in {
+    "nonnans": nonnans,
+    "notnan": notnan,
+    "denoise": denoise,
+    "posonly": posonly,
+    "negonly": negonly,
+    "constant": constant,
+    "replace_inf": replace_inf,
+}.items():
+    _plan_transformer._set_plan_operation(  # type: ignore[attr-defined]
+        lambda frame, config, order, asset_time_ordered, name=_plan_name: (
+            _plan_general_pointwise(
                 name,
                 frame,
                 dict(config),

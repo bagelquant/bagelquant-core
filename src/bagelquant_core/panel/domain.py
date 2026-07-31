@@ -111,13 +111,18 @@ class Domain:
             return self._active_membership.height
         return len(self._times) * len(self._asset_ids)
 
-    def _contains_exact_static_keys(self, data: pl.DataFrame) -> bool:
-        if self._is_dynamic or data.height != self.size:
+    def _contains_exact_keys(self, data: pl.DataFrame) -> bool:
+        if data.height != self.size:
             return False
         keys = data.select(TIME, ASSET_ID).with_columns(
             pl.col(TIME).cast(pl.Date, strict=False),
             pl.col(ASSET_ID).cast(pl.String),
         )
+        if self._is_dynamic:
+            assert self._active_membership is not None
+            return keys.sort([TIME, ASSET_ID]).equals(
+                self._active_membership.select(TIME, ASSET_ID)
+            )
         return bool(
             keys.select(
                 (

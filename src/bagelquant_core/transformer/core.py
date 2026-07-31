@@ -166,3 +166,22 @@ def _ordered_expression_plan(
         output_order,
         True,
     )
+
+
+def _expression_plan(
+    frame: pl.LazyFrame,
+    expression: pl.Expr,
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    """Apply an order-independent expression without sorting keys."""
+
+    return (
+        frame.with_columns(expression.alias("value")).select(
+            "time",
+            "asset_id",
+            "value",
+        ),
+        order,
+        asset_time_ordered,
+    )

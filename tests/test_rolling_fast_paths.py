@@ -495,6 +495,7 @@ def test_rolling_ols_multi_factor_gram_path_matches_reference(
         (rolling_elastic_net, "elastic", 0.7, 0.35, 80, 1e-10),
     ],
 )
+@pytest.mark.parametrize("factor_count", [1, 2, 8])
 def test_regularized_rolling_paths_match_row_reference(
     operation,
     method: str,
@@ -502,6 +503,7 @@ def test_regularized_rolling_paths_match_row_reference(
     l1_ratio: float,
     max_iter: int,
     tolerance: float,
+    factor_count: int,
 ) -> None:
     rng = np.random.default_rng(86)
     group_size = 28
@@ -514,16 +516,16 @@ def test_regularized_rolling_paths_match_row_reference(
         for asset in ("a", "b")
         for time in dates
     ]
-    factors_raw = rng.normal(size=(group_size * 2, 2))
+    factors_raw = rng.normal(size=(group_size * 2, factor_count))
     target_raw = (
         1.5
-        + 0.8 * factors_raw[:, 0]
-        - 0.3 * factors_raw[:, 1]
+        + factors_raw
+        @ np.linspace(0.8, -0.3, factor_count)
         + rng.normal(scale=0.03, size=group_size * 2)
     )
     target_raw[[2, 31]] = np.nan
     factors_raw[8, 0] = np.nan
-    factors_raw[46, 1] = np.nan
+    factors_raw[46, -1] = np.nan
 
     def build(values: np.ndarray, name: str) -> Panel:
         return _static_panel(
@@ -537,7 +539,7 @@ def test_regularized_rolling_paths_match_row_reference(
     target = build(target_raw, "target")
     factors = [
         build(factors_raw[:, index], f"factor_{index}")
-        for index in range(2)
+        for index in range(factor_count)
     ]
     expected = _rolling_regularized_reference(
         _dense_values(target),
@@ -751,9 +753,16 @@ def test_fast_paths_preserve_dynamic_membership_and_traces() -> None:
         ddof=0,
     ).compute()
     regressed = rolling_ols(source, source, window=2).compute()
+    regularized = rolling_lasso(
+        source,
+        source,
+        window=2,
+        max_iter=1,
+        tolerance=0.0,
+    ).compute()
 
     expected_keys = domain.grid_lazy().collect().sort(["time", "asset_id"])
-    for output in (ranked, scored, regressed):
+    for output in (ranked, scored, regressed, regularized):
         collected = output.collect(include_traces=True)
         assert collected.select("time", "asset_id").equals(expected_keys)
         assert collected.get_column("base_available_date").to_list() == [

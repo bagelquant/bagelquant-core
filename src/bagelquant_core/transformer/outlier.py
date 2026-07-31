@@ -7,7 +7,7 @@ from numbers import Real
 import polars as pl
 
 from ..frame import TIME, VALUE, panel_like
-from .core import transformer
+from .core import _expression_plan, transformer
 
 
 @transformer
@@ -49,3 +49,56 @@ def _validate_bounds(lower: Real, upper: Real) -> None:
         raise TypeError("bounds must be real")
     if lower > upper:
         raise ValueError("lower must not exceed upper")
+
+
+def _plan_outlier(
+    frame: pl.LazyFrame,
+    config: dict[str, object],
+    operation: str,
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    lower = config.get("lower", 0.01)
+    upper = config.get("upper", 0.99)
+    value = pl.col(VALUE)
+    if operation in {"truncate", "trim"}:
+        _validate_bounds(lower, upper)
+        expression = (
+            value.clip(float(lower), float(upper))
+            if operation == "truncate"
+            else pl.when(value.is_between(float(lower), float(upper)))
+            .then(value)
+            .otherwise(None)
+        )
+    else:
+        if not 0 <= lower <= upper <= 1:
+            raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1")
+        lo = value.quantile(lower).over(TIME)
+        hi = value.quantile(upper).over(TIME)
+        expression = (
+            pl.when(value.is_between(lo, hi)).then(value).otherwise(None)
+        )
+    return _expression_plan(
+        frame,
+        expression,
+        order,
+        asset_time_ordered,
+    )
+
+
+for _plan_name, _plan_transformer in {
+    "truncate": truncate,
+    "trim": trim,
+    "trim_quantile": trim_quantile,
+}.items():
+    _plan_transformer._set_plan_operation(  # type: ignore[attr-defined]
+        lambda frame, config, order, asset_time_ordered, name=_plan_name: (
+            _plan_outlier(
+                frame,
+                dict(config),
+                name,
+                order,
+                asset_time_ordered,
+            )
+        )
+    )

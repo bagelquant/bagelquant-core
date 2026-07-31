@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from numbers import Real
 
 import numpy as np
@@ -15,12 +15,114 @@ from ..frame import (
     _balanced_inner_join,
     panel_like,
 )
-from .core import composer
+from .core import _horizontal_value_plan, composer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
 _SINGLE_FACTOR_OLS_ARRAYS = 16
 _GRAM_CONDITION_LIMIT = 1e-3
 _RIDGE_CONDITION_LIMIT = 1e-10
+
+
+class _ElasticBatch:
+    """Pack independent asset windows into bounded coordinate-descent calls."""
+
+    def __init__(
+        self,
+        capacity: int,
+        coefficient_count: int,
+        *,
+        alpha: float,
+        l1_ratio: float,
+        max_iter: int,
+        tolerance: float,
+    ) -> None:
+        self.gram = np.empty(
+            (capacity, coefficient_count, coefficient_count),
+            dtype=float,
+        )
+        self.rhs = np.empty((capacity, coefficient_count), dtype=float)
+        self.counts = np.empty(capacity, dtype=np.int64)
+        self.eligible = np.empty(capacity, dtype=bool)
+        self.current_design = np.empty(
+            (capacity, coefficient_count),
+            dtype=float,
+        )
+        self.alpha = alpha
+        self.l1_ratio = l1_ratio
+        self.max_iter = max_iter
+        self.tolerance = tolerance
+        self.size = 0
+        self.destinations: list[
+            tuple[np.ndarray, int, int, int, int]
+        ] = []
+        self.solve_count = 0
+        self.active_window_iterations = 0
+
+    def append(
+        self,
+        gram: np.ndarray,
+        rhs: np.ndarray,
+        counts: np.ndarray,
+        eligible: np.ndarray,
+        current_design: np.ndarray,
+        destination: np.ndarray,
+        destination_start: int,
+        destination_end: int,
+    ) -> None:
+        length = len(gram)
+        if self.size and self.size + length > len(self.gram):
+            self.flush()
+        start = self.size
+        end = start + length
+        self.gram[start:end] = gram
+        self.rhs[start:end] = rhs
+        self.counts[start:end] = counts
+        self.eligible[start:end] = eligible
+        self.current_design[start:end] = current_design
+        self.destinations.append(
+            (
+                destination,
+                destination_start,
+                destination_end,
+                start,
+                end,
+            )
+        )
+        self.size = end
+        if self.size == len(self.gram):
+            self.flush()
+
+    def flush(self) -> None:
+        if not self.size:
+            return
+        coefficients, active_window_iterations = _solve_elastic_from_gram(
+            self.gram[: self.size],
+            self.rhs[: self.size],
+            counts=self.counts[: self.size],
+            eligible=self.eligible[: self.size],
+            alpha=self.alpha,
+            l1_ratio=self.l1_ratio,
+            max_iter=self.max_iter,
+            tolerance=self.tolerance,
+        )
+        self.active_window_iterations += active_window_iterations
+        values = np.einsum(
+            "ij,ij->i",
+            self.current_design[: self.size],
+            coefficients,
+        )
+        values = np.where(
+            self.eligible[: self.size],
+            values,
+            np.nan,
+        )
+        for destination, output_start, output_end, start, end in (
+            self.destinations
+        ):
+            destination[output_start:output_end] = values[start:end]
+        self.size = 0
+        self.destinations.clear()
+        self.solve_count += 1
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -98,6 +200,64 @@ def rolling_cov(
     )
 
 
+def _plan_rolling_pair(
+    frames: tuple[pl.LazyFrame, ...],
+    config: Mapping[str, object],
+    operation: str,
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    window = config.get("window")
+    if not isinstance(window, int) or isinstance(window, bool):
+        raise ValueError("window must be positive")
+    minp = _validate_window(window, config.get("min_periods"))
+    combined, values = _horizontal_value_plan(frames)
+    lhs = values[0].fill_nan(None)
+    rhs = values[1].fill_nan(None)
+    if operation == "rolling_corr":
+        expression = pl.rolling_corr(
+            lhs,
+            rhs,
+            window_size=window,
+            min_samples=minp,
+        ).over(ASSET_ID)
+    else:
+        ddof = config.get("ddof", 1)
+        expression = pl.rolling_cov(
+            lhs,
+            rhs,
+            window_size=window,
+            min_samples=minp,
+            ddof=ddof,
+        ).over(ASSET_ID)
+    return (
+        combined.select(
+            TIME,
+            ASSET_ID,
+            expression.alias(VALUE),
+        ),
+        order,
+        asset_time_ordered,
+    )
+
+
+for _plan_name, _plan_composer in {
+    "rolling_corr": rolling_corr,
+    "rolling_cov": rolling_cov,
+}.items():
+    _plan_composer._set_plan_operation(  # type: ignore[attr-defined]
+        lambda frames, config, order, asset_time_ordered, name=_plan_name: (
+            _plan_rolling_pair(
+                frames,
+                config,
+                name,
+                order,
+                asset_time_ordered,
+            )
+        )
+    )
+
+
 def _validate_non_negative_real(value: float, *, name: str) -> None:
     if not isinstance(value, Real) or isinstance(value, bool) or value < 0:
         raise ValueError(f"{name} must be a non-negative real number")
@@ -171,6 +331,7 @@ def _rolling_gram_regression(
     tolerance: float = 0.0,
     static_shape: tuple[int, int] | None = None,
     group_offsets: np.ndarray | None = None,
+    diagnostics: dict[str, int] | None = None,
 ) -> pl.DataFrame:
     """Predict rolling regressions from bounded sufficient statistics."""
 
@@ -240,6 +401,19 @@ def _rolling_gram_regression(
             for asset_index in range(asset_count)
         )
 
+    elastic_batch = (
+        _ElasticBatch(
+            rows_per_batch,
+            coefficient_count,
+            alpha=alpha,
+            l1_ratio=l1_ratio,
+            max_iter=max_iter,
+            tolerance=tolerance,
+        )
+        if method == "elastic"
+        else None
+    )
+
     for group_y, group_x, group_prediction in groups:
         prediction_count = len(group_y) - window
 
@@ -294,17 +468,18 @@ def _rolling_gram_regression(
                 )
                 fallback = eligible & ~fast
             else:
-                coefficients = _solve_elastic_from_gram(
+                assert elastic_batch is not None
+                elastic_batch.append(
                     gram,
                     rhs,
-                    counts=counts,
-                    eligible=eligible,
-                    alpha=alpha,
-                    l1_ratio=l1_ratio,
-                    max_iter=max_iter,
-                    tolerance=tolerance,
+                    counts,
+                    eligible,
+                    current_design,
+                    group_prediction,
+                    window + start,
+                    window + end,
                 )
-                fallback = np.zeros(batch_size, dtype=bool)
+                continue
 
             for index in np.flatnonzero(fallback):
                 window_start = start + index
@@ -333,6 +508,18 @@ def _rolling_gram_regression(
                 eligible,
                 values,
                 np.nan,
+            )
+
+    if elastic_batch is not None:
+        elastic_batch.flush()
+        if diagnostics is not None:
+            diagnostics["solver_batches"] = (
+                diagnostics.get("solver_batches", 0)
+                + elastic_batch.solve_count
+            )
+            diagnostics["active_window_iterations"] = (
+                diagnostics.get("active_window_iterations", 0)
+                + elastic_batch.active_window_iterations
             )
 
     if data.is_empty():
@@ -452,7 +639,7 @@ def _solve_elastic_from_gram(
     l1_ratio: float,
     max_iter: int,
     tolerance: float,
-) -> np.ndarray:
+) -> tuple[np.ndarray, int]:
     coefficient_count = gram.shape[-1]
     coefficients = np.zeros((len(gram), coefficient_count), dtype=float)
     coefficients[:, 0] = np.divide(
@@ -465,51 +652,64 @@ def _solve_elastic_from_gram(
     shrinkage = alpha * l1_ratio
     ridge_penalty = alpha * (1.0 - l1_ratio)
 
+    active_indices = np.flatnonzero(active)
+    active_gram = gram[active_indices].copy()
+    active_rhs = rhs[active_indices].copy()
+    active_coefficients = coefficients[active_indices].copy()
+    active_window_iterations = 0
     for _ in range(max_iter):
-        active_indices = np.flatnonzero(active)
         if not len(active_indices):
             break
-        previous = coefficients[active_indices].copy()
+        active_window_iterations += len(active_indices)
+        previous = active_coefficients.copy()
         for index in range(coefficient_count):
             numerator = (
-                rhs[active_indices, index]
+                active_rhs[:, index]
                 - np.einsum(
                     "bi,bi->b",
-                    gram[active_indices, index, :],
-                    coefficients[active_indices],
+                    active_gram[:, index, :],
+                    active_coefficients,
                 )
-                + gram[active_indices, index, index]
-                * coefficients[active_indices, index]
+                + active_gram[:, index, index]
+                * active_coefficients[:, index]
             )
+            updated = np.full(len(active_indices), np.nan)
             if index == 0:
-                updated = np.divide(
+                np.divide(
                     numerator,
-                    gram[active_indices, index, index],
-                    out=np.full(len(active_indices), np.nan),
-                    where=gram[active_indices, index, index] != 0,
+                    active_gram[:, index, index],
+                    out=updated,
+                    where=active_gram[:, index, index] != 0,
                 )
             else:
                 denominator = (
-                    gram[active_indices, index, index]
-                    + ridge_penalty
+                    active_gram[:, index, index] + ridge_penalty
                 )
-                updated = np.divide(
+                np.divide(
                     np.sign(numerator)
                     * np.maximum(np.abs(numerator) - shrinkage, 0.0),
                     denominator,
-                    out=np.full(len(active_indices), np.nan),
+                    out=updated,
                     where=denominator != 0,
                 )
-            coefficients[active_indices, index] = updated
+            active_coefficients[:, index] = updated
         converged = (
             np.max(
-                np.abs(coefficients[active_indices] - previous),
+                np.abs(active_coefficients - previous),
                 axis=1,
             )
             <= tolerance
         )
-        active[active_indices[converged]] = False
-    return coefficients
+        coefficients[active_indices[converged]] = active_coefficients[
+            converged
+        ]
+        keep = ~converged
+        active_indices = active_indices[keep]
+        active_gram = active_gram[keep]
+        active_rhs = active_rhs[keep]
+        active_coefficients = active_coefficients[keep]
+    coefficients[active_indices] = active_coefficients
+    return coefficients, active_window_iterations
 
 
 def _rolling_single_factor_ols(
@@ -751,6 +951,7 @@ def _rolling_regression_aligned(
     static_shape: tuple[int, int] | None,
     asset_permutation: np.ndarray | None = None,
     group_offsets: np.ndarray | None = None,
+    diagnostics: dict[str, int] | None = None,
 ) -> pl.DataFrame:
     """Run a regression on executor-proven positionally aligned inputs."""
 
@@ -838,6 +1039,7 @@ def _rolling_regression_aligned(
         tolerance=float(tolerance),
         static_shape=static_shape,
         group_offsets=group_offsets,
+        diagnostics=diagnostics,
     )
 
 

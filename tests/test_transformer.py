@@ -4,9 +4,19 @@ from datetime import date
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from bagelquant_core import Domain, Panel, pct_change_frame
-from bagelquant_core.transformer import lag, rank, rolling_mean, zscore
+from bagelquant_core.transformer import (
+    kelly,
+    kelly_nonan_standardize,
+    kelly_rank_boxcox,
+    kelly_rescaling_weight,
+    lag,
+    rank,
+    rolling_mean,
+    zscore,
+)
 
 from helpers import panel, values
 
@@ -104,3 +114,58 @@ def test_zscore_constant_cross_section_returns_null_or_nan() -> None:
         + graph.output.data["value"].is_nan().sum()
         == 2
     )
+
+
+@pytest.mark.parametrize(
+    ("operation", "parameters"),
+    [
+        (kelly, {"window": 3}),
+        (kelly_nonan_standardize, {"window": 3}),
+        (kelly_rank_boxcox, {"window": 3, "lambda_": 0.5}),
+        (kelly_rescaling_weight, {"window": 3}),
+    ],
+)
+def test_kelly_private_plan_matches_public_operation(
+    operation,
+    parameters: dict[str, float | int],
+) -> None:
+    times = [f"2024-01-{day:02d}" for day in range(1, 8)]
+    assets = ["a", "b", "c"]
+    domain = Domain(calendar=times, universe=assets)
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": [time for time in times for _ in assets],
+                "asset_id": assets * len(times),
+                "value": [
+                    1.0,
+                    2.0,
+                    None,
+                    2.0,
+                    -1.0,
+                    3.0,
+                    4.0,
+                    0.0,
+                    2.0,
+                    None,
+                    5.0,
+                    1.0,
+                    3.0,
+                    2.0,
+                    6.0,
+                    5.0,
+                    4.0,
+                    -2.0,
+                    7.0,
+                    6.0,
+                    8.0,
+                ],
+            }
+        ),
+        domain,
+    )
+
+    expected = operation.operation(source.data, **parameters)
+    actual = operation(source, **parameters).compute().data
+
+    assert_frame_equal(actual, expected)

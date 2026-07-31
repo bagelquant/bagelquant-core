@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like, unary
-from .core import _ordered_expression_plan, transformer
+from .core import _expression_plan, _ordered_expression_plan, transformer
 
 
 @transformer
@@ -97,6 +97,30 @@ pct_change._set_plan_operation(  # type: ignore[attr-defined]
     lambda frame, config, order, asset_time_ordered: _plan_pct_change(
         frame,
         dict(config),
+        order,
+        asset_time_ordered,
+    )
+)
+
+identity._set_plan_operation(  # type: ignore[attr-defined]
+    lambda frame, config, order, asset_time_ordered: (
+        frame.select(TIME, ASSET_ID, VALUE),
+        order,
+        asset_time_ordered,
+    )
+)
+abs_value._set_plan_operation(  # type: ignore[attr-defined]
+    lambda frame, config, order, asset_time_ordered: _expression_plan(
+        frame,
+        pl.col(VALUE).abs(),
+        order,
+        asset_time_ordered,
+    )
+)
+negate._set_plan_operation(  # type: ignore[attr-defined]
+    lambda frame, config, order, asset_time_ordered: _expression_plan(
+        frame,
+        -pl.col(VALUE),
         order,
         asset_time_ordered,
     )

@@ -76,6 +76,10 @@ class ExecutionRuntime:
             tuple[str, str, str],
             _EagerLayout,
         ] | None = None
+        self._active_eager_physical_results: dict[
+            str,
+            pl.DataFrame,
+        ] | None = None
         self.materializations = 0
         self.eager_barriers = 0
         self._diagnostics = {
@@ -83,6 +87,10 @@ class ExecutionRuntime:
             "alignments_elided": 0,
             "sorts_elided": 0,
             "membership_applications": 0,
+            "positional_composer_hits": 0,
+            "eager_cse_hits": 0,
+            "solver_batches": 0,
+            "active_window_iterations": 0,
         }
 
     def run(
@@ -98,6 +106,7 @@ class ExecutionRuntime:
         self._active_eager_inputs = {}
         self._active_eager_results = {}
         self._active_eager_layouts = {}
+        self._active_eager_physical_results = {}
         try:
             evaluated: dict[int, PlanValue] = {}
             plans = [
@@ -126,6 +135,7 @@ class ExecutionRuntime:
             self._active_eager_inputs = None
             self._active_eager_results = None
             self._active_eager_layouts = None
+            self._active_eager_physical_results = None
 
     def _materialize_many(
         self,
@@ -442,6 +452,22 @@ class ExecutionRuntime:
                     prepared[0].order,
                     prepared[0].asset_time_ordered,
                 )
+            elif (
+                plan_operation is not None
+                and node.node_type == "composer"
+                and self._positionally_aligned(prepared)
+            ):
+                self._diagnostics["positional_composer_hits"] += 1
+                common_order = prepared[0].order
+                plan_asset_time_ordered = all(
+                    parent.asset_time_ordered for parent in prepared
+                )
+                result, plan_order, plan_asset_time_ordered = plan_operation(
+                    inputs,
+                    self._node_parameters(node),
+                    common_order,
+                    plan_asset_time_ordered,
+                )
             else:
                 result = node.compute(*inputs)
             if isinstance(result, pl.DataFrame):
@@ -453,13 +479,26 @@ class ExecutionRuntime:
                 )
         else:
             self.eager_barriers += 1
-            eager_inputs = self._collect_eager_inputs(prepared, inputs)
-            result = self._compute_eager(
-                node,
-                prepared,
-                eager_inputs,
-                domain,
+            assert self._active_eager_physical_results is not None
+            result = (
+                self._active_eager_physical_results.get(physical_identity)
+                if cacheable and builtin
+                else None
             )
+            if result is None:
+                eager_inputs = self._collect_eager_inputs(prepared, inputs)
+                result = self._compute_eager(
+                    node,
+                    prepared,
+                    eager_inputs,
+                    domain,
+                )
+                if cacheable and builtin:
+                    self._active_eager_physical_results[
+                        physical_identity
+                    ] = result
+            else:
+                self._diagnostics["eager_cse_hits"] += 1
             if not isinstance(result, pl.DataFrame):
                 raise TypeError(
                     f"Node '{node.name}' returned {type(result)}; "
@@ -759,6 +798,7 @@ class ExecutionRuntime:
                         if layout is None
                         else layout.asset_offsets
                     ),
+                    diagnostics=self._diagnostics,
                 )
             return node.compute(*inputs)
         if operation not in {"rolling_rank", "rolling_percentile"}:
@@ -1654,6 +1694,24 @@ class ExecutionRuntime:
             key_identity is not None
             and all(parent.exact_domain for parent in parents)
             and all(parent.key_identity == key_identity for parent in parents)
+        )
+
+    @staticmethod
+    def _positionally_aligned(parents: tuple[PlanValue, ...]) -> bool:
+        if not parents:
+            return False
+        key_identity = parents[0].key_identity
+        order = parents[0].order
+        return (
+            key_identity is not None
+            and order is not None
+            and all(parent.exact_domain for parent in parents)
+            and all(parent.validated_keys for parent in parents)
+            and all(
+                parent.key_identity == key_identity
+                and parent.order == order
+                for parent in parents
+            )
         )
 
     @staticmethod

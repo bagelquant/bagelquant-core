@@ -13,7 +13,7 @@ from bagelquant_core import (
     Panel,
     TraceRule,
 )
-from bagelquant_core.composer import add, mul
+from bagelquant_core.composer import add, mul, rolling_ols, sum_frames
 from bagelquant_core.transformer import (
     bfill,
     constant,
@@ -250,6 +250,51 @@ def test_semantically_equal_named_nodes_share_physical_plan() -> None:
     assert runtime.materializations == 1
 
 
+def test_semantically_equal_eager_nodes_share_physical_result() -> None:
+    source = _traced_panel()
+    runtime = ExecutionRuntime()
+    outputs = Graph(
+        outputs=[
+            rolling_ols(
+                source,
+                source,
+                window=2,
+                name=f"ols_{index}",
+                metadata={"index": index},
+            )
+            for index in range(5)
+        ]
+    ).compute(runtime=runtime)
+
+    assert len({panel.identity for panel in outputs.values()}) == 5
+    assert [panel.metadata["index"] for panel in outputs.values()] == list(
+        range(5)
+    )
+    assert runtime.eager_barriers == 5
+    assert runtime.materializations == 2
+    assert runtime._diagnostics["eager_cse_hits"] == 4
+
+
+def test_same_key_composer_uses_positional_plan() -> None:
+    source = Panel.from_domain(_traced_panel().data, _traced_panel().domain)
+    runtime = ExecutionRuntime()
+
+    output = sum_frames(*([source] * 10)).compute(runtime=runtime)
+
+    assert output.data["value"].to_list() == [100.0, 110.0, 120.0]
+    assert runtime._diagnostics["positional_composer_hits"] == 1
+    assert "SORT BY" not in output.lazy(dense=False).explain().upper()
+
+
+def test_unvalidated_composer_input_keeps_conservative_join() -> None:
+    source = _traced_panel()
+    runtime = ExecutionRuntime()
+
+    add(source, source).compute(runtime=runtime)
+
+    assert runtime._diagnostics["positional_composer_hits"] == 0
+
+
 def test_custom_operation_remains_scoped_sorted_and_conservative() -> None:
     days = [date(2024, 3, day) for day in (1, 2)]
     domain = Domain(calendar=days, universe=["A"])
@@ -302,6 +347,20 @@ def test_direct_rolling_operation_preserves_public_sorting() -> None:
         window=2,
         min_periods=1,
     )
+
+    assert output["time"].to_list() == sorted(output["time"].to_list())
+
+
+def test_direct_composer_operation_preserves_public_sorting() -> None:
+    frame = pl.DataFrame(
+        {
+            "time": [date(2024, 4, 2), date(2024, 4, 1)],
+            "asset_id": ["A", "A"],
+            "value": [2.0, 1.0],
+        }
+    )
+
+    output = sum_frames.operation(frame, frame)
 
     assert output["time"].to_list() == sorted(output["time"].to_list())
 

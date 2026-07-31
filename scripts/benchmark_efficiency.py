@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 
 from bagelquant_core import Domain, ExecutionRuntime, Panel
-from bagelquant_core.composer import add, rolling_corr, rolling_ols
+from bagelquant_core.composer import add, rolling_corr, rolling_ols, sum_frames
 from bagelquant_core.transformer import (
     ewm_mean,
     rolling_mean,
@@ -66,6 +66,7 @@ DEFAULT_CASES = (
     "zscore_add",
     "rolling_corr",
     "rolling_ols",
+    "sum_10",
     "runtime_cache_miss",
     "runtime_cache_hit",
 )
@@ -187,6 +188,8 @@ def _case_runner(
             )
         elif case == "rolling_ols":
             graph = rolling_ols(other, base, window=window)
+        elif case == "sum_10":
+            graph = sum_frames(*([base, other] * 5))
         elif case == "runtime_cache_miss":
             graph = zscore(add(base, other), name="cached_zscore")
         else:

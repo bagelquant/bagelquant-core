@@ -49,17 +49,16 @@ def weighted_sum(*frames: pl.DataFrame, weights: Sequence[float]) -> pl.DataFram
         raise ValueError("weights length must match frame count")
     if any(not isinstance(weight, Real) or isinstance(weight, bool) for weight in weights):
         raise TypeError("weights must be real numbers")
-    joined = frames[0].rename({VALUE: "v0"})
-    expr = pl.col("v0") * float(weights[0])
-    for index, (frame, weight) in enumerate(
-        zip(frames[1:], weights[1:], strict=True), start=1
-    ):
-        name = f"v{index}"
-        joined = joined.join(
-            frame.rename({VALUE: name}), on=["time", "asset_id"], how="inner"
-        )
-        expr = expr + pl.col(name) * float(weight)
-    return panel_like(joined, expr)
+    return nary(
+        frames,
+        lambda values: sum(
+            (
+                value * float(weight)
+                for value, weight in zip(values, weights, strict=True)
+            ),
+            pl.lit(0.0),
+        ),
+    )
 
 
 @composer

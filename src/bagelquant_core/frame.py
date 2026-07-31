@@ -122,15 +122,35 @@ def nary(
     items = list(frames)
     if not items:
         raise ValueError("at least one frame is required")
-    joined = items[0].rename({VALUE: "v0"})
-    columns = [pl.col("v0")]
-    for index, frame in enumerate(items[1:], start=1):
-        name = f"v{index}"
-        joined = joined.join(
-            frame.rename({VALUE: name}), on=list(PANEL_KEYS), how="inner"
-        )
-        columns.append(pl.col(name))
+    columns = [pl.col(f"v{index}") for index in range(len(items))]
+    joined = _balanced_inner_join(
+        [
+            frame.rename({VALUE: f"v{index}"})
+            for index, frame in enumerate(items)
+        ]
+    )
     return panel_like(joined, reducer(columns))
+
+
+def _balanced_inner_join(frames: list[pl.DataFrame]) -> pl.DataFrame:
+    """Join unique-key panel frames with logarithmic plan depth."""
+
+    current = frames
+    while len(current) > 1:
+        next_level: list[pl.DataFrame] = []
+        for index in range(0, len(current), 2):
+            if index + 1 == len(current):
+                next_level.append(current[index])
+                continue
+            next_level.append(
+                current[index].join(
+                    current[index + 1],
+                    on=list(PANEL_KEYS),
+                    how="inner",
+                )
+            )
+        current = next_level
+    return current[0]
 
 
 def cross_section_rank(frame: pl.DataFrame, *, pct: bool = False) -> pl.DataFrame:

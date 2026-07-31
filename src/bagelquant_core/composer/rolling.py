@@ -14,6 +14,7 @@ from .core import composer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
 _OLS_ARRAY_COPIES = 4
+_SINGLE_FACTOR_OLS_ARRAYS = 16
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -183,6 +184,13 @@ def _rolling_ols(
         )
     data = data.sort([ASSET_ID, TIME])
 
+    if len(factor_columns) == 1:
+        return _rolling_single_factor_ols(
+            data,
+            factor_column=factor_columns[0],
+            window=window,
+        )
+
     output: list[pl.DataFrame] = []
     feature_count = len(factor_columns)
     coefficient_count = feature_count + 1
@@ -276,6 +284,171 @@ def _rolling_ols(
             schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
         )
     return pl.concat(output).sort([TIME, ASSET_ID])
+
+
+def _rolling_single_factor_ols(
+    data: pl.DataFrame,
+    *,
+    factor_column: str,
+    window: int,
+) -> pl.DataFrame:
+    """Predict single-factor OLS from prior-window sufficient statistics."""
+
+    output: list[pl.DataFrame] = []
+    itemsize = np.dtype(np.float64).itemsize
+    rows_per_batch = max(
+        1,
+        _MAX_WORKING_BYTES // (itemsize * _SINGLE_FACTOR_OLS_ARRAYS) - window,
+    )
+    epsilon = np.finfo(np.float64).eps
+
+    for group in data.partition_by(ASSET_ID):
+        target_values = group.get_column("target").to_numpy().astype(
+            float, copy=False
+        )
+        factor_values = group.get_column(factor_column).to_numpy().astype(
+            float, copy=False
+        )
+        prediction = np.full(len(group), np.nan, dtype=float)
+        prediction_count = len(group) - window
+
+        for start in range(0, max(prediction_count, 0), rows_per_batch):
+            end = min(start + rows_per_batch, prediction_count)
+            batch_size = end - start
+            train_y = target_values[start : window + end]
+            train_x = factor_values[start : window + end]
+            valid = np.isfinite(train_y) & np.isfinite(train_x)
+            valid_y = np.where(valid, train_y, 0.0)
+            valid_count = valid.sum()
+            factor_shift = (
+                float(np.where(valid, train_x, 0.0).sum() / valid_count)
+                if valid_count
+                else 0.0
+            )
+            shifted_x = np.where(valid, train_x - factor_shift, 0.0)
+
+            counts = _window_sum(valid.astype(np.int64), window, batch_size)
+            sum_shifted_x = _window_sum(shifted_x, window, batch_size)
+            sum_y = _window_sum(valid_y, window, batch_size)
+            sum_shifted_xx = _window_sum(
+                shifted_x * shifted_x,
+                window,
+                batch_size,
+            )
+            sum_shifted_xy = _window_sum(
+                shifted_x * valid_y,
+                window,
+                batch_size,
+            )
+            current_x = factor_values[window + start : window + end]
+            eligible = (counts > 0) & np.isfinite(current_x)
+            sum_x = sum_shifted_x + counts * factor_shift
+            sum_xx = (
+                sum_shifted_xx
+                + 2.0 * factor_shift * sum_shifted_x
+                + counts * factor_shift * factor_shift
+            )
+
+            gram = np.empty((batch_size, 2, 2), dtype=float)
+            gram[:, 0, 0] = counts
+            gram[:, 0, 1] = sum_x
+            gram[:, 1, 0] = sum_x
+            gram[:, 1, 1] = sum_xx
+            eigenvalues = np.linalg.eigvalsh(gram)
+            eigenvalues = np.maximum(eigenvalues, 0.0)
+            singular_values = np.sqrt(eigenvalues)
+            cutoff = (
+                epsilon
+                * np.maximum(counts, 2)
+                * singular_values[:, 1]
+            )
+            full_rank = singular_values[:, 0] > cutoff
+            well_conditioned = (
+                singular_values[:, 0]
+                > np.sqrt(epsilon) * singular_values[:, 1]
+            )
+
+            safe_counts = np.maximum(counts, 1)
+            mean_shifted_x = sum_shifted_x / safe_counts
+            mean_y = sum_y / safe_counts
+            centered_xx = (
+                sum_shifted_xx - sum_shifted_x * mean_shifted_x
+            )
+            centered_xy = (
+                sum_shifted_xy - sum_shifted_x * mean_y
+            )
+            cancellation_scale = np.maximum.reduce(
+                [
+                    np.abs(sum_shifted_xx),
+                    np.abs(sum_shifted_x * mean_shifted_x),
+                    np.ones(batch_size),
+                ]
+            )
+            stable_centering = centered_xx > 64.0 * epsilon * cancellation_scale
+            fast = (
+                eligible
+                & full_rank
+                & well_conditioned
+                & stable_centering
+            )
+
+            values = np.full(batch_size, np.nan, dtype=float)
+            slope = np.divide(
+                centered_xy,
+                centered_xx,
+                out=np.zeros(batch_size, dtype=float),
+                where=fast,
+            )
+            values[fast] = (
+                mean_y[fast]
+                + slope[fast]
+                * (
+                    current_x[fast]
+                    - factor_shift
+                    - mean_shifted_x[fast]
+                )
+            )
+
+            for index in np.flatnonzero(eligible & ~fast):
+                window_start = start + index
+                exact_y = target_values[window_start : window_start + window]
+                exact_x = factor_values[window_start : window_start + window]
+                exact_valid = np.isfinite(exact_y) & np.isfinite(exact_x)
+                design = np.column_stack(
+                    [np.ones(exact_valid.sum()), exact_x[exact_valid]]
+                )
+                coefficients = _ols_fit(design, exact_y[exact_valid])
+                values[index] = (
+                    coefficients[0]
+                    + current_x[index] * coefficients[1]
+                )
+
+            prediction[window + start : window + end] = values
+
+        output.append(
+            group.select(TIME, ASSET_ID).with_columns(
+                pl.Series(VALUE, prediction, nan_to_null=True)
+            )
+        )
+
+    if not output:
+        return pl.DataFrame(
+            schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
+        )
+    return pl.concat(output).sort([TIME, ASSET_ID])
+
+
+def _window_sum(
+    values: np.ndarray,
+    window: int,
+    output_size: int,
+) -> np.ndarray:
+    """Return fixed-size rolling sums without materializing window views."""
+
+    prefix = np.empty(len(values) + 1, dtype=values.dtype)
+    prefix[0] = 0
+    np.cumsum(values, out=prefix[1:])
+    return prefix[window : window + output_size] - prefix[:output_size]
 
 
 def _batched_lstsq(

@@ -276,6 +276,104 @@ def test_rolling_ols_batched_path_matches_lstsq_reference() -> None:
     )
 
 
+@pytest.mark.parametrize("seed", [7, 42, 2024])
+def test_rolling_ols_single_factor_path_matches_lstsq_reference(
+    seed: int,
+) -> None:
+    rng = np.random.default_rng(seed)
+    group_size = 40
+    dates = [
+        str(date(2024, 1, 1) + timedelta(days=offset))
+        for offset in range(group_size)
+    ]
+    factor_values = rng.normal(size=group_size * 2)
+    target_values = (
+        3.0
+        - 1.25 * factor_values
+        + rng.normal(scale=0.05, size=group_size * 2)
+    )
+    target_values[[2, 9, 41, 68]] = np.nan
+    factor_values[[5, 18, 47, 72]] = np.nan
+    rows = [
+        (time, asset)
+        for asset in ("a", "b")
+        for time in dates
+    ]
+
+    def build(values: np.ndarray, name: str) -> Panel:
+        return _static_panel(
+            [
+                (time, asset, None if np.isnan(value) else float(value))
+                for (time, asset), value in zip(rows, values, strict=True)
+            ],
+            name=name,
+        )
+
+    target = build(target_values, "target")
+    factor = build(factor_values, "factor")
+    expected = _rolling_ols_reference(
+        _dense_values(target),
+        _dense_values(factor)[:, None],
+        group_size=group_size,
+        window=12,
+    )
+
+    actual = rolling_ols(target, factor, window=12).compute()
+
+    np.testing.assert_allclose(
+        _dense_values(actual),
+        expected,
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "factor_values",
+    [
+        [2.0] * 8,
+        [1e8 + offset * 1e-7 for offset in range(8)],
+    ],
+)
+def test_rolling_ols_single_factor_falls_back_for_unstable_windows(
+    factor_values: list[float],
+) -> None:
+    target_values = np.array(
+        [4.0, 5.0, np.nan, 8.0, 9.0, 11.0, 13.0, 15.0]
+    )
+    target = _static_panel(
+        [
+            (f"2024-01-{index + 1:02d}", "a", value)
+            for index, value in enumerate(target_values)
+        ],
+        name="target",
+    )
+    factor = _static_panel(
+        [
+            (f"2024-01-{index + 1:02d}", "a", value)
+            for index, value in enumerate(factor_values)
+        ],
+        name="factor",
+    )
+    expected = _rolling_ols_reference(
+        _dense_values(target),
+        _dense_values(factor)[:, None],
+        group_size=8,
+        window=4,
+    )
+
+    actual = rolling_ols(target, factor, window=4).compute()
+
+    np.testing.assert_allclose(
+        _dense_values(actual),
+        expected,
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
 def test_rolling_ols_preserves_invalid_window_and_current_factor_nulls() -> None:
     target = _static_panel(
         [

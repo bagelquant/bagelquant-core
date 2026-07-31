@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from bagelquant_core.composer import add, group_mean
+import polars as pl
+
+from bagelquant_core import Domain, Panel
+from bagelquant_core.composer import (
+    add,
+    group_mean,
+    sum_frames,
+    weighted_sum,
+)
 
 from helpers import panel, values
 
@@ -29,3 +37,56 @@ def test_group_mean_uses_group_panel() -> None:
         ("2024-01-01", "a"): 2.0,
         ("2024-01-01", "b"): 2.0,
     }
+
+
+def test_wide_aggregation_preserves_sparse_inner_alignment() -> None:
+    domain = Domain(
+        calendar=["2024-01-01", "2024-01-02"],
+        universe=["a", "b"],
+    )
+    panels = []
+    for index in range(7):
+        frame = pl.DataFrame(
+            {
+                "time": ["2024-01-02", "2024-01-01"],
+                "asset_id": ["b", "a" if index % 2 == 0 else "b"],
+                "value": [float(index + 1), float(index + 10)],
+            }
+        )
+        panels.append(
+            Panel.from_domain(frame, domain, name=f"input_{index}")
+        )
+
+    summed = sum_frames(*panels)
+    weighted = weighted_sum(*panels, weights=[1.0] * len(panels))
+    summed.compute()
+    weighted.compute()
+
+    expected = {
+        ("2024-01-01", "a"): None,
+        ("2024-01-01", "b"): None,
+        ("2024-01-02", "a"): None,
+        ("2024-01-02", "b"): 28.0,
+    }
+    assert values(summed.output.data) == expected
+    assert values(weighted.output.data) == expected
+
+
+def test_wide_aggregation_direct_output_remains_sorted() -> None:
+    frames = [
+        pl.DataFrame(
+            {
+                "time": ["2024-01-02", "2024-01-01"],
+                "asset_id": ["b", "a"],
+                "value": [float(index), float(index + 1)],
+            }
+        )
+        for index in range(10)
+    ]
+
+    result = sum_frames.operation(*frames)
+
+    assert result.get_column("time").to_list() == sorted(
+        result.get_column("time").to_list()
+    )
+    assert result.get_column("value").to_list() == [55.0, 45.0]

@@ -13,7 +13,17 @@ from .operation_contract import (
     OperationContract,
     TraceRule,
 )
-from .panel import CategoryPanel, Domain, Panel
+from .panel import CategoryPanel, Domain, Panel, SignalPanel
+from .signal import (
+    EqualWeightSignalComposer,
+    GLSSignalComposer,
+    ICWeightedSignalComposer,
+    IdentitySignalComposer,
+    OLSSignalComposer,
+    SignalComposer,
+    SignalStandardization,
+    SignalTrainingContext,
+)
 from .transformer import pct_change_frame
 
 __all__ = [
@@ -28,6 +38,15 @@ __all__ = [
     "InputDensity",
     "OperationContract",
     "Panel",
+    "SignalComposer",
+    "SignalPanel",
+    "SignalStandardization",
+    "SignalTrainingContext",
+    "IdentitySignalComposer",
+    "EqualWeightSignalComposer",
+    "ICWeightedSignalComposer",
+    "OLSSignalComposer",
+    "GLSSignalComposer",
     "TraceRule",
     "pct_change_frame",
 ]

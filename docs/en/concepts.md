@@ -17,6 +17,10 @@ values during execution.
 
 See [Panel](reference/concepts/panel.md).
 
+`SignalPanel` is the strong terminal subtype produced only by a
+`SignalComposer`. Ordinary composers always produce ordinary `Panel` values,
+which represent AlphaValues rather than trading signals.
+
 ## Graph
 
 A `Graph` is a lazy chain of research logic. Transformers and composers return
@@ -45,6 +49,15 @@ arithmetic, cross-sectional grouping, rolling relationships, projection, and
 weighted aggregation.
 
 See [Composer](reference/concepts/composer.md).
+
+## Signal composers
+
+Signal construction is an allowlisted terminal graph operation. Identity,
+equal-weight, rolling positive-IC, rolling OLS, and rolling GLS composers all
+require cross-sectional `zscore` or `percentile_rank` standardization. The
+supervised composers receive generic target and availability Panels; core does
+not own prices, schedules, or backtest policies. Window length is measured in
+the periods prepared by the caller, and missing values are never forward-filled.
 
 ## Execution
 

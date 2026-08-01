@@ -303,3 +303,11 @@ class CategoryPanel(Panel):
     @staticmethod
     def _validate_data(data: pl.DataFrame) -> pl.DataFrame:
         return normalize_panel_frame(data, numeric=False)
+
+
+class SignalPanel(Panel):
+    """Strongly typed observation-time trading signal values.
+
+    Signal panels keep the ordinary numeric ``Panel`` storage contract while
+    establishing a runtime boundary that generic panels cannot cross.
+    """

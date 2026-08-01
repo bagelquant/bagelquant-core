@@ -19,7 +19,7 @@ from .operation_contract import (
     OperationContract,
     TraceRule,
 )
-from .panel import CategoryPanel, Domain, Panel
+from .panel import CategoryPanel, Domain, Panel, SignalPanel
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class PlanValue:
     trace_identity: str | None = None
     default_value: float | None = None
     categorical: bool = False
+    signal: bool = False
     cacheable: bool = True
     key_identity: str | None = None
     order: str | None = None
@@ -152,7 +153,13 @@ class ExecutionRuntime:
                 node.set_output(cached)
                 results[node.name] = cached
                 continue
-            panel_type = CategoryPanel if plan.categorical else Panel
+            panel_type = (
+                SignalPanel
+                if plan.signal
+                else CategoryPanel
+                if plan.categorical
+                else Panel
+            )
             panel = panel_type._from_plan(
                 self._frame_with_traces(plan),
                 domain=plan.domain,
@@ -334,6 +341,7 @@ class ExecutionRuntime:
                 ),
                 trace_identity=node.trace_identity,
                 categorical=isinstance(node, CategoryPanel),
+                signal=isinstance(node, SignalPanel),
                 key_identity=node._key_identity,
                 order=_TIME_ASSET_ORDER,
                 trace_key_identity=node._key_identity,
@@ -552,6 +560,7 @@ class ExecutionRuntime:
                 if node.node_type == "transformer"
                 else False
             ),
+            signal=node.node_type == "signal_composer",
             cacheable=cacheable,
             key_identity=key_identity,
             order=order,
@@ -876,7 +885,13 @@ class ExecutionRuntime:
         if cached is not None:
             logger.debug("Cache hit: %s", node.name)
             return cached
-        panel_type = CategoryPanel if plan.categorical else Panel
+        panel_type = (
+            SignalPanel
+            if plan.signal
+            else CategoryPanel
+            if plan.categorical
+            else Panel
+        )
         output = panel_type._from_plan(
             self._frame_with_traces(plan),
             domain=plan.domain,
@@ -1685,7 +1700,11 @@ class ExecutionRuntime:
         node: Node,
         parents: tuple[PlanValue, ...],
     ) -> bool:
-        if not parents or not self._is_builtin_operation(node):
+        if (
+            not parents
+            or not self._is_builtin_operation(node)
+            or node.node_type == "signal_composer"
+        ):
             return False
         if node.node_type == "transformer":
             return parents[0].exact_domain

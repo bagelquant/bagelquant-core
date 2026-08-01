@@ -12,6 +12,9 @@
 
 参见 [Panel](reference/concepts/panel.md)。
 
+`SignalPanel` 是只能由 `SignalComposer` 生成的强类型终端 subtype。普通 composer
+始终输出普通 `Panel`，表示 AlphaValue，而不是 trading signal。
+
 ## Graph
 
 `Graph` 表示惰性的研究逻辑链。Transformer 和 composer 不会立刻计算结果，而是返回新的图节点；只有调用 `compute()` 时才会物化输出面板。
@@ -35,6 +38,14 @@ Panel | Graph -> Graph
 Composer 用多个 `Panel` 或 `Graph` 输入生成一个新图，适合算术组合、分组截面运算、滚动关系、投影和加权聚合。
 
 参见 [Composer](reference/concepts/composer.md)。
+
+## Signal composer
+
+Signal 构建是 allowlist 中的终端 graph operation。Identity、equal-weight、rolling
+positive-IC、rolling OLS 与 rolling GLS 都必须使用截面 `zscore` 或
+`percentile_rank` standardization。监督式 composer 接收通用 target 与 availability
+Panel；core 不持有价格、schedule 或回测 policy。Window 长度由调用方准备的 period
+计数，缺失值不会 forward-fill。
 
 ## Execution
 

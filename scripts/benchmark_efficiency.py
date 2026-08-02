@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
-import resource
+import os
 import statistics
 import subprocess
 import sys
@@ -628,6 +629,44 @@ def _plan_sort_count(output: Panel | Mapping[str, Panel]) -> int:
 
 
 def _peak_rss_bytes() -> int:
+    if os.name == "nt":
+        class ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_ulong),
+                ("PageFaultCount", ctypes.c_ulong),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        counters = ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        psapi.GetProcessMemoryInfo.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ProcessMemoryCounters),
+            ctypes.c_ulong,
+        ]
+        psapi.GetProcessMemoryInfo.restype = ctypes.c_int
+        process = kernel32.GetCurrentProcess()
+        success = psapi.GetProcessMemoryInfo(
+            process,
+            ctypes.byref(counters),
+            counters.cb,
+        )
+        if not success:
+            raise OSError("GetProcessMemoryInfo failed")
+        return int(counters.PeakWorkingSetSize)
+
+    import resource
+
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(value if sys.platform == "darwin" else value * 1024)
 

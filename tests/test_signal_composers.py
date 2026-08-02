@@ -98,6 +98,26 @@ def test_percentile_rank_uses_average_ties_and_non_null_count() -> None:
     assert result.get_column("value").to_list() == pytest.approx([0.5, 0.5, 1.0])
 
 
+def test_signal_standardization_excludes_non_finite_alpha_values() -> None:
+    day = date(2024, 1, 31)
+    domain = Domain(calendar=[day], universe=["A", "B", "C"])
+    alpha = _panel(
+        domain,
+        "alpha",
+        [(day, "A", 1.0), (day, "B", 2.0), (day, "C", float("inf"))],
+    )
+
+    result = (
+        IdentitySignalComposer()
+        .compose(alpha, standardization="percentile_rank")
+        .compute(dense_output=False)
+        .collect(dense=False)
+    )
+
+    assert result.get_column("asset_id").to_list() == ["A", "B"]
+    assert result.get_column("value").to_list() == pytest.approx([0.5, 1.0])
+
+
 def test_ic_weighted_uses_only_positive_full_window_ic() -> None:
     times = [date(2024, month, 1) for month in range(1, 4)]
     assets = ["A", "B", "C"]

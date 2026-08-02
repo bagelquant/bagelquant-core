@@ -143,6 +143,20 @@ def test_dynamic_universe_rejects_invalid_keys() -> None:
         )
 
 
+def test_dynamic_universe_rejects_null_active_values() -> None:
+    with pytest.raises(ValueError, match="active values must be valid"):
+        Domain(
+            calendar=["2024-01-01"],
+            universe=pl.DataFrame(
+                {
+                    "time": ["2024-01-01"],
+                    "asset_id": ["a"],
+                    "active": [None],
+                }
+            ),
+        )
+
+
 def test_dynamic_membership_is_reapplied_after_transformers() -> None:
     domain = Domain(
         calendar=["2024-01-01", "2024-01-02"],

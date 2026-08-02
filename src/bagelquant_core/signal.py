@@ -356,7 +356,8 @@ def _standardized_wide(
         )
     expressions: list[pl.Expr] = []
     for name in _alpha_names(wide):
-        value = pl.col(name).fill_nan(None)
+        raw_value = pl.col(name).fill_nan(None)
+        value = pl.when(raw_value.is_finite()).then(raw_value).otherwise(None)
         if method == SignalStandardization.ZSCORE:
             deviation = value.std(ddof=1).over(TIME)
             expression = pl.when(deviation.is_not_null() & (deviation > 0)).then(

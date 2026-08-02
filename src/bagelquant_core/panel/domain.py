@@ -219,6 +219,8 @@ class Domain:
             ).any()
         ).item():
             raise ValueError("dynamic universe keys must be valid")
+        if normalized.select(pl.col("active").is_null().any()).item():
+            raise ValueError("dynamic universe active values must be valid")
         if normalized.select(
             pl.struct(TIME, ASSET_ID).is_duplicated().any()
         ).item():

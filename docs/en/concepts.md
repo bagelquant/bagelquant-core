@@ -59,6 +59,14 @@ supervised composers receive generic target and availability Panels; core does
 not own prices, schedules, or backtest policies. Window length is measured in
 the periods prepared by the caller, and missing values are never forward-filled.
 
+For application-orchestrated learning, `ElasticNetSignalComposer` serializes
+the complete walk-forward, coverage, target, validation, and Elastic Net
+contracts without depending on a backtest package. `ZeroPreservingRmsScaler`
+fits weighted RMS scales without centering, so gated zeros remain zeros.
+Relative regularization candidates are computed from each fold's sample-only
+`alpha_max`; a sample-plus-validation refit recomputes `alpha_max` while keeping
+the selected ratio.
+
 ## Execution
 
 Execution validates the graph, computes dependencies in topological order,

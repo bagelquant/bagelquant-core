@@ -47,6 +47,12 @@ positive-IC、rolling OLS 与 rolling GLS 都必须使用截面 `zscore` 或
 Panel；core 不持有价格、schedule 或回测 policy。Window 长度由调用方准备的 period
 计数，缺失值不会 forward-fill。
 
+对于由应用层编排的学习流程，`ElasticNetSignalComposer` 会完整序列化 walk-forward、
+coverage、target、validation 与 Elastic Net contract，同时不依赖回测包。
+`ZeroPreservingRmsScaler` 使用不中心化的加权 RMS，因此门控产生的零值在缩放后仍为零。
+相对正则路径的候选只使用每折 sample 计算 `alpha_max`；sample+validation 重训时会重新
+计算 `alpha_max`，但保留已经选中的 ratio。
+
 ## Execution
 
 执行过程会校验图结构，按拓扑顺序计算依赖，缓存中间结果，并重新应用动态成分约束，避免非活跃资产单元进入后续计算。

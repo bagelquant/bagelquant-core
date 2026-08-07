@@ -28,7 +28,8 @@ class NodeSpec:
     node_type: str
     config: Mapping[str, Any]
     metadata: Mapping[str, Any]
-    parents: tuple[str, ...]
+    inputs: tuple[str, ...]
+    panel_parameters: Mapping[str, tuple[str, ...]]
 
 
 class Node(ABC):
@@ -71,11 +72,25 @@ class Node(ABC):
         }
         return hash_mapping(payload)
 
+    def spec_inputs(self) -> tuple["Node", ...]:
+        """Return semantic operation inputs for graph serialization."""
+
+        return self.parents
+
+    def spec_panel_parameters(self) -> Mapping[str, tuple["Node", ...]]:
+        """Return named auxiliary Panel dependencies for serialization."""
+
+        return {}
+
     def spec(self) -> NodeSpec:
         return NodeSpec(
             name=self.name,
             node_type=self.node_type,
             config=self.config(),
             metadata=self.metadata,
-            parents=tuple(parent.name for parent in self.parents),
+            inputs=tuple(parent.name for parent in self.spec_inputs()),
+            panel_parameters={
+                name: tuple(parent.name for parent in parents)
+                for name, parents in self.spec_panel_parameters().items()
+            },
         )

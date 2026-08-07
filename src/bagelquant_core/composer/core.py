@@ -65,8 +65,8 @@ class ComposerFunction:
     ) -> "Graph[Panel]":
         from ..graph import Graph
 
-        if not sources:
-            raise ValueError("Composer requires at least one Panel or Graph")
+        if len(sources) < 2:
+            raise ValueError("Composer requires at least two Panel or Graph inputs")
         return Graph._from_nodes(
             (
                 _ComposerNode(

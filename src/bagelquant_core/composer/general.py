@@ -8,11 +8,12 @@ from numbers import Real
 import polars as pl
 
 from ..frame import VALUE, nary, panel_like
+from ..transformer.core import transformer
 from .core import _horizontal_value_plan, composer
 
 
-@composer
-def project(frame: pl.DataFrame, binary: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def project(frame: pl.DataFrame, *, binary: pl.DataFrame) -> pl.DataFrame:
     data = frame.rename({VALUE: "x"}).join(
         binary.rename({VALUE: "binary"}),
         on=["time", "asset_id"],
@@ -24,11 +25,11 @@ def project(frame: pl.DataFrame, binary: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-@composer
+@transformer
 def mask(
     frame: pl.DataFrame,
-    mask_frame: pl.DataFrame,
     *,
+    mask_frame: pl.DataFrame,
     replace_value: float = float("nan"),
 ) -> pl.DataFrame:
     if not isinstance(replace_value, Real) or isinstance(replace_value, bool):
@@ -93,8 +94,6 @@ def _plan_general(
 
 
 for _plan_name, _plan_composer in {
-    "project": project,
-    "mask": mask,
     "coalesce": coalesce,
 }.items():
     _plan_composer._set_plan_operation(  # type: ignore[attr-defined]

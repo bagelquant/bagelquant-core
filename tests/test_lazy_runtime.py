@@ -13,14 +13,16 @@ from bagelquant_core import (
     Panel,
     TraceRule,
 )
-from bagelquant_core.composer import add, mul, rolling_ols, sum_frames
+from bagelquant_core.composer import add, mul, sum_frames
 from bagelquant_core.transformer import (
     bfill,
     constant,
     ffill,
+    group_demean,
     identity,
     lag,
     pct_change,
+    rolling_ols,
     rolling_mean,
     rolling_percentile,
     rolling_rank,
@@ -95,6 +97,31 @@ def test_trace_rules_cover_window_and_parent_max() -> None:
     assert output["base_available_date"].to_list() == [
         date(2024, 1, 2),
         date(2024, 1, 3),
+        date(2024, 1, 4),
+    ]
+
+
+def test_transformer_panel_parameters_participate_in_availability_trace() -> None:
+    source = _traced_panel()
+    delayed = Panel.from_domain(
+        source.collect(include_traces=True).with_columns(
+            pl.Series(
+                "base_available_date",
+                [date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 4)],
+            )
+        ).lazy(),
+        source.domain,
+        name="group",
+        trace_columns=("observation_date", "base_available_date"),
+    )
+
+    output = group_demean(source, group=delayed).compute().collect(
+        include_traces=True
+    )
+
+    assert output["base_available_date"].to_list() == [
+        date(2024, 1, 3),
+        date(2024, 1, 4),
         date(2024, 1, 4),
     ]
 
@@ -257,7 +284,7 @@ def test_semantically_equal_eager_nodes_share_physical_result() -> None:
         outputs=[
             rolling_ols(
                 source,
-                source,
+                factors=(source,),
                 window=2,
                 name=f"ols_{index}",
                 metadata={"index": index},

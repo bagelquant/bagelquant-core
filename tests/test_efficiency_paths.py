@@ -8,13 +8,14 @@ import pytest
 import bagelquant_core.transformer.rolling as rolling_module
 
 from bagelquant_core import ExecutionRuntime, Graph
-from bagelquant_core.composer import (
+from bagelquant_core.composer import rolling_corr, rolling_cov
+from bagelquant_core.transformer import (
+    ewm_mean,
     orthogonalize,
-    rolling_corr,
-    rolling_cov,
     rolling_ols,
+    rolling_percentile,
+    rolling_rank,
 )
-from bagelquant_core.transformer import ewm_mean, rolling_percentile, rolling_rank
 from bagelquant_core.transformer.core import transformer
 
 from helpers import panel, values
@@ -178,7 +179,7 @@ def test_rolling_ols_predicts_current_value_from_prior_window() -> None:
         name="factor",
     )
 
-    graph = rolling_ols(target, factor, window=3)
+    graph = rolling_ols(target, factors=(factor,), window=3)
     graph.compute()
 
     result = values(graph.output.data)
@@ -204,10 +205,45 @@ def test_one_factor_orthogonalize_uses_closed_form_residuals() -> None:
         name="factor",
     )
 
-    graph = orthogonalize(target, factor)
+    graph = orthogonalize(
+        target, factors=(factor,), fit_intercept=True
+    )
     graph.compute()
 
     assert all(math.isclose(value, 0.0, abs_tol=1e-12) for value in values(graph.output.data).values())
+
+
+def test_orthogonalize_defaults_to_no_intercept() -> None:
+    target = panel(
+        [
+            ("2024-01-01", "a", 3.0),
+            ("2024-01-01", "b", 5.0),
+            ("2024-01-01", "c", 7.0),
+        ],
+        name="target",
+    )
+    factor = panel(
+        [
+            ("2024-01-01", "a", 1.0),
+            ("2024-01-01", "b", 2.0),
+            ("2024-01-01", "c", 3.0),
+        ],
+        name="factor",
+    )
+
+    without_intercept = orthogonalize(target, factors=(factor,)).compute()
+    with_intercept = orthogonalize(
+        target, factors=(factor,), fit_intercept=True
+    ).compute()
+
+    assert any(
+        not math.isclose(value, 0.0, abs_tol=1e-12)
+        for value in values(without_intercept.data).values()
+    )
+    assert all(
+        math.isclose(value, 0.0, abs_tol=1e-12)
+        for value in values(with_intercept.data).values()
+    )
 
 
 def test_multi_factor_orthogonalize_matches_lstsq_reference() -> None:
@@ -234,8 +270,8 @@ def test_multi_factor_orthogonalize_matches_lstsq_reference() -> None:
 
     actual = orthogonalize.operation(
         frame(target),
-        frame(first),
-        frame(second),
+        factors=(frame(first), frame(second)),
+        fit_intercept=True,
     )
     expected = np.full(len(times), np.nan)
     for time in sorted(set(times)):

@@ -7,12 +7,6 @@ import pytest
 
 from bagelquant_core.composer import (
     COMPOSER_REGISTRY,
-    group_percentile,
-    group_rankpct,
-    mask,
-    orthogonalize,
-    project,
-    rolling_ols,
     weighted_sum,
     xand,
 )
@@ -22,6 +16,8 @@ from bagelquant_core.transformer import (
     boxcox,
     date_age_constraint,
     ffill,
+    group_percentile,
+    group_rankpct,
     inv_log_sqrt_rank,
     log,
     log1p,
@@ -35,9 +31,13 @@ from bagelquant_core.transformer import (
     normalize,
     notnan,
     posonly,
+    mask,
+    orthogonalize,
+    project,
     rankpct,
     rate_of_change,
     rolling_kurt,
+    rolling_ols,
     rolling_percentile,
     rolling_rank,
     rolling_skew,
@@ -217,8 +217,8 @@ def test_project_mask_and_replace_helpers_keep_their_public_semantics() -> None:
     source = _single_time([1.0, 2.0, 3.0], name="source")
     selector = _single_time([1.0, 2.0, 0.0], name="selector")
 
-    projected = project(source, selector)
-    masked = mask(source, selector, replace_value=-1.0)
+    projected = project(source, binary=selector)
+    masked = mask(source, mask_frame=selector, replace_value=-1.0)
     ones = non_nan_to_one(source)
     zeros = non_nan_to_zero(source)
     for graph in (projected, masked, ones, zeros):
@@ -234,8 +234,8 @@ def test_group_dense_rank_and_average_percentile_are_distinct() -> None:
     source = _single_time([1.0, 1.0, 2.0, 3.0], name="x")
     groups = _single_time([1.0, 1.0, 1.0, 1.0], name="group")
 
-    dense = group_rankpct(source, groups)
-    average = group_percentile(source, groups)
+    dense = group_rankpct(source, group=groups)
+    average = group_percentile(source, group=groups)
     dense.compute()
     average.compute()
 
@@ -276,7 +276,7 @@ def test_rolling_ols_supports_multiple_factors_and_excludes_current_target() -> 
         name="second",
     )
 
-    graph = rolling_ols(target, first, second, window=3)
+    graph = rolling_ols(target, factors=(first, second), window=3)
     graph.compute()
 
     assert values(graph.output.data)[("2024-01-04", "a")] == pytest.approx(10.0)
@@ -330,11 +330,11 @@ def test_rolling_rank_ties_and_higher_moments_match_reference_formulas() -> None
 def test_public_boundaries_reject_ambiguous_inputs() -> None:
     source = _single_time([1.0])
 
-    with pytest.raises(ValueError, match="at least one factor"):
-        orthogonalize(source).compute()
-    with pytest.raises(ValueError, match="at least one"):
+    with pytest.raises(ValueError, match="requires at least one Panel"):
+        orthogonalize(source, factors=()).compute()
+    with pytest.raises(ValueError, match="at least two"):
         weighted_sum(weights=[])
     with pytest.raises(TypeError, match="real numbers"):
-        weighted_sum(source, weights=[True]).compute()
+        weighted_sum(source, source, weights=[True, 1.0]).compute()
     with pytest.raises(TypeError, match="real number"):
         boxcox(source, lambda_="bad").compute()

@@ -7,7 +7,28 @@ public import surface compact.
 
 from .basic import abs_value, diff, identity, negate, pct_change, pct_change_frame
 from .boxcox import boxcox
-from .category import category_demean, category_mean, category_rank, category_zscore
+from ..composer.general import mask, project
+from ..composer.math import not_
+from ..composer.rolling import (
+    rolling_elastic_net,
+    rolling_lasso,
+    rolling_ols,
+    rolling_ridge,
+)
+from ..composer.scaling import vol_scale
+from ..composer.xsectional import (
+    group_demean,
+    group_max,
+    group_mean,
+    group_median,
+    group_min,
+    group_percentile,
+    group_rank,
+    group_rankpct,
+    group_std,
+    group_zscore,
+    orthogonalize,
+)
 from .core import TRANSFORMER_REGISTRY, TransformerFunction, transformer
 from .general import (
     constant,
@@ -73,10 +94,6 @@ __all__ = [
     "arctanh",
     "bfill",
     "boxcox",
-    "category_demean",
-    "category_mean",
-    "category_rank",
-    "category_zscore",
     "constant",
     "cos",
     "date_age_constraint",
@@ -104,6 +121,7 @@ __all__ = [
     "log_rank",
     "logrank",
     "min_max_scale",
+    "mask",
     "negate",
     "negonly",
     "net_scale",
@@ -111,11 +129,14 @@ __all__ = [
     "non_nan_to_one",
     "non_nan_to_zero",
     "normalize",
+    "not_",
     "notnan",
     "nrank",
     "pct_change",
     "pct_change_frame",
+    "orthogonalize",
     "posonly",
+    "project",
     "power",
     "rank",
     "rankpct",
@@ -126,13 +147,17 @@ __all__ = [
     "rolling_ew_std",
     "rolling_ewm",
     "rolling_ewm_fw",
+    "rolling_elastic_net",
     "rolling_kurt",
+    "rolling_lasso",
     "rolling_max",
     "rolling_mean",
     "rolling_median",
     "rolling_min",
+    "rolling_ols",
     "rolling_percentile",
     "rolling_rank",
+    "rolling_ridge",
     "rolling_skew",
     "rolling_std",
     "rolling_sum",
@@ -151,4 +176,15 @@ __all__ = [
     "truncate",
     "winsorize",
     "zscore",
+    "group_demean",
+    "group_max",
+    "group_mean",
+    "group_median",
+    "group_min",
+    "group_percentile",
+    "group_rank",
+    "group_rankpct",
+    "group_std",
+    "group_zscore",
+    "vol_scale",
 ]

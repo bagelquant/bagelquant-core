@@ -2,10 +2,10 @@
 
 ## Overview
 
-A composer is a multi-input function-style operation:
+A composer fuses at least two peer Panel inputs into one Panel:
 
 ```text
-(Panel | Graph, ...) -> Graph
+(Panel | Graph, Panel | Graph, ...) -> Graph[Panel]
 ```
 
 For signatures, parameter descriptions, and examples for every public
@@ -33,11 +33,9 @@ Built-ins are grouped by behavior:
 | --- | --- |
 | Arithmetic | `add`, `sub`, `mul`, `div` |
 | Aggregation | `sum_frames`, `mean`, `product`, `minimum`, `maximum`, `weighted_sum`, `weighted_mean` |
-| General | `project`, `mask`, `coalesce` |
-| Scaling | `vol_scale` |
-| Math | `power`, `power_df`, `and_`, `or_`, `not_`, `xand`, `xor`, `greater`, `greater_equal`, `less`, `less_equal`, `equal` |
-| Rolling | `rolling_corr`, `rolling_cov`, `rolling_ols`, `rolling_lasso`, `rolling_ridge`, `rolling_elastic_net` |
-| Cross-sectional | `orthogonalize`, `group_rank`, `group_mean`, `group_max`, `group_min`, `group_median`, `group_std`, `group_demean`, `group_zscore`, `group_rankpct`, `group_percentile` |
+| Missing data | `coalesce` |
+| Logical and comparison | `and_`, `or_`, `xand`, `xor`, `greater`, `greater_equal`, `less`, `less_equal`, `equal` |
+| Rolling relationships | `rolling_corr`, `rolling_cov` |
 
 ## User-Defined Composers
 
@@ -60,16 +58,19 @@ def average(*frames: pl.DataFrame) -> pl.DataFrame:
 combined = average(value, quality, momentum, name="combined")
 ```
 
-The internal execution runtime aligns input panel data before executing a
-composer. Already-aligned inputs are reused internally.
+The internal execution runtime aligns every peer input by `(time, asset_id)`
+before executing a composer. Already-aligned inputs are reused internally. A
+composer call with fewer than two inputs is invalid, including variable-input
+operations such as `sum_frames`, `mean`, and `coalesce`.
 
 Weighted composers require one numeric weight per input frame and compute a
 new frame without mutating their inputs. `weighted_mean(...)` also requires a
 non-zero total weight.
 
-Rolling regressions use `rolling_ols(y, *factors, window=...)` and the same
-input order for regularized variants. They fit on prior rows only, then predict
-the current row.
+Operations with one semantic source plus an auxiliary Panel—grouping,
+neutralization, masking, projection, volatility scaling, logical negation, and
+rolling regression—are Transformers and use named Panel parameters. See the
+[Transformer concept](./transformer.md).
 
 Comparison and logical composers return numeric `1.0` and `0.0` panels so their
 outputs remain valid graph inputs. `minimum` and `maximum` are also exported as

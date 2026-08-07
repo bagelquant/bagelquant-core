@@ -39,7 +39,11 @@ class GraphSpec:
                     "node_type": node.node_type,
                     "config": dict(node.config),
                     "metadata": dict(node.metadata),
-                    "parents": list(node.parents),
+                    "inputs": list(node.inputs),
+                    "panel_parameters": {
+                        name: list(values)
+                        for name, values in node.panel_parameters.items()
+                    },
                 }
                 for node in self.nodes
             ],
@@ -74,7 +78,8 @@ class GraphSpec:
                 ) from error
             config = raw.get("config", {})
             metadata = raw.get("metadata", {})
-            parents = raw.get("parents", [])
+            inputs = raw.get("inputs", [])
+            panel_parameters = raw.get("panel_parameters", {})
             if not isinstance(name, str) or not name:
                 raise GraphValidationError("graph node name must be a non-empty string")
             if node_type not in {
@@ -90,11 +95,23 @@ class GraphSpec:
                 raise GraphValidationError(
                     f"graph node {name!r} config and metadata must be objects"
                 )
-            if not isinstance(parents, list) or not all(
-                isinstance(parent, str) and parent for parent in parents
+            if not isinstance(inputs, list) or not all(
+                isinstance(parent, str) and parent for parent in inputs
             ):
                 raise GraphValidationError(
-                    f"graph node {name!r} parents must be a string list"
+                    f"graph node {name!r} inputs must be a string list"
+                )
+            if not isinstance(panel_parameters, Mapping) or any(
+                not isinstance(parameter, str)
+                or not parameter
+                or not isinstance(values, list)
+                or not values
+                or not all(isinstance(value, str) and value for value in values)
+                for parameter, values in panel_parameters.items()
+            ):
+                raise GraphValidationError(
+                    f"graph node {name!r} panel_parameters must map names "
+                    "to non-empty string lists"
                 )
             parsed.append(
                 NodeSpec(
@@ -102,7 +119,11 @@ class GraphSpec:
                     node_type=node_type,
                     config=dict(config),
                     metadata=dict(metadata),
-                    parents=tuple(parents),
+                    inputs=tuple(inputs),
+                    panel_parameters={
+                        str(parameter): tuple(values)
+                        for parameter, values in panel_parameters.items()
+                    },
                 )
             )
         return cls(outputs=tuple(outputs), nodes=tuple(parsed))
@@ -200,18 +221,31 @@ class Graph(Generic[OutputT]):
             config = dict(node.config)
             operation_key = node.node_type
             operation_name = cast(str, config.pop(operation_key))
-            parents = tuple(by_name[parent] for parent in node.parents)
+            input_nodes = tuple(by_name[parent] for parent in node.inputs)
             try:
                 if node.node_type == "transformer":
-                    built = TRANSFORMER_REGISTRY.get(operation_name)(
-                        Graph._from_nodes((parents[0],)),
+                    transformer = TRANSFORMER_REGISTRY.get(operation_name)
+                    panel_parameters = {
+                        parameter: (
+                            tuple(
+                                Graph._from_nodes((by_name[value],))
+                                for value in values
+                            )
+                            if transformer.panel_parameter_kinds.get(parameter)
+                            else Graph._from_nodes((by_name[values[0]],))
+                        )
+                        for parameter, values in node.panel_parameters.items()
+                    }
+                    built = transformer(
+                        Graph._from_nodes((input_nodes[0],)),
                         name=node.name,
                         metadata=node.metadata,
+                        **panel_parameters,
                         **config,
                     )
                 elif node.node_type == "composer":
                     built = COMPOSER_REGISTRY.get(operation_name)(
-                        *(Graph._from_nodes((parent,)) for parent in parents),
+                        *(Graph._from_nodes((parent,)) for parent in input_nodes),
                         name=node.name,
                         metadata=node.metadata,
                         **config,
@@ -231,8 +265,8 @@ class Graph(Generic[OutputT]):
                         )
                     training = (
                         SignalTrainingContext(
-                            Graph._from_nodes((parents[-2],)),
-                            Graph._from_nodes((parents[-1],)),
+                            Graph._from_nodes((input_nodes[-2],)),
+                            Graph._from_nodes((input_nodes[-1],)),
                         )
                         if composer.supervised
                         else None
@@ -240,7 +274,7 @@ class Graph(Generic[OutputT]):
                     built = composer.compose(
                         *(
                             Graph._from_nodes((parent,))
-                            for parent in parents[:alpha_count]
+                            for parent in input_nodes[:alpha_count]
                         ),
                         standardization=standardization,
                         training=training,
@@ -273,16 +307,24 @@ class Graph(Generic[OutputT]):
             raise GraphValidationError("graph specification has duplicate node names")
         seen: set[str] = set()
         for node in spec.nodes:
-            missing = [parent for parent in node.parents if parent not in seen]
+            dependencies = (
+                *node.inputs,
+                *(
+                    value
+                    for values in node.panel_parameters.values()
+                    for value in values
+                ),
+            )
+            missing = [parent for parent in dependencies if parent not in seen]
             if missing:
                 raise GraphValidationError(
-                    f"graph node {node.name!r} has unresolved or forward parents: "
+                    f"graph node {node.name!r} has unresolved or forward dependencies: "
                     f"{missing}"
                 )
             if node.node_type == "panel":
-                if node.parents:
+                if node.inputs or node.panel_parameters:
                     raise GraphValidationError(
-                        f"panel node {node.name!r} cannot have parents"
+                        f"panel node {node.name!r} cannot have dependencies"
                     )
                 seen.add(node.name)
                 continue
@@ -292,13 +334,21 @@ class Graph(Generic[OutputT]):
                 raise GraphValidationError(
                     f"graph node {node.name!r} is missing {node.node_type!r}"
                 )
-            if node.node_type == "transformer" and len(node.parents) != 1:
+            if node.node_type == "transformer" and len(node.inputs) != 1:
                 raise GraphValidationError(
-                    f"transformer {node.name!r} must have one parent"
+                    f"transformer {node.name!r} must have one input"
                 )
-            if node.node_type in {"composer", "signal_composer"} and not node.parents:
+            if node.node_type == "composer" and len(node.inputs) < 2:
                 raise GraphValidationError(
-                    f"{node.node_type} {node.name!r} requires at least one parent"
+                    f"composer {node.name!r} requires at least two inputs"
+                )
+            if node.node_type == "signal_composer" and not node.inputs:
+                raise GraphValidationError(
+                    f"signal_composer {node.name!r} requires at least one input"
+                )
+            if node.node_type != "transformer" and node.panel_parameters:
+                raise GraphValidationError(
+                    f"{node.node_type} {node.name!r} cannot declare panel_parameters"
                 )
             try:
                 if node.node_type == "transformer":
@@ -313,9 +363,22 @@ class Graph(Generic[OutputT]):
                 raise GraphValidationError(str(error)) from error
             try:
                 if node.node_type != "signal_composer":
-                    signature(operation.operation).bind(
-                        *(object() for _ in node.parents), **config
-                    )
+                    if node.node_type == "transformer":
+                        panel_arguments = {
+                            parameter: (
+                                tuple(object() for _ in values)
+                                if operation.panel_parameter_kinds.get(parameter)
+                                else object()
+                            )
+                            for parameter, values in node.panel_parameters.items()
+                        }
+                        signature(operation.operation).bind(
+                            object(), **panel_arguments, **config
+                        )
+                    else:
+                        signature(operation.operation).bind(
+                            *(object() for _ in node.inputs), **config
+                        )
                 else:
                     alpha_count = config.get("alpha_count")
                     standardization = config.get("standardization")
@@ -330,9 +393,9 @@ class Graph(Generic[OutputT]):
 
                     SignalStandardization(standardization)
                     expected = alpha_count + (2 if operation.supervised else 0)
-                    if len(node.parents) != expected:
+                    if len(node.inputs) != expected:
                         raise TypeError(
-                            f"expected {expected} parents, got {len(node.parents)}"
+                            f"expected {expected} inputs, got {len(node.inputs)}"
                         )
             except TypeError as error:
                 raise GraphValidationError(
@@ -439,14 +502,14 @@ class Graph(Generic[OutputT]):
                         f"Invalid parent type on {node.name}: {type(parent)}"
                     )
 
-            if node.node_type == "transformer" and len(node.parents) != 1:
+            if node.node_type == "transformer" and len(node.spec_inputs()) != 1:
                 raise GraphValidationError(
-                    f"Transformer '{node.name}' must have exactly one parent"
+                    f"Transformer '{node.name}' must have exactly one input"
                 )
 
-            if node.node_type == "composer" and len(node.parents) < 1:
+            if node.node_type == "composer" and len(node.spec_inputs()) < 2:
                 raise GraphValidationError(
-                    f"Composer '{node.name}' must have at least one parent"
+                    f"Composer '{node.name}' must have at least two inputs"
                 )
 
             if node.node_type == "signal_composer" and len(node.parents) < 1:

@@ -2,10 +2,13 @@
 
 ## Overview
 
-A transformer is a unary function-style operation:
+A transformer has exactly one semantic input Panel and may declare named,
+keyword-only auxiliary Panel parameters:
 
 ```text
-Panel | Graph -> Graph
+source: Panel | Graph
+panel_parameters: named Panel | Graph dependencies
+-> Graph[Panel]
 ```
 
 For signatures, parameter descriptions, and examples for every public
@@ -38,7 +41,9 @@ Built-ins are grouped by behavior:
 | Power | `power`, `signed_power`, `sqrt` |
 | Logarithmic | `log`, `log1p`, `signed_log1p` |
 | Normalization | `rank`, `zscore`, `winsorize`, `min_max_scale` |
-| Category | `category_demean`, `category_mean`, `category_rank`, `category_zscore` |
+| Group & neutralization | `group_demean`, `group_mean`, `group_rank`, `group_percentile`, `group_zscore`, `orthogonalize` |
+| Masking & scaling | `mask`, `project`, `vol_scale` |
+| Rolling regression | `rolling_ols`, `rolling_ridge`, `rolling_lasso`, `rolling_elastic_net` |
 | General | `nonnans`, `notnan`, `denoise`, `posonly`, `negonly`, `lag`, `delta`, `rate_of_change`, `remove_repeated`, `date_age_constraint`, `constant`, `replace_inf` |
 | Translation | `demean`, `translate_to_pos` |
 | Rank | `rankpct`, `nrank`, `logrank` |
@@ -142,17 +147,22 @@ The rolling family also includes `rolling_var`, `rolling_skew`, `rolling_kurt`,
 general EWM operations, while `rolling_ewm_fw` exposes expanding exponentially
 weighted means.
 
-## Category
+## Named Panel parameters
 
-Category operations accept a numeric source and a matching `CategoryPanel`.
-The category panel may contain strings such as industry, sector, or country
-labels:
+Auxiliary Panels are parameters rather than peer inputs. They still participate
+in topology, Domain alignment, cache identity, and availability tracing. The
+output availability time is the maximum availability across the source and all
+auxiliary Panels.
+
+Group operations accept a numeric source and a matching `CategoryPanel` through
+the keyword-only `group` parameter. The category panel may contain strings such
+as industry, sector, or country labels:
 
 ```python
 import polars as pl
 
 from bagelquant_core import CategoryPanel
-from bagelquant_core.transformer import category_demean, category_rank
+from bagelquant_core.transformer import group_demean, group_percentile
 
 industry = CategoryPanel.from_domain(
     pl.DataFrame(
@@ -166,19 +176,28 @@ industry = CategoryPanel.from_domain(
     name="industry",
 )
 
-industry_neutral = category_demean(raw_factor, industry)
-industry_ranked = category_rank(raw_factor, industry)
+industry_neutral = group_demean(raw_factor, group=industry)
+industry_percentile = group_percentile(raw_factor, group=industry)
 ```
 
 | Transformer | Behavior |
 | --- | --- |
-| `category_demean(source, categories)` | Subtract each category mean within each row. |
-| `category_mean(source, categories)` | Replace values with their category mean within each row. |
-| `category_rank(source, categories)` | Calculate percentile ranks within each category and row. |
-| `category_zscore(source, categories)` | Calculate z-scores within each category and row. |
+| `group_demean(source, *, group=...)` | Subtract each group mean within each date. |
+| `group_mean(source, *, group=...)` | Replace values with their group mean within each date. |
+| `group_rank(source, *, group=...)` | Calculate ordinal ranks within each group and date. |
+| `group_percentile(source, *, group=...)` | Calculate average percentile ranks within each group and date. |
+| `group_zscore(source, *, group=...)` | Calculate z-scores within each group and date. |
+| `orthogonalize(source, *, factors=(...), fit_intercept=False)` | Return same-date OLS residuals against one or more factor Panels. |
 
-Although category operations are exported with transformers, they consume two
-aligned inputs and are represented internally as multi-input graph nodes.
+`category_*` operations have been removed. Migrate `category_demean`,
+`category_mean`, and `category_zscore` to the matching `group_*` name. The old
+`category_rank` calculated percentiles, so its mathematical replacement is
+`group_percentile`, not `group_rank`.
+
+Other named Panel parameters include `mask_frame`, `binary`, `volatility`, and
+the `factors` tuple used by rolling regressions. Each reference page includes
+the actual source, Panel-parameter, and output tables produced by executing its
+fixture.
 
 ## User-Defined Transformers
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from ..frame import VALUE, binary, unary
+from ..transformer.core import transformer
 from .core import composer
 
 
@@ -35,7 +36,7 @@ def or_(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-@composer
+@transformer
 def not_(frame: pl.DataFrame) -> pl.DataFrame:
     return unary(frame, (~pl.col(VALUE).cast(pl.Boolean)).cast(pl.Float64))
 

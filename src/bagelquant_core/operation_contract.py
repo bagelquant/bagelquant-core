@@ -71,13 +71,36 @@ _DENSE_TRANSFORMERS = {
     "rate_of_change",
     "remove_repeated",
 }
-_EAGER_TRANSFORMERS = {"rolling_percentile", "rolling_rank"}
-_EAGER_COMPOSERS = {
+_EAGER_TRANSFORMERS = {
     "orthogonalize",
     "rolling_elastic_net",
     "rolling_lasso",
     "rolling_ols",
+    "rolling_percentile",
+    "rolling_rank",
     "rolling_ridge",
+}
+_EAGER_COMPOSERS: set[str] = set()
+
+_PANEL_PARAMETER_TRANSFORMERS = {
+    "group_demean",
+    "group_max",
+    "group_mean",
+    "group_median",
+    "group_min",
+    "group_percentile",
+    "group_rank",
+    "group_rankpct",
+    "group_std",
+    "group_zscore",
+    "mask",
+    "orthogonalize",
+    "project",
+    "rolling_elastic_net",
+    "rolling_lasso",
+    "rolling_ols",
+    "rolling_ridge",
+    "vol_scale",
 }
 
 
@@ -125,6 +148,8 @@ def default_operation_contract(
 
 
 def _transformer_trace_rule(name: str) -> TraceRule:
+    if name in _PANEL_PARAMETER_TRANSFORMERS:
+        return TraceRule.PARENT_MAX
     if name == "lag":
         return TraceRule.SHIFT
     if name in {"diff", "pct_change", "delta", "rate_of_change"}:

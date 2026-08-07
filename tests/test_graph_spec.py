@@ -3,9 +3,9 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from bagelquant_core import Domain, Graph, GraphSpec, GraphValidationError, Panel
+from bagelquant_core import CategoryPanel, Domain, Graph, GraphSpec, GraphValidationError, Panel
 from bagelquant_core.composer import div
-from bagelquant_core.transformer import rank
+from bagelquant_core.transformer import group_demean, rank
 
 
 def _inputs() -> dict[str, Panel]:
@@ -50,15 +50,42 @@ def test_graph_spec_round_trip_and_compilation() -> None:
     assert restored.compute().data.equals(original.compute().data)
 
 
+def test_graph_spec_round_trips_named_panel_parameters() -> None:
+    inputs = _inputs()
+    groups = CategoryPanel.from_domain(
+        pl.DataFrame(
+            {
+                "time": ["2024-01-02", "2024-01-02"],
+                "asset_id": ["A", "B"],
+                "value": ["one", "one"],
+            }
+        ),
+        inputs["book"].domain,
+        name="industry",
+    )
+    all_inputs = {**inputs, "industry": groups}
+    original = group_demean(
+        inputs["book"], group=groups, name="industry_neutral"
+    )
+    specification = original.spec()
+    node = specification.to_dict()["nodes"][-1]
+
+    assert node["inputs"] == ["book"]
+    assert node["panel_parameters"] == {"group": ["industry"]}
+    restored = Graph.from_spec(specification, inputs=all_inputs)
+    assert restored.spec().to_dict() == specification.to_dict()
+    assert restored.compute().data.equals(original.compute().data)
+
+
 def test_graph_spec_rejects_unknown_operations() -> None:
     specification = {
         "outputs": ["bad"],
         "nodes": [
-            {"name": "book", "node_type": "panel", "parents": []},
+            {"name": "book", "node_type": "panel", "inputs": []},
             {
                 "name": "bad",
                 "node_type": "transformer",
-                "parents": ["book"],
+                "inputs": ["book"],
                 "config": {"transformer": "unknown.operator"},
             },
         ],
@@ -75,16 +102,16 @@ def test_graph_spec_rejects_forward_references() -> None:
             {
                 "name": "ranked",
                 "node_type": "transformer",
-                "parents": ["book"],
+                "inputs": ["book"],
                 "config": {
                     "transformer": "bagelquant_core.transformer.ranking.rank"
                 },
             },
-            {"name": "book", "node_type": "panel", "parents": []},
+            {"name": "book", "node_type": "panel", "inputs": []},
         ],
     }
 
-    with pytest.raises(GraphValidationError, match="forward parents"):
+    with pytest.raises(GraphValidationError, match="forward dependencies"):
         Graph.from_spec(specification, inputs=_inputs())
 
 

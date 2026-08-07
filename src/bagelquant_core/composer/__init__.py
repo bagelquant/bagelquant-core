@@ -18,7 +18,7 @@ from .aggregation import (
 )
 from .arithmetic import add, div, divide, mul, multiply, sub, subtract
 from .core import COMPOSER_REGISTRY, ComposerFunction, composer
-from .general import coalesce, mask, project
+from .general import coalesce
 from .math import (
     and_,
     equal,
@@ -26,7 +26,6 @@ from .math import (
     greater_equal,
     less,
     less_equal,
-    not_,
     or_,
     power,
     power_df,
@@ -36,24 +35,6 @@ from .math import (
 from .rolling import (
     rolling_corr,
     rolling_cov,
-    rolling_elastic_net,
-    rolling_lasso,
-    rolling_ols,
-    rolling_ridge,
-)
-from .scaling import vol_scale
-from .xsectional import (
-    group_demean,
-    group_max,
-    group_mean,
-    group_median,
-    group_min,
-    group_percentile,
-    group_rank,
-    group_rankpct,
-    group_std,
-    group_zscore,
-    orthogonalize,
 )
 
 __all__ = [
@@ -68,19 +49,8 @@ __all__ = [
     "equal",
     "greater",
     "greater_equal",
-    "group_demean",
-    "group_max",
-    "group_mean",
-    "group_median",
-    "group_min",
-    "group_percentile",
-    "group_rank",
-    "group_rankpct",
-    "group_std",
-    "group_zscore",
     "less",
     "less_equal",
-    "mask",
     "max",
     "maximum",
     "mean",
@@ -88,23 +58,15 @@ __all__ = [
     "minimum",
     "mul",
     "multiply",
-    "not_",
     "or_",
-    "orthogonalize",
     "power",
     "power_df",
     "product",
-    "project",
     "rolling_corr",
     "rolling_cov",
-    "rolling_elastic_net",
-    "rolling_lasso",
-    "rolling_ols",
-    "rolling_ridge",
     "sub",
     "subtract",
     "sum_frames",
-    "vol_scale",
     "weighted_mean",
     "weighted_sum",
     "xand",

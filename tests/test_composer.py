@@ -5,10 +5,10 @@ import polars as pl
 from bagelquant_core import Domain, Panel
 from bagelquant_core.composer import (
     add,
-    group_mean,
     sum_frames,
     weighted_sum,
 )
+from bagelquant_core.transformer import group_mean
 
 from helpers import panel, values
 
@@ -30,7 +30,7 @@ def test_group_mean_uses_group_panel() -> None:
     frame = panel([("2024-01-01", "a", 1.0), ("2024-01-01", "b", 3.0)], name="x")
     group = panel([("2024-01-01", "a", 1.0), ("2024-01-01", "b", 1.0)], name="g")
 
-    graph = group_mean(frame, group)
+    graph = group_mean(frame, group=group)
     graph.compute()
 
     assert values(graph.output.data) == {

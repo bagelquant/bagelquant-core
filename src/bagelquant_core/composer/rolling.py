@@ -15,6 +15,7 @@ from ..frame import (
     _balanced_inner_join,
     panel_like,
 )
+from ..transformer.core import transformer
 from .core import _horizontal_value_plan, composer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
@@ -1043,17 +1044,21 @@ def _rolling_regression_aligned(
     )
 
 
-@composer
+@transformer
 def rolling_ols(
-    target: pl.DataFrame, *factors: pl.DataFrame, window: int
+    target: pl.DataFrame,
+    *,
+    factors: tuple[pl.DataFrame, ...],
+    window: int,
 ) -> pl.DataFrame:
     return _rolling_ols(target, factors, window=window)
 
 
-@composer
+@transformer
 def rolling_ridge(
     target: pl.DataFrame,
-    *factors: pl.DataFrame,
+    *,
+    factors: tuple[pl.DataFrame, ...],
     window: int,
     alpha: float = 1.0,
 ) -> pl.DataFrame:
@@ -1069,10 +1074,11 @@ def rolling_ridge(
     )
 
 
-@composer
+@transformer
 def rolling_elastic_net(
     target: pl.DataFrame,
-    *factors: pl.DataFrame,
+    *,
+    factors: tuple[pl.DataFrame, ...],
     window: int,
     alpha: float = 1.0,
     l1_ratio: float = 0.5,
@@ -1104,10 +1110,11 @@ def rolling_elastic_net(
     )
 
 
-@composer
+@transformer
 def rolling_lasso(
     target: pl.DataFrame,
-    *factors: pl.DataFrame,
+    *,
+    factors: tuple[pl.DataFrame, ...],
     window: int,
     alpha: float = 1.0,
     max_iter: int = 1000,
@@ -1115,7 +1122,7 @@ def rolling_lasso(
 ) -> pl.DataFrame:
     return rolling_elastic_net.operation(
         target,
-        *factors,
+        factors=factors,
         window=window,
         alpha=alpha,
         l1_ratio=1.0,

@@ -764,6 +764,11 @@ class ExecutionRuntime:
                     )
                 return _orthogonalize_aligned(
                     inputs,
+                    fit_intercept=bool(
+                        self._node_parameters(node).get(
+                            "fit_intercept", False
+                        )
+                    ),
                     group_offsets=time_offsets,
                 )
             return node.compute(*inputs)

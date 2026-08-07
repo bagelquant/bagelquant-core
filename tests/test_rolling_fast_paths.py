@@ -7,13 +7,11 @@ import polars as pl
 import pytest
 
 from bagelquant_core import Domain, Panel
-from bagelquant_core.composer import (
+from bagelquant_core.transformer import (
     rolling_elastic_net,
     rolling_lasso,
     rolling_ols,
     rolling_ridge,
-)
-from bagelquant_core.transformer import (
     rolling_percentile,
     rolling_rank,
     rolling_zscore,
@@ -408,7 +406,9 @@ def test_rolling_ols_batched_path_matches_lstsq_reference() -> None:
         window=5,
     )
 
-    actual = rolling_ols(target, first, second, window=5).compute()
+    actual = rolling_ols(
+        target, factors=(first, second), window=5
+    ).compute()
 
     np.testing.assert_allclose(
         _dense_values(actual),
@@ -468,7 +468,7 @@ def test_rolling_ols_multi_factor_gram_path_matches_reference(
         window=12,
     )
 
-    actual = rolling_ols(target, *factors, window=12).compute()
+    actual = rolling_ols(target, factors=tuple(factors), window=12).compute()
 
     np.testing.assert_allclose(
         _dense_values(actual),
@@ -561,7 +561,7 @@ def test_regularized_rolling_paths_match_row_reference(
         if operation is rolling_elastic_net:
             config["l1_ratio"] = l1_ratio
 
-    actual = operation(target, *factors, **config).compute()
+    actual = operation(target, factors=tuple(factors), **config).compute()
 
     np.testing.assert_allclose(
         _dense_values(actual),
@@ -614,7 +614,7 @@ def test_rolling_ols_single_factor_path_matches_lstsq_reference(
         window=12,
     )
 
-    actual = rolling_ols(target, factor, window=12).compute()
+    actual = rolling_ols(target, factors=(factor,), window=12).compute()
 
     np.testing.assert_allclose(
         _dense_values(actual),
@@ -659,7 +659,7 @@ def test_rolling_ols_single_factor_falls_back_for_unstable_windows(
         window=4,
     )
 
-    actual = rolling_ols(target, factor, window=4).compute()
+    actual = rolling_ols(target, factors=(factor,), window=4).compute()
 
     np.testing.assert_allclose(
         _dense_values(actual),
@@ -702,7 +702,7 @@ def test_rolling_ols_preserves_invalid_window_and_current_factor_nulls() -> None
         window=3,
     )
 
-    actual = rolling_ols(target, factor, window=3).compute()
+    actual = rolling_ols(target, factors=(factor,), window=3).compute()
 
     assert np.isnan(_dense_values(actual)[3])
     assert np.isnan(_dense_values(actual)[4])
@@ -752,10 +752,10 @@ def test_fast_paths_preserve_dynamic_membership_and_traces() -> None:
         min_periods=1,
         ddof=0,
     ).compute()
-    regressed = rolling_ols(source, source, window=2).compute()
+    regressed = rolling_ols(source, factors=(source,), window=2).compute()
     regularized = rolling_lasso(
         source,
-        source,
+        factors=(source,),
         window=2,
         max_iter=1,
         tolerance=0.0,

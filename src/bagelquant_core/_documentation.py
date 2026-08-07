@@ -18,10 +18,6 @@ OPERATION_DESCRIPTIONS = {
     "arctanh": "Return the inverse hyperbolic tangent of each element, masking values outside `(-1, 1)`.",
     "bfill": "Back-fill missing values within each asset up to the optional finite limit.",
     "boxcox": "Apply the Box-Cox power transform element-wise with the supplied lambda.",
-    "category_demean": "Subtract each category's same-date mean from its member values.",
-    "category_mean": "Replace values with their category's same-date mean.",
-    "category_rank": "Rank values within each category and date cross-section.",
-    "category_zscore": "Standardize values within each category and date cross-section.",
     "coalesce": "Return the first non-missing value from the supplied inputs for each cell.",
     "constant": "Replace every present panel value with the configured constant.",
     "cos": "Return the cosine of each element.",
@@ -143,6 +139,70 @@ OPERATION_DESCRIPTIONS = {
 }
 
 
+def operation_category(name: str, *, kind: str) -> str:
+    """Return the stable functional category shared by generated catalogs."""
+
+    if name.startswith("group_") or name == "orthogonalize":
+        return "Group & neutralization"
+    if name in {
+        "rolling_ols",
+        "rolling_ridge",
+        "rolling_lasso",
+        "rolling_elastic_net",
+    }:
+        return "Rolling regression"
+    if name.startswith(("rolling_", "ewm_")) or name in {
+        "lag",
+        "diff",
+        "delta",
+        "pct_change",
+        "rate_of_change",
+        "remove_repeated",
+    }:
+        return "Rolling statistics"
+    if name in {"mask", "project", "vol_scale"}:
+        return "Masking & scaling"
+    if name in {
+        "fillna",
+        "fillna_zero",
+        "ffill",
+        "bfill",
+        "coalesce",
+        "nonnans",
+        "replace_inf",
+    }:
+        return "Missing data"
+    if name in {
+        "and_",
+        "or_",
+        "not_",
+        "xand",
+        "xor",
+        "equal",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal",
+    }:
+        return "Logical & comparison"
+    if kind == "composer" and name in {"add", "sub", "mul", "div", "power"}:
+        return "Arithmetic"
+    if kind == "composer":
+        return "Aggregation"
+    if name in {
+        "demean",
+        "rank",
+        "rankpct",
+        "zscore",
+        "winsorize",
+        "normalize",
+        "min_max_scale",
+        "net_scale",
+    }:
+        return "Cross-sectional"
+    return "Element-wise"
+
+
 def operation_description(name: str) -> str:
     """Return the curated or deterministic fallback summary for an operation."""
 
@@ -162,5 +222,6 @@ def ensure_operation_docstring(operation: Callable[..., Any]) -> None:
 __all__ = [
     "OPERATION_DESCRIPTIONS",
     "ensure_operation_docstring",
+    "operation_category",
     "operation_description",
 ]

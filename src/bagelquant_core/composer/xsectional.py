@@ -12,7 +12,7 @@ from ..frame import (
     _balanced_inner_join,
     panel_like,
 )
-from .core import composer
+from ..transformer.core import transformer
 
 _ORTHOGONALIZE_CONDITION_LIMIT = 1e-3
 
@@ -25,12 +25,21 @@ def _grouped(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-@composer
-def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def orthogonalize(
+    frame: pl.DataFrame,
+    *,
+    factors: tuple[pl.DataFrame, ...],
+    fit_intercept: bool = False,
+) -> pl.DataFrame:
     if not factors:
         raise ValueError("orthogonalize requires at least one factor")
     if len(factors) == 1:
-        return _orthogonalize_one_factor(frame, factors[0])
+        return _orthogonalize_one_factor(
+            frame,
+            factors[0],
+            fit_intercept=fit_intercept,
+        )
 
     factor_columns = [f"f{index}" for index in range(len(factors))]
     data = _balanced_inner_join(
@@ -46,12 +55,17 @@ def orthogonalize(frame: pl.DataFrame, *factors: pl.DataFrame) -> pl.DataFrame:
             ],
         ]
     ).sort([TIME, ASSET_ID])
-    return _orthogonalize_data(data, factor_columns)
+    return _orthogonalize_data(
+        data,
+        factor_columns,
+        fit_intercept=fit_intercept,
+    )
 
 
 def _orthogonalize_aligned(
     frames: tuple[pl.DataFrame, ...],
     *,
+    fit_intercept: bool = False,
     group_offsets: np.ndarray | None = None,
 ) -> pl.DataFrame:
     """Orthogonalize executor-proven positionally aligned frame values."""
@@ -59,7 +73,11 @@ def _orthogonalize_aligned(
     if len(frames) < 2:
         raise ValueError("orthogonalize requires at least one factor")
     if len(frames) == 2:
-        return _orthogonalize_one_factor(frames[0], frames[1])
+        return _orthogonalize_one_factor(
+            frames[0],
+            frames[1],
+            fit_intercept=fit_intercept,
+        )
     factor_columns = [
         f"f{index}" for index in range(len(frames) - 1)
     ]
@@ -77,6 +95,7 @@ def _orthogonalize_aligned(
     return _orthogonalize_data(
         data,
         factor_columns,
+        fit_intercept=fit_intercept,
         group_offsets=group_offsets,
     )
 
@@ -85,6 +104,7 @@ def _orthogonalize_data(
     data: pl.DataFrame,
     factor_columns: list[str],
     *,
+    fit_intercept: bool,
     group_offsets: np.ndarray | None = None,
 ) -> pl.DataFrame:
     target = data.get_column("target").to_numpy().astype(float, copy=False)
@@ -115,12 +135,12 @@ def _orthogonalize_data(
         group_y = target[offset:end]
         group_x = features[offset:end]
         valid = np.isfinite(group_y) & np.isfinite(group_x).all(axis=1)
-        if valid.sum() > len(factor_columns):
-            design = np.column_stack(
-                [
-                    np.ones(valid.sum()),
-                    group_x[valid],
-                ]
+        coefficient_count = len(factor_columns) + int(fit_intercept)
+        if valid.sum() >= coefficient_count:
+            design = (
+                np.column_stack([np.ones(valid.sum()), group_x[valid]])
+                if fit_intercept
+                else group_x[valid]
             )
             gram = design.T @ design
             eigenvalues = np.maximum(
@@ -159,7 +179,12 @@ def _orthogonalize_data(
     )
 
 
-def _orthogonalize_one_factor(frame: pl.DataFrame, factor: pl.DataFrame) -> pl.DataFrame:
+def _orthogonalize_one_factor(
+    frame: pl.DataFrame,
+    factor: pl.DataFrame,
+    *,
+    fit_intercept: bool,
+) -> pl.DataFrame:
     data = frame.rename({VALUE: "target"}).join(
         factor.rename({VALUE: "factor"}),
         on=[TIME, ASSET_ID],
@@ -180,61 +205,68 @@ def _orthogonalize_one_factor(frame: pl.DataFrame, factor: pl.DataFrame) -> pl.D
     sum_y = pl.col("y").sum().over(TIME)
     sum_xx = (pl.col("x") * pl.col("x")).sum().over(TIME)
     sum_xy = (pl.col("x") * pl.col("y")).sum().over(TIME)
-    centered_xx = sum_xx - (sum_x * sum_x) / n
-    centered_xy = sum_xy - (sum_x * sum_y) / n
-    mean_y = sum_y / n
-    slope = pl.when(centered_xx == 0).then(0.0).otherwise(centered_xy / centered_xx)
-    intercept = mean_y - slope * (sum_x / n)
-    residual = pl.when(valid & (n > 1)).then(
-        pl.col("target") - (intercept + slope * pl.col("factor"))
+    if fit_intercept:
+        centered_xx = sum_xx - (sum_x * sum_x) / n
+        centered_xy = sum_xy - (sum_x * sum_y) / n
+        mean_y = sum_y / n
+        slope = pl.when(centered_xx == 0).then(0.0).otherwise(
+            centered_xy / centered_xx
+        )
+        intercept = mean_y - slope * (sum_x / n)
+        fitted = intercept + slope * pl.col("factor")
+    else:
+        slope = pl.when(sum_xx == 0).then(0.0).otherwise(sum_xy / sum_xx)
+        fitted = slope * pl.col("factor")
+    residual = pl.when(valid & (n >= (2 if fit_intercept else 1))).then(
+        pl.col("target") - fitted
     )
     return panel_like(data, residual)
 
 
-@composer
-def group_rank(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_rank(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x").rank("average").over(TIME, "group"))
 
 
-@composer
-def group_mean(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_mean(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x").mean().over(TIME, "group"))
 
 
-@composer
-def group_max(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_max(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x").max().over(TIME, "group"))
 
 
-@composer
-def group_min(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_min(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x").min().over(TIME, "group"))
 
 
-@composer
-def group_median(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_median(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x").median().over(TIME, "group"))
 
 
-@composer
-def group_std(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_std(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x").std(ddof=1).over(TIME, "group"))
 
 
-@composer
-def group_demean(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_demean(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(data, pl.col("x") - pl.col("x").mean().over(TIME, "group"))
 
 
-@composer
-def group_zscore(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_zscore(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(
         data,
@@ -243,16 +275,16 @@ def group_zscore(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-@composer
-def group_rankpct(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_rankpct(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     rank = pl.col("x").rank("dense").over(TIME, "group")
     count = pl.col("x").n_unique().over(TIME, "group")
     return panel_like(data, rank / count)
 
 
-@composer
-def group_percentile(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
+@transformer
+def group_percentile(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
     return panel_like(
         data,

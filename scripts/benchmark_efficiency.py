@@ -20,13 +20,8 @@ from bagelquant_core import Domain, ExecutionRuntime, Graph, Panel
 from bagelquant_core.composer import (
     add,
     coalesce,
-    orthogonalize,
     rolling_corr,
     rolling_cov,
-    rolling_elastic_net,
-    rolling_lasso,
-    rolling_ols,
-    rolling_ridge,
     sum_frames,
     weighted_sum,
 )
@@ -35,9 +30,14 @@ from bagelquant_core.transformer import (
     constant,
     ewm_mean,
     negate,
+    orthogonalize,
+    rolling_elastic_net,
+    rolling_lasso,
     rolling_mean,
+    rolling_ols,
     rolling_percentile,
     rolling_rank,
+    rolling_ridge,
     rolling_zscore,
     rank as cross_section_rank,
     winsorize,
@@ -329,37 +329,31 @@ def _case_runner(
                 min_periods=min_periods,
             )
         elif case == "rolling_ols":
-            graph = rolling_ols(other, base, window=window)
+            graph = rolling_ols(other, factors=(base,), window=window)
         elif case == "rolling_ols_3f":
             graph = rolling_ols(
                 other,
-                base,
-                square,
-                cube,
+                factors=(base, square, cube),
                 window=window,
             )
         elif case == "rolling_ols_sparse_3f":
             graph = rolling_ols(
                 other,
-                base,
-                sparse_square,
-                sparse_cube,
+                factors=(base, sparse_square, sparse_cube),
                 window=window,
             )
         elif case == "rolling_ridge":
-            graph = rolling_ridge(other, base, square, window=window)
+            graph = rolling_ridge(other, factors=(base, square), window=window)
         elif case == "rolling_ridge_sparse":
             graph = rolling_ridge(
                 other,
-                base,
-                sparse_square,
+                factors=(base, sparse_square),
                 window=window,
             )
         elif case == "rolling_lasso":
             graph = rolling_lasso(
                 other,
-                base,
-                square,
+                factors=(base, square),
                 window=window,
                 max_iter=100,
             )
@@ -375,55 +369,51 @@ def _case_runner(
             }[case]
             graph = rolling_lasso(
                 other,
-                base,
+                factors=(base,),
                 window=window,
                 max_iter=iterations,
             )
         elif case == "rolling_lasso_8f":
             graph = rolling_lasso(
                 other,
-                *independent_factors,
+                factors=tuple(independent_factors),
                 window=window,
                 max_iter=100,
             )
         elif case == "rolling_elastic_net":
             graph = rolling_elastic_net(
                 other,
-                base,
-                square,
+                factors=(base, square),
                 window=window,
                 max_iter=100,
             )
         elif case == "rolling_elastic_net_1f":
             graph = rolling_elastic_net(
                 other,
-                base,
+                factors=(base,),
                 window=window,
                 max_iter=100,
             )
         elif case == "rolling_elastic_net_8f":
             graph = rolling_elastic_net(
                 other,
-                *independent_factors,
+                factors=tuple(independent_factors),
                 window=window,
                 max_iter=100,
             )
         elif case == "orthogonalize_3f":
-            graph = orthogonalize(other, base, square, cube)
+            graph = orthogonalize(other, factors=(base, square, cube))
         elif case == "orthogonalize_sparse_3f":
             graph = orthogonalize(
                 other,
-                base,
-                sparse_square,
-                sparse_cube,
+                factors=(base, sparse_square, sparse_cube),
             )
         elif case == "eager_cse_ols_5":
             graph = Graph(
                 outputs=[
                     rolling_ols(
                         other,
-                        base,
-                        square,
+                        factors=(base, square),
                         window=window,
                         name=f"eager_ols_{index}",
                     )
@@ -435,8 +425,7 @@ def _case_runner(
                 outputs=[
                     rolling_lasso(
                         other,
-                        base,
-                        square,
+                        factors=(base, square),
                         window=window,
                         max_iter=100,
                         name=f"eager_lasso_{index}",
@@ -449,9 +438,7 @@ def _case_runner(
                 outputs=[
                     orthogonalize(
                         other,
-                        base,
-                        square,
-                        cube,
+                        factors=(base, square, cube),
                         name=f"eager_orthogonalize_{index}",
                     )
                     for index in range(5)

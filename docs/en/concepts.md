@@ -17,9 +17,9 @@ values during execution.
 
 See [Panel](reference/concepts/panel.md).
 
-`SignalPanel` is the strong terminal subtype produced only by a
-`SignalComposer`. Ordinary composers always produce ordinary `Panel` values,
-which represent AlphaValues rather than trading signals.
+`PredictionPanel` is the strong terminal subtype produced only by a
+`PredictionComposer`. Ordinary composers always produce ordinary `Panel` values,
+which represent AlphaValues rather than predictions.
 
 ## Graph
 
@@ -50,16 +50,17 @@ weighted aggregation.
 
 See [Composer](reference/concepts/composer.md).
 
-## Signal composers
+## Prediction composers
 
-Signal construction is an allowlisted terminal graph operation. Identity,
-equal-weight, rolling positive-IC, rolling OLS, and rolling GLS composers all
-require cross-sectional `zscore` or `percentile_rank` standardization. The
-supervised composers receive generic target and availability Panels; core does
-not own prices, schedules, or backtest policies. Window length is measured in
-the periods prepared by the caller, and missing values are never forward-filled.
+Prediction construction is an allowlisted terminal graph operation. Identity,
+equal-weight, rolling positive-IC, rolling OLS, and rolling GLS composers consume
+AlphaValue Panels already aligned and standardized by the caller's Alpha Policy.
+Supervised composers receive generic target and availability Panels; core does
+not own prices, schedules, standardization, or backtest policies. Window length
+is measured in periods prepared by the caller, and missing values are never
+forward-filled.
 
-For application-orchestrated learning, `ElasticNetSignalComposer` serializes
+For application-orchestrated learning, `ElasticNetPredictionComposer` serializes
 the complete walk-forward, coverage, target, validation, and Elastic Net
 contracts without depending on a backtest package. `ZeroPreservingRmsScaler`
 fits weighted RMS scales without centering, so gated zeros remain zeros.

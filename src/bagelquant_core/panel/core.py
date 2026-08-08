@@ -305,9 +305,9 @@ class CategoryPanel(Panel):
         return normalize_panel_frame(data, numeric=False)
 
 
-class SignalPanel(Panel):
-    """Strongly typed observation-time trading signal values.
+class PredictionPanel(Panel):
+    """Strongly typed observation-time prediction values.
 
-    Signal panels keep the ordinary numeric ``Panel`` storage contract while
+    Prediction panels keep the ordinary numeric ``Panel`` storage contract while
     establishing a runtime boundary that generic panels cannot cross.
     """

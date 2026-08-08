@@ -1,9 +1,10 @@
-"""Strongly typed AlphaValue-to-Signal composition.
+"""Strongly typed AlphaValue-to-prediction composition.
 
-Signal composers are deliberately separate from ordinary arithmetic composers:
-their output is a terminal :class:`SignalPanel`, and supervised composers may
-consume an explicit target/availability training context supplied by a higher
-level backtesting package.
+Prediction composers are terminal graph operations.  They consume AlphaValue
+panels that have already been aligned and standardized by an Alpha Policy and
+produce a :class:`PredictionPanel`.  Supervised composers may additionally
+consume an explicit target/availability context supplied by a higher-level
+backtesting package.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 import numpy as np
@@ -30,18 +30,11 @@ from .registry import Registry
 
 if TYPE_CHECKING:
     from .graph import Graph
-    from .panel import Panel, SignalPanel
-
-
-class SignalStandardization(StrEnum):
-    """Mandatory cross-sectional AlphaValue standardization."""
-
-    ZSCORE = "zscore"
-    PERCENTILE_RANK = "percentile_rank"
+    from .panel import Panel, PredictionPanel
 
 
 @dataclass(frozen=True, slots=True)
-class SignalTrainingContext:
+class PredictionTrainingContext:
     """Supervised targets keyed by source period and their availability dates.
 
     ``targets`` contains the realized next-period return at the AlphaValue
@@ -54,19 +47,19 @@ class SignalTrainingContext:
     availability: "Panel | Graph[Panel]"
 
 
-SIGNAL_COMPOSER_REGISTRY: Registry[type["SignalComposer"]] = Registry(
-    "signal composer"
+PREDICTION_COMPOSER_REGISTRY: Registry[type["PredictionComposer"]] = Registry(
+    "prediction composer"
 )
 
-_SIGNAL_CONTRACT = OperationContract(
+_PREDICTION_CONTRACT = OperationContract(
     execution=ExecutionMode.EAGER_BARRIER,
     density=InputDensity.SPARSE_OK,
     trace_rule=TraceRule.PARENT_MAX,
 )
 
 
-class SignalComposer(ABC):
-    """Base class for terminal, allowlisted SignalPanel graph composers."""
+class PredictionComposer(ABC):
+    """Base class for terminal, allowlisted PredictionPanel graph composers."""
 
     kind: ClassVar[str]
     supervised: ClassVar[bool] = False
@@ -83,7 +76,7 @@ class SignalComposer(ABC):
 
     @property
     def contract(self) -> OperationContract:
-        return _SIGNAL_CONTRACT
+        return _PREDICTION_CONTRACT
 
     @property
     def window(self) -> int | None:
@@ -92,21 +85,19 @@ class SignalComposer(ABC):
     def compose(
         self,
         *alpha_values: "Panel | Graph[Panel]",
-        standardization: str | SignalStandardization = SignalStandardization.ZSCORE,
-        training: SignalTrainingContext | None = None,
+        training: PredictionTrainingContext | None = None,
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-    ) -> "Graph[SignalPanel]":
-        """Build a terminal signal-composer graph."""
+    ) -> "Graph[PredictionPanel]":
+        """Build a terminal prediction-composer graph."""
 
         from .graph import Graph
 
         if not alpha_values:
-            raise ValueError("signal composer requires at least one AlphaValue")
-        resolved = SignalStandardization(standardization)
+            raise ValueError("prediction composer requires at least one AlphaValue")
         self._validate_alpha_count(len(alpha_values))
         if self.supervised and training is None:
-            raise ValueError(f"{self.kind} requires a SignalTrainingContext")
+            raise ValueError(f"{self.kind} requires a PredictionTrainingContext")
         if not self.supervised and training is not None:
             raise ValueError(f"{self.kind} does not accept a training context")
         sources = list(alpha_values)
@@ -114,13 +105,12 @@ class SignalComposer(ABC):
             sources.extend((training.targets, training.availability))
         return Graph._from_nodes(
             (
-                _SignalComposerNode(
+                _PredictionComposerNode(
                     parents=tuple(
-                        as_node(source, kind="SignalComposer") for source in sources
+                        as_node(source, kind="PredictionComposer") for source in sources
                     ),
                     composer=self,
                     alpha_count=len(alpha_values),
-                    standardization=resolved,
                     name=name or self.kind,
                     metadata=metadata,
                 ),
@@ -136,16 +126,15 @@ class SignalComposer(ABC):
         self,
         *frames: pl.DataFrame,
         alpha_count: int,
-        standardization: str,
     ) -> pl.DataFrame:
         alphas = tuple(frames[:alpha_count])
-        wide = _standardized_wide(alphas, SignalStandardization(standardization))
+        wide = _prediction_wide(alphas)
         if self.supervised:
             if len(frames) != alpha_count + 2:
-                raise ValueError("supervised signal composer inputs are incomplete")
+                raise ValueError("supervised prediction composer inputs are incomplete")
             return self._compose_supervised(wide, frames[-2], frames[-1])
         if len(frames) != alpha_count:
-            raise ValueError("unsupervised signal composer received training inputs")
+            raise ValueError("unsupervised prediction composer received training inputs")
         return self._compose_unsupervised(wide)
 
     def _compose_unsupervised(self, wide: pl.DataFrame) -> pl.DataFrame:
@@ -160,16 +149,15 @@ class SignalComposer(ABC):
         raise NotImplementedError
 
 
-class _SignalComposerNode(Node):
-    node_type = "signal_composer"
+class _PredictionComposerNode(Node):
+    node_type = "prediction_composer"
 
     def __init__(
         self,
         *,
         parents: tuple[Node, ...],
-        composer: SignalComposer,
+        composer: PredictionComposer,
         alpha_count: int,
-        standardization: SignalStandardization,
         name: str,
         metadata: Mapping[str, Any] | None,
     ) -> None:
@@ -177,14 +165,13 @@ class _SignalComposerNode(Node):
         self._parents = parents
         self._composer = composer
         self._alpha_count = alpha_count
-        self._standardization = standardization
 
     @property
     def parents(self) -> tuple[Node, ...]:
         return self._parents
 
     @property
-    def operation(self) -> SignalComposer:
+    def operation(self) -> PredictionComposer:
         return self._composer
 
     @property
@@ -195,53 +182,51 @@ class _SignalComposerNode(Node):
         return self._composer._compute_frames(
             *frames,
             alpha_count=self._alpha_count,
-            standardization=self._standardization.value,
         )
 
     def config(self) -> Mapping[str, Any]:
         result: dict[str, Any] = {
-            "signal_composer": self._composer.kind,
+            "prediction_composer": self._composer.kind,
             "alpha_count": self._alpha_count,
-            "standardization": self._standardization.value,
         }
         if self._composer.window is not None:
             result["window"] = self._composer.window
         return result
 
 
-class IdentitySignalComposer(SignalComposer):
-    """Standardize one AlphaValue without combining it with another."""
+class IdentityPredictionComposer(PredictionComposer):
+    """Pass one policy-processed AlphaValue through unchanged."""
 
     kind = "identity"
 
     def _validate_alpha_count(self, count: int) -> None:
         if count != 1:
-            raise ValueError("identity signal composer requires exactly one AlphaValue")
+            raise ValueError("identity prediction composer requires exactly one AlphaValue")
 
     def _compose_unsupervised(self, wide: pl.DataFrame) -> pl.DataFrame:
-        return _signal_output(wide, pl.col("alpha_0"))
+        return _prediction_output(wide, pl.col("alpha_0"))
 
 
-class EqualWeightSignalComposer(SignalComposer):
-    """Average every available standardized AlphaValue per asset."""
+class EqualWeightPredictionComposer(PredictionComposer):
+    """Average every available policy-processed AlphaValue per asset."""
 
     kind = "equal_weight"
 
     def _validate_alpha_count(self, count: int) -> None:
         if count < 2:
-            raise ValueError("equal-weight signal composer requires at least two AlphaValues")
+            raise ValueError("equal-weight prediction composer requires at least two AlphaValues")
 
     def _compose_unsupervised(self, wide: pl.DataFrame) -> pl.DataFrame:
         columns = _alpha_columns(wide)
-        return _signal_output(wide, pl.mean_horizontal(*columns))
+        return _prediction_output(wide, pl.mean_horizontal(*columns))
 
 
-class _WindowSignalComposer(SignalComposer):
+class _WindowPredictionComposer(PredictionComposer):
     supervised = True
 
     def __init__(self, window: int) -> None:
         if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
-            raise ValueError("signal composer window must be a positive integer")
+            raise ValueError("prediction composer window must be a positive integer")
         self._window = window
 
     @property
@@ -253,7 +238,7 @@ class _WindowSignalComposer(SignalComposer):
             raise ValueError(f"{self.kind} requires at least two AlphaValues")
 
 
-class ICWeightedSignalComposer(_WindowSignalComposer):
+class ICWeightedPredictionComposer(_WindowPredictionComposer):
     """Combine AlphaValues with positive rolling mean Spearman IC."""
 
     kind = "ic_weighted"
@@ -300,7 +285,7 @@ class ICWeightedSignalComposer(_WindowSignalComposer):
         return _rows_frame(rows)
 
 
-class OLSSignalComposer(_WindowSignalComposer):
+class OLSPredictionComposer(_WindowPredictionComposer):
     """Average rolling per-period cross-sectional OLS coefficients."""
 
     kind = "ols"
@@ -311,7 +296,7 @@ class OLSSignalComposer(_WindowSignalComposer):
         targets: pl.DataFrame,
         availability: pl.DataFrame,
     ) -> pl.DataFrame:
-        return _regression_signal(
+        return _regression_prediction(
             wide,
             targets,
             availability,
@@ -320,7 +305,7 @@ class OLSSignalComposer(_WindowSignalComposer):
         )
 
 
-class GLSSignalComposer(_WindowSignalComposer):
+class GLSPredictionComposer(_WindowPredictionComposer):
     """Combine per-period OLS estimates by inverse coefficient covariance."""
 
     kind = "gls"
@@ -331,7 +316,7 @@ class GLSSignalComposer(_WindowSignalComposer):
         targets: pl.DataFrame,
         availability: pl.DataFrame,
     ) -> pl.DataFrame:
-        return _regression_signal(
+        return _regression_prediction(
             wide,
             targets,
             availability,
@@ -340,12 +325,9 @@ class GLSSignalComposer(_WindowSignalComposer):
         )
 
 
-def _standardized_wide(
-    frames: tuple[pl.DataFrame, ...],
-    method: SignalStandardization,
-) -> pl.DataFrame:
+def _prediction_wide(frames: tuple[pl.DataFrame, ...]) -> pl.DataFrame:
     if not frames:
-        raise ValueError("signal composer requires AlphaValue frames")
+        raise ValueError("prediction composer requires AlphaValue frames")
     keys = pl.concat([frame.select(TIME, ASSET_ID) for frame in frames]).unique().sort([TIME, ASSET_ID])
     wide = keys
     for index, frame in enumerate(frames):
@@ -354,25 +336,17 @@ def _standardized_wide(
             on=[TIME, ASSET_ID],
             how="left",
         )
-    expressions: list[pl.Expr] = []
-    for name in _alpha_names(wide):
-        raw_value = pl.col(name).fill_nan(None)
-        value = pl.when(raw_value.is_finite()).then(raw_value).otherwise(None)
-        if method == SignalStandardization.ZSCORE:
-            deviation = value.std(ddof=1).over(TIME)
-            expression = pl.when(deviation.is_not_null() & (deviation > 0)).then(
-                (value - value.mean().over(TIME)) / deviation
-            )
-        else:
-            count = value.count().over(TIME)
-            expression = pl.when(count > 0).then(
-                value.rank("average").over(TIME) / count
-            )
-        expressions.append(expression.alias(name))
+    expressions = [
+        pl.when(pl.col(name).fill_nan(None).is_finite())
+        .then(pl.col(name).fill_nan(None))
+        .otherwise(None)
+        .alias(name)
+        for name in _alpha_names(wide)
+    ]
     return wide.with_columns(expressions).sort([TIME, ASSET_ID])
 
 
-def _signal_output(frame: pl.DataFrame, expression: pl.Expr) -> pl.DataFrame:
+def _prediction_output(frame: pl.DataFrame, expression: pl.Expr) -> pl.DataFrame:
     return (
         frame.select(TIME, ASSET_ID, expression.alias(VALUE))
         .drop_nulls(VALUE)
@@ -400,7 +374,7 @@ def _join_training(
     )
 
 
-def _regression_signal(
+def _regression_prediction(
     wide: pl.DataFrame,
     targets: pl.DataFrame,
     availability: pl.DataFrame,
@@ -531,23 +505,22 @@ def _rows_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
 
 
 for _composer_type in (
-    IdentitySignalComposer,
-    EqualWeightSignalComposer,
-    ICWeightedSignalComposer,
-    OLSSignalComposer,
-    GLSSignalComposer,
+    IdentityPredictionComposer,
+    EqualWeightPredictionComposer,
+    ICWeightedPredictionComposer,
+    OLSPredictionComposer,
+    GLSPredictionComposer,
 ):
-    SIGNAL_COMPOSER_REGISTRY.add(_composer_type.kind, _composer_type)
+    PREDICTION_COMPOSER_REGISTRY.add(_composer_type.kind, _composer_type)
 
 
 __all__ = [
-    "SIGNAL_COMPOSER_REGISTRY",
-    "EqualWeightSignalComposer",
-    "GLSSignalComposer",
-    "ICWeightedSignalComposer",
-    "IdentitySignalComposer",
-    "OLSSignalComposer",
-    "SignalComposer",
-    "SignalStandardization",
-    "SignalTrainingContext",
+    "PREDICTION_COMPOSER_REGISTRY",
+    "EqualWeightPredictionComposer",
+    "GLSPredictionComposer",
+    "ICWeightedPredictionComposer",
+    "IdentityPredictionComposer",
+    "OLSPredictionComposer",
+    "PredictionComposer",
+    "PredictionTrainingContext",
 ]

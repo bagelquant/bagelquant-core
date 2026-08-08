@@ -12,8 +12,8 @@
 
 参见 [Panel](reference/concepts/panel.md)。
 
-`SignalPanel` 是只能由 `SignalComposer` 生成的强类型终端 subtype。普通 composer
-始终输出普通 `Panel`，表示 AlphaValue，而不是 trading signal。
+`PredictionPanel` 是只能由 `PredictionComposer` 生成的强类型终端 subtype。普通 composer
+始终输出普通 `Panel`，表示 AlphaValue，而不是 prediction。
 
 ## Graph
 
@@ -39,15 +39,15 @@ Composer 用多个 `Panel` 或 `Graph` 输入生成一个新图，适合算术�
 
 参见 [Composer](reference/concepts/composer.md)。
 
-## Signal composer
+## Prediction composer
 
-Signal 构建是 allowlist 中的终端 graph operation。Identity、equal-weight、rolling
-positive-IC、rolling OLS 与 rolling GLS 都必须使用截面 `zscore` 或
-`percentile_rank` standardization。监督式 composer 接收通用 target 与 availability
-Panel；core 不持有价格、schedule 或回测 policy。Window 长度由调用方准备的 period
-计数，缺失值不会 forward-fill。
+Prediction 构建是 allowlist 中的终端 graph operation。Identity、equal-weight、rolling
+positive-IC、rolling OLS 与 rolling GLS 消费已经由调用方 Alpha Policy 完成日期对齐和
+standardization 的 AlphaValue Panel。监督式 composer 接收通用 target 与 availability
+Panel；core 不持有价格、schedule、standardization 或回测 policy。Window 长度由调用方
+准备的 period 计数，缺失值不会 forward-fill。
 
-对于由应用层编排的学习流程，`ElasticNetSignalComposer` 会完整序列化 walk-forward、
+对于由应用层编排的学习流程，`ElasticNetPredictionComposer` 会完整序列化 walk-forward、
 coverage、target、validation 与 Elastic Net contract，同时不依赖回测包。
 `ZeroPreservingRmsScaler` 使用不中心化的加权 RMS，因此门控产生的零值在缩放后仍为零。
 相对正则路径的候选只使用每折 sample 计算 `alpha_max`；sample+validation 重训时会重新

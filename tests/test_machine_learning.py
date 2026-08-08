@@ -7,7 +7,7 @@ import pytest
 
 from bagelquant_core import (
     ElasticNetConfig,
-    ElasticNetSignalComposer,
+    ElasticNetPredictionComposer,
     LabelBoundary,
     WalkForwardConfig,
     ZeroPreservingRmsScaler,
@@ -53,7 +53,7 @@ def test_validation_month_floor_cannot_be_weakened() -> None:
 def test_label_boundary_requires_strict_availability_before_fit() -> None:
     valid = LabelBoundary(
         feature_date=date(2024, 1, 30),
-        signal_date=date(2024, 1, 31),
+        prediction_date=date(2024, 1, 31),
         execution_date=date(2024, 2, 1),
         label_start_date=date(2024, 2, 1),
         label_end_date=date(2024, 3, 1),
@@ -65,7 +65,7 @@ def test_label_boundary_requires_strict_availability_before_fit() -> None:
     with pytest.raises(ValueError, match="strictly before"):
         LabelBoundary(
             feature_date=valid.feature_date,
-            signal_date=valid.signal_date,
+            prediction_date=valid.prediction_date,
             execution_date=valid.execution_date,
             label_start_date=valid.label_start_date,
             label_end_date=valid.label_end_date,
@@ -127,7 +127,7 @@ def test_elastic_net_uses_unpenalized_intercept_without_centering_features() -> 
 
 
 def test_elastic_net_composer_round_trips_complete_configuration() -> None:
-    composer = ElasticNetSignalComposer(
+    composer = ElasticNetPredictionComposer(
         walk_forward=WalkForwardConfig(),
         coverage={
             "minimum_all_market_observations": 2,
@@ -144,7 +144,7 @@ def test_elastic_net_composer_round_trips_complete_configuration() -> None:
         validation={"objective": "mean_ic", "minimum_valid_months": 18},
     )
 
-    restored = ElasticNetSignalComposer.from_dict(composer.to_dict())
+    restored = ElasticNetPredictionComposer.from_dict(composer.to_dict())
 
     assert restored.to_dict() == composer.to_dict()
     assert restored.to_dict()["scaling"]["method"] == (

@@ -86,7 +86,7 @@ class GraphSpec:
                 "panel",
                 "transformer",
                 "composer",
-                "signal_composer",
+                "prediction_composer",
             }:
                 raise GraphValidationError(
                     f"unsupported graph node type: {node_type!r}"
@@ -202,7 +202,7 @@ class Graph(Generic[OutputT]):
         """Bind inputs without repeating topology and signature validation."""
 
         from .composer import COMPOSER_REGISTRY
-        from .signal import SIGNAL_COMPOSER_REGISTRY, SignalTrainingContext
+        from .prediction import PREDICTION_COMPOSER_REGISTRY, PredictionTrainingContext
         from .transformer import TRANSFORMER_REGISTRY
 
         by_name: dict[str, Node] = {}
@@ -252,8 +252,7 @@ class Graph(Generic[OutputT]):
                     )
                 else:
                     alpha_count = int(config.pop("alpha_count"))
-                    standardization = str(config.pop("standardization"))
-                    composer_type = SIGNAL_COMPOSER_REGISTRY.get(operation_name)
+                    composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
                     composer = (
                         composer_type(int(config.pop("window")))
                         if "window" in config
@@ -261,10 +260,10 @@ class Graph(Generic[OutputT]):
                     )
                     if config:
                         raise GraphValidationError(
-                            f"unknown signal composer parameters: {sorted(config)}"
+                            f"unknown prediction composer parameters: {sorted(config)}"
                         )
                     training = (
-                        SignalTrainingContext(
+                        PredictionTrainingContext(
                             Graph._from_nodes((input_nodes[-2],)),
                             Graph._from_nodes((input_nodes[-1],)),
                         )
@@ -276,7 +275,6 @@ class Graph(Generic[OutputT]):
                             Graph._from_nodes((parent,))
                             for parent in input_nodes[:alpha_count]
                         ),
-                        standardization=standardization,
                         training=training,
                         name=node.name,
                         metadata=node.metadata,
@@ -294,7 +292,7 @@ class Graph(Generic[OutputT]):
         """Validate topology, registered operators, and operator parameters."""
 
         from .composer import COMPOSER_REGISTRY
-        from .signal import SIGNAL_COMPOSER_REGISTRY
+        from .prediction import PREDICTION_COMPOSER_REGISTRY
         from .transformer import TRANSFORMER_REGISTRY
 
         spec = (
@@ -342,9 +340,9 @@ class Graph(Generic[OutputT]):
                 raise GraphValidationError(
                     f"composer {node.name!r} requires at least two inputs"
                 )
-            if node.node_type == "signal_composer" and not node.inputs:
+            if node.node_type == "prediction_composer" and not node.inputs:
                 raise GraphValidationError(
-                    f"signal_composer {node.name!r} requires at least one input"
+                    f"prediction_composer {node.name!r} requires at least one input"
                 )
             if node.node_type != "transformer" and node.panel_parameters:
                 raise GraphValidationError(
@@ -356,13 +354,13 @@ class Graph(Generic[OutputT]):
                 elif node.node_type == "composer":
                     operation = COMPOSER_REGISTRY.get(operation_name)
                 else:
-                    composer_type = SIGNAL_COMPOSER_REGISTRY.get(operation_name)
+                    composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
                     window = config.get("window")
                     operation = composer_type(int(window)) if window is not None else composer_type()
             except KeyError as error:
                 raise GraphValidationError(str(error)) from error
             try:
-                if node.node_type != "signal_composer":
+                if node.node_type != "prediction_composer":
                     if node.node_type == "transformer":
                         panel_arguments = {
                             parameter: (
@@ -381,7 +379,6 @@ class Graph(Generic[OutputT]):
                         )
                 else:
                     alpha_count = config.get("alpha_count")
-                    standardization = config.get("standardization")
                     if (
                         not isinstance(alpha_count, int)
                         or isinstance(alpha_count, bool)
@@ -389,9 +386,6 @@ class Graph(Generic[OutputT]):
                     ):
                         raise TypeError("alpha_count must be a positive integer")
                     operation._validate_alpha_count(alpha_count)
-                    from .signal import SignalStandardization
-
-                    SignalStandardization(standardization)
                     expected = alpha_count + (2 if operation.supervised else 0)
                     if len(node.inputs) != expected:
                         raise TypeError(
@@ -512,24 +506,24 @@ class Graph(Generic[OutputT]):
                     f"Composer '{node.name}' must have at least two inputs"
                 )
 
-            if node.node_type == "signal_composer" and len(node.parents) < 1:
+            if node.node_type == "prediction_composer" and len(node.parents) < 1:
                 raise GraphValidationError(
-                    f"SignalComposer '{node.name}' must have at least one parent"
+                    f"PredictionComposer '{node.name}' must have at least one parent"
                 )
 
-            if node.node_type != "signal_composer" and any(
-                parent.node_type == "signal_composer"
-                or parent.__class__.__name__ == "SignalPanel"
+            if node.node_type != "prediction_composer" and any(
+                parent.node_type == "prediction_composer"
+                or parent.__class__.__name__ == "PredictionPanel"
                 for parent in node.parents
             ):
                 raise GraphValidationError(
-                    "SignalComposer outputs are terminal and cannot feed other nodes"
+                    "PredictionComposer outputs are terminal and cannot feed other nodes"
                 )
 
         output_ids = {id(node) for node in self._outputs}
         for node in self._nodes:
-            if node.node_type == "signal_composer" and id(node) not in output_ids:
-                raise GraphValidationError("SignalComposer nodes must be graph outputs")
+            if node.node_type == "prediction_composer" and id(node) not in output_ids:
+                raise GraphValidationError("PredictionComposer nodes must be graph outputs")
 
     def topological_sort(self) -> tuple[Node, ...]:
         return self._nodes

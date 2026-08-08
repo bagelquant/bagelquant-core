@@ -1,4 +1,4 @@
-"""Deterministic machine-learning primitives for signal composition.
+"""Deterministic machine-learning primitives for prediction composition.
 
 This module intentionally contains no investment-domain policy and no
 backtesting dependency.  It owns the reusable contracts needed by an
@@ -161,7 +161,7 @@ class LabelBoundary:
     """Explicit dates governing one supervised training record."""
 
     feature_date: date
-    signal_date: date
+    prediction_date: date
     execution_date: date
     label_start_date: date
     label_end_date: date
@@ -171,9 +171,9 @@ class LabelBoundary:
     def validate(self) -> None:
         """Raise when the record violates the no-look-ahead contract."""
 
-        if not self.feature_date <= self.signal_date < self.execution_date:
+        if not self.feature_date <= self.prediction_date < self.execution_date:
             raise ValueError(
-                "label boundary requires feature_date <= signal_date < execution_date"
+                "label boundary requires feature_date <= prediction_date < execution_date"
             )
         if self.label_start_date != self.execution_date:
             raise ValueError("label_start_date must equal execution_date")
@@ -343,7 +343,7 @@ class ElasticNetModel:
 
 
 @dataclass(frozen=True, slots=True)
-class ElasticNetSignalComposer:
+class ElasticNetPredictionComposer:
     """Serializable Core facade for an application-owned ML state machine.
 
     Core owns configuration validation, scaling, and candidate fitting.  The
@@ -400,7 +400,7 @@ class ElasticNetSignalComposer:
         }
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> ElasticNetSignalComposer:
+    def from_dict(cls, value: Mapping[str, object]) -> ElasticNetPredictionComposer:
         """Validate and restore a serialized composer configuration."""
 
         walk = dict(value["walk_forward"])
@@ -657,7 +657,7 @@ __all__ = [
     "ElasticNetConfig",
     "ElasticNetModel",
     "ElasticNetSearchMode",
-    "ElasticNetSignalComposer",
+    "ElasticNetPredictionComposer",
     "LabelBoundary",
     "WalkForwardConfig",
     "WalkForwardFold",

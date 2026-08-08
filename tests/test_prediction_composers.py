@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from datetime import date
 
 import numpy as np
@@ -8,15 +9,15 @@ import pytest
 
 from bagelquant_core import (
     Domain,
-    EqualWeightSignalComposer,
-    GLSSignalComposer,
+    EqualWeightPredictionComposer,
+    GLSPredictionComposer,
     Graph,
-    ICWeightedSignalComposer,
-    IdentitySignalComposer,
-    OLSSignalComposer,
+    ICWeightedPredictionComposer,
+    IdentityPredictionComposer,
+    OLSPredictionComposer,
     Panel,
-    SignalPanel,
-    SignalTrainingContext,
+    PredictionPanel,
+    PredictionTrainingContext,
 )
 from bagelquant_core.transformer import rank
 
@@ -37,20 +38,20 @@ def _panel(
     )
 
 
-def test_identity_signal_is_typed_terminal_and_round_trips_spec() -> None:
+def test_identity_prediction_is_typed_terminal_and_round_trips_spec() -> None:
     day = date(2024, 1, 31)
     domain = Domain(calendar=[day], universe=["A", "B"])
     alpha = _panel(domain, "alpha", [(day, "A", 1.0), (day, "B", 3.0)])
 
-    graph = IdentitySignalComposer().compose(alpha)
+    graph = IdentityPredictionComposer().compose(alpha)
     result = graph.compute(dense_output=False)
 
-    assert isinstance(result, SignalPanel)
+    assert isinstance(result, PredictionPanel)
     assert result.collect(dense=False).get_column("value").to_list() == pytest.approx(
-        [-2**-0.5, 2**-0.5]
+        [1.0, 3.0]
     )
     compiled = Graph.compile(graph.spec().to_dict())
-    assert isinstance(compiled.compute({"alpha": alpha}, dense_output=False), SignalPanel)
+    assert isinstance(compiled.compute({"alpha": alpha}, dense_output=False), PredictionPanel)
     with pytest.raises(ValueError, match="terminal"):
         rank(graph)
 
@@ -69,16 +70,16 @@ def test_equal_weight_renormalizes_available_alpha_values() -> None:
         [(day, "A", 2.0), (day, "B", None), (day, "C", 4.0)],
     )
 
-    result = EqualWeightSignalComposer().compose(first, second).compute(
+    result = EqualWeightPredictionComposer().compose(first, second).compute(
         dense_output=False
     )
 
     assert result.collect(dense=False).get_column("value").to_list() == pytest.approx(
-        [-0.8535533906, 0.0, 0.8535533906]
+        [1.5, 2.0, 3.5]
     )
 
 
-def test_percentile_rank_uses_average_ties_and_non_null_count() -> None:
+def test_prediction_composer_rejects_removed_standardization_parameter() -> None:
     day = date(2024, 1, 31)
     domain = Domain(calendar=[day], universe=["A", "B", "C", "D"])
     alpha = _panel(
@@ -87,18 +88,11 @@ def test_percentile_rank_uses_average_ties_and_non_null_count() -> None:
         [(day, "A", 1.0), (day, "B", 1.0), (day, "C", 3.0), (day, "D", None)],
     )
 
-    result = (
-        IdentitySignalComposer()
-        .compose(alpha, standardization="percentile_rank")
-        .compute(dense_output=False)
-        .collect(dense=False)
-    )
-
-    assert result.get_column("asset_id").to_list() == ["A", "B", "C"]
-    assert result.get_column("value").to_list() == pytest.approx([0.5, 0.5, 1.0])
+    with pytest.raises(TypeError, match="standardization"):
+        IdentityPredictionComposer().compose(alpha, standardization="percentile_rank")
 
 
-def test_signal_standardization_excludes_non_finite_alpha_values() -> None:
+def test_prediction_composition_excludes_non_finite_alpha_values() -> None:
     day = date(2024, 1, 31)
     domain = Domain(calendar=[day], universe=["A", "B", "C"])
     alpha = _panel(
@@ -107,15 +101,17 @@ def test_signal_standardization_excludes_non_finite_alpha_values() -> None:
         [(day, "A", 1.0), (day, "B", 2.0), (day, "C", float("inf"))],
     )
 
-    result = (
-        IdentitySignalComposer()
-        .compose(alpha, standardization="percentile_rank")
-        .compute(dense_output=False)
-        .collect(dense=False)
-    )
+    result = IdentityPredictionComposer().compose(alpha).compute(
+        dense_output=False
+    ).collect(dense=False)
 
     assert result.get_column("asset_id").to_list() == ["A", "B"]
-    assert result.get_column("value").to_list() == pytest.approx([0.5, 1.0])
+    assert result.get_column("value").to_list() == pytest.approx([1.0, 2.0])
+
+
+def test_removed_signal_module_has_no_compatibility_alias() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("bagelquant_core.signal")
 
 
 def test_ic_weighted_uses_only_positive_full_window_ic() -> None:
@@ -144,11 +140,11 @@ def test_ic_weighted_uses_only_positive_full_window_ic() -> None:
     ]
 
     result = (
-        ICWeightedSignalComposer(2)
+        ICWeightedPredictionComposer(2)
         .compose(
             _panel(domain, "positive", positive),
             _panel(domain, "negative", negative),
-            training=SignalTrainingContext(
+            training=PredictionTrainingContext(
                 _panel(domain, "targets", targets),
                 _panel(domain, "availability", availability),
             ),
@@ -158,7 +154,7 @@ def test_ic_weighted_uses_only_positive_full_window_ic() -> None:
     )
 
     assert result.get_column("time").unique().to_list() == [times[2]]
-    assert result.get_column("value").to_list() == pytest.approx([-1.0, 0.0, 1.0])
+    assert result.get_column("value").to_list() == pytest.approx([1.0, 2.0, 3.0])
 
 
 def test_gls_combines_two_invertible_period_covariances() -> None:
@@ -206,11 +202,11 @@ def test_gls_combines_two_invertible_period_covariances() -> None:
             )
 
     result = (
-        GLSSignalComposer(2)
+        GLSPredictionComposer(2)
         .compose(
             _panel(domain, "first", first_rows),
             _panel(domain, "second", second_rows),
-            training=SignalTrainingContext(
+            training=PredictionTrainingContext(
                 _panel(domain, "targets", target_rows),
                 _panel(domain, "availability", availability_rows),
             ),
@@ -248,10 +244,10 @@ def test_ols_waits_for_available_full_period_window() -> None:
     targets = _panel(domain, "targets", target_rows)
     availability = _panel(domain, "availability", availability_rows)
 
-    result = OLSSignalComposer(2).compose(
+    result = OLSPredictionComposer(2).compose(
         first,
         second,
-        training=SignalTrainingContext(targets, availability),
+        training=PredictionTrainingContext(targets, availability),
     ).compute(dense_output=False).collect(dense=False)
 
     assert result.get_column("time").unique().to_list() == [times[2], times[3]]
@@ -279,11 +275,11 @@ def test_ols_requires_consecutive_completed_training_periods() -> None:
                 )
 
     result = (
-        OLSSignalComposer(2)
+        OLSPredictionComposer(2)
         .compose(
             _panel(domain, "first", first_rows),
             _panel(domain, "second", second_rows),
-            training=SignalTrainingContext(
+            training=PredictionTrainingContext(
                 _panel(domain, "targets", target_rows),
                 _panel(domain, "availability", availability_rows),
             ),

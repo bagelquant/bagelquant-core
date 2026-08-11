@@ -115,29 +115,30 @@ class WalkForwardFold:
 
 
 def build_expanding_walk_forward(
-    periods: Iterable[date], config: WalkForwardConfig
+    periods: Iterable[date],
+    config: WalkForwardConfig,
+    *,
+    include_incomplete_oos: bool = False,
 ) -> tuple[WalkForwardFold, ...]:
     """Partition unique monthly periods into deterministic expanding folds.
 
-    A new fold starts after each complete OOS block.  Incomplete trailing OOS
-    periods are deliberately excluded so published artifacts always cover the
-    configured horizon.
+    A new fold starts after each complete OOS block. Incomplete trailing OOS
+    periods are excluded by default. Application orchestrators that publish
+    one period at a time may opt into the deterministic trailing fold without
+    changing the configured refit cadence.
     """
 
     ordered = tuple(sorted(set(periods)))
-    required = (
-        config.initial_sample_months
-        + config.validation_months
-        + config.oos_months
-    )
+    required_oos = 1 if include_incomplete_oos else config.oos_months
+    required = config.initial_sample_months + config.validation_months + required_oos
     if len(ordered) < required:
         return ()
     folds: list[WalkForwardFold] = []
     sample_end = config.initial_sample_months
     index = 0
-    while sample_end + config.validation_months + config.oos_months <= len(ordered):
+    while sample_end + config.validation_months + required_oos <= len(ordered):
         validation_end = sample_end + config.validation_months
-        oos_end = validation_end + config.oos_months
+        oos_end = min(validation_end + config.oos_months, len(ordered))
         sample = ordered[:sample_end]
         embargoed = (
             sample[-config.embargo_months :] if config.embargo_months else ()
@@ -264,6 +265,48 @@ class ZeroPreservingRmsScaler:
             "dropped_columns": dict(self.dropped_columns),
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> ZeroPreservingRmsScaler:
+        """Restore and validate a persisted scaler checkpoint."""
+
+        required = {
+            "method",
+            "feature_names",
+            "active_feature_names",
+            "scales",
+            "dropped_columns",
+        }
+        if set(value) != required:
+            raise ValueError("persisted RMS scaler fields do not match the contract")
+        if value["method"] != "weighted_rms_without_centering":
+            raise ValueError("unsupported persisted RMS scaler method")
+        feature_names = tuple(str(name) for name in value["feature_names"])
+        active_names = tuple(str(name) for name in value["active_feature_names"])
+        if len(set(feature_names)) != len(feature_names):
+            raise ValueError("persisted RMS scaler feature names must be unique")
+        if len(set(active_names)) != len(active_names):
+            raise ValueError("persisted RMS scaler active features must be unique")
+        indices_by_name = {name: index for index, name in enumerate(feature_names)}
+        if any(name not in indices_by_name for name in active_names):
+            raise ValueError("persisted RMS scaler has an unknown active feature")
+        active_indices = tuple(indices_by_name[name] for name in active_names)
+        if active_indices != tuple(sorted(active_indices)):
+            raise ValueError("persisted RMS scaler active feature order is invalid")
+        raw_scales = value["scales"]
+        if not isinstance(raw_scales, Mapping) or set(raw_scales) != set(active_names):
+            raise ValueError("persisted RMS scaler scales do not match active features")
+        scales = tuple(float(raw_scales[name]) for name in active_names)
+        if any(not np.isfinite(item) or item <= 0 for item in scales):
+            raise ValueError("persisted RMS scaler scales must be positive and finite")
+        raw_dropped = value["dropped_columns"]
+        if not isinstance(raw_dropped, Mapping):
+            raise ValueError("persisted RMS scaler dropped_columns must be an object")
+        dropped = {str(name): str(reason) for name, reason in raw_dropped.items()}
+        inactive = set(feature_names) - set(active_names)
+        if set(dropped) != inactive or any(not reason for reason in dropped.values()):
+            raise ValueError("persisted RMS scaler dropped columns are incomplete")
+        return cls(feature_names, scales, active_indices, dropped)
+
 
 @dataclass(frozen=True, slots=True)
 class ElasticNetConfig:
@@ -332,6 +375,17 @@ class ElasticNetModel:
     iterations: int
     converged: bool
 
+    def __post_init__(self) -> None:
+        values = (self.intercept, self.alpha, self.l1_ratio, *self.coefficients)
+        if any(not np.isfinite(value) for value in values):
+            raise ValueError("Elastic Net model values must be finite")
+        if self.alpha < 0 or not 0 < self.l1_ratio <= 1:
+            raise ValueError("Elastic Net model penalty settings are invalid")
+        if not isinstance(self.iterations, int) or isinstance(self.iterations, bool):
+            raise ValueError("Elastic Net model iterations must be an integer")
+        if self.iterations <= 0 or not isinstance(self.converged, bool):
+            raise ValueError("Elastic Net model solver state is invalid")
+
     def predict(self, values: np.ndarray) -> np.ndarray:
         """Predict from the active, already-scaled matrix."""
 
@@ -340,6 +394,50 @@ class ElasticNetModel:
         if matrix.shape[1] != coefficients.size:
             raise ValueError("matrix columns do not match fitted model")
         return self.intercept + matrix @ coefficients
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a stable JSON-compatible model checkpoint."""
+
+        return {
+            "intercept": self.intercept,
+            "coefficients": list(self.coefficients),
+            "alpha": self.alpha,
+            "l1_ratio": self.l1_ratio,
+            "iterations": self.iterations,
+            "converged": self.converged,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> ElasticNetModel:
+        """Restore and validate a persisted model checkpoint."""
+
+        required = {
+            "intercept",
+            "coefficients",
+            "alpha",
+            "l1_ratio",
+            "iterations",
+            "converged",
+        }
+        if set(value) != required:
+            raise ValueError("persisted Elastic Net model fields do not match")
+        coefficients = value["coefficients"]
+        if not isinstance(coefficients, (list, tuple)):
+            raise ValueError("persisted Elastic Net coefficients must be a list")
+        iterations = value["iterations"]
+        converged = value["converged"]
+        if not isinstance(iterations, int) or isinstance(iterations, bool):
+            raise ValueError("persisted Elastic Net iterations must be an integer")
+        if not isinstance(converged, bool):
+            raise ValueError("persisted Elastic Net convergence must be boolean")
+        return cls(
+            intercept=float(value["intercept"]),
+            coefficients=tuple(float(item) for item in coefficients),
+            alpha=float(value["alpha"]),
+            l1_ratio=float(value["l1_ratio"]),
+            iterations=iterations,
+            converged=converged,
+        )
 
 
 @dataclass(frozen=True, slots=True)

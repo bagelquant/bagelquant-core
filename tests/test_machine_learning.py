@@ -7,6 +7,7 @@ import pytest
 
 from bagelquant_core import (
     ElasticNetConfig,
+    ElasticNetModel,
     ElasticNetPredictionComposer,
     LabelBoundary,
     WalkForwardConfig,
@@ -39,6 +40,32 @@ def test_expanding_walk_forward_is_monthly_and_embargoes_sample_tail() -> None:
     assert folds[0].embargoed_periods == tuple(_months(12)[-2:])
     assert len(folds[1].sample_periods) == 18
     assert folds[0].oos_periods[-1] < folds[1].oos_periods[0]
+
+
+def test_expanding_walk_forward_can_publish_a_partial_trailing_oos_fold() -> None:
+    config = WalkForwardConfig(
+        initial_sample_months=12,
+        validation_months=6,
+        oos_months=6,
+    )
+
+    assert build_expanding_walk_forward(_months(19), config) == ()
+    folds = build_expanding_walk_forward(
+        _months(19),
+        config,
+        include_incomplete_oos=True,
+    )
+
+    assert len(folds) == 1
+    assert folds[0].oos_periods == (date(2001, 7, 1),)
+    completed = build_expanding_walk_forward(
+        _months(24),
+        config,
+        include_incomplete_oos=True,
+    )
+    assert completed[0].sample_periods == folds[0].sample_periods
+    assert completed[0].validation_periods == folds[0].validation_periods
+    assert completed[0].oos_periods[:1] == folds[0].oos_periods
 
 
 def test_validation_month_floor_cannot_be_weakened() -> None:
@@ -88,6 +115,9 @@ def test_rms_scaler_preserves_gated_zeros_and_drops_constant_zero_column() -> No
     assert transformed[0, 0] == 0.0
     assert transformed[1, 1] == 0.0
     assert np.isfinite(transformed).all()
+    restored = ZeroPreservingRmsScaler.from_dict(scaler.to_dict())
+    assert restored == scaler
+    assert np.array_equal(restored.transform(sample), transformed)
 
 
 def test_period_weights_assign_equal_total_weight_to_each_month() -> None:
@@ -124,6 +154,9 @@ def test_elastic_net_uses_unpenalized_intercept_without_centering_features() -> 
     assert model.intercept == pytest.approx(4.0, abs=1e-7)
     assert model.coefficients == pytest.approx((2.0,), abs=1e-7)
     assert model.predict(np.array([[0.0]])).item() == pytest.approx(4.0, abs=1e-7)
+    restored = ElasticNetModel.from_dict(model.to_dict())
+    assert restored == model
+    assert np.array_equal(restored.predict(values), model.predict(values))
 
 
 def test_elastic_net_composer_round_trips_complete_configuration() -> None:

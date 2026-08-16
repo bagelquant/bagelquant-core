@@ -73,6 +73,5 @@ rolling regression—are Transformers and use named Panel parameters. See the
 [Transformer concept](./transformer.md).
 
 Comparison and logical composers return numeric `1.0` and `0.0` panels so their
-outputs remain valid graph inputs. `minimum` and `maximum` are also exported as
-`min` and `max`; `sub`, `mul`, and `div` are exported as `subtract`,
-`multiply`, and `divide`.
+outputs remain valid graph inputs. Use the canonical `minimum`, `maximum`,
+`sub`, `mul`, and `div` operation names in code and serialized graphs.

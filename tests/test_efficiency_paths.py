@@ -24,10 +24,10 @@ from helpers import panel, values
 def test_panel_data_remains_defensive() -> None:
     source = panel([("2024-01-01", "a", 1.0)])
 
-    changed = source.data.with_columns(pl.lit(99.0).alias("value"))
+    changed = source.collect(dense=True).with_columns(pl.lit(99.0).alias("value"))
 
     assert changed["value"].to_list() == [99.0]
-    assert source.data["value"].to_list() == [1.0]
+    assert source.collect(dense=True)["value"].to_list() == [1.0]
 
 
 def test_reusable_execution_runtime_hits_cache() -> None:
@@ -62,8 +62,8 @@ def test_rolling_rank_and_percentile_fast_paths() -> None:
     ranked.compute()
     pct.compute()
 
-    assert values(ranked.output.data)[("2024-01-03", "a")] == 2.0
-    assert values(pct.output.data)[("2024-01-02", "a")] == 0.5
+    assert values(ranked.output.collect(dense=True))[("2024-01-03", "a")] == 2.0
+    assert values(pct.output.collect(dense=True))[("2024-01-02", "a")] == 0.5
 
 
 def test_rank_and_percentile_siblings_share_comparison_kernel(
@@ -121,8 +121,8 @@ def test_ewm_mean_honors_adjusted_and_recursive_weighting() -> None:
     adjusted.compute()
     recursive.compute()
 
-    adjusted_values = values(adjusted.output.data)
-    recursive_values = values(recursive.output.data)
+    adjusted_values = values(adjusted.output.collect(dense=True))
+    recursive_values = values(recursive.output.collect(dense=True))
     assert adjusted_values[("2024-01-01", "a")] == 1.0
     assert adjusted_values[("2024-01-02", "a")] == pytest.approx(5 / 3)
     assert adjusted_values[("2024-01-03", "a")] == pytest.approx(17 / 7)
@@ -155,8 +155,8 @@ def test_rolling_pair_composers_are_grouped_by_asset() -> None:
     corr.compute()
     cov.compute()
 
-    assert math.isclose(values(corr.output.data)[("2024-01-02", "a")], 1.0)
-    assert math.isclose(values(cov.output.data)[("2024-01-02", "a")], 1.0)
+    assert math.isclose(values(corr.output.collect(dense=True))[("2024-01-02", "a")], 1.0)
+    assert math.isclose(values(cov.output.collect(dense=True))[("2024-01-02", "a")], 1.0)
 
 
 def test_rolling_ols_predicts_current_value_from_prior_window() -> None:
@@ -182,7 +182,7 @@ def test_rolling_ols_predicts_current_value_from_prior_window() -> None:
     graph = rolling_ols(target, factors=(factor,), window=3)
     graph.compute()
 
-    result = values(graph.output.data)
+    result = values(graph.output.collect(dense=True))
     assert result[("2024-01-03", "a")] is None
     assert math.isclose(result[("2024-01-04", "a")], 9.0)
 
@@ -210,7 +210,7 @@ def test_one_factor_orthogonalize_uses_closed_form_residuals() -> None:
     )
     graph.compute()
 
-    assert all(math.isclose(value, 0.0, abs_tol=1e-12) for value in values(graph.output.data).values())
+    assert all(math.isclose(value, 0.0, abs_tol=1e-12) for value in values(graph.output.collect(dense=True)).values())
 
 
 def test_orthogonalize_defaults_to_no_intercept() -> None:
@@ -238,11 +238,11 @@ def test_orthogonalize_defaults_to_no_intercept() -> None:
 
     assert any(
         not math.isclose(value, 0.0, abs_tol=1e-12)
-        for value in values(without_intercept.data).values()
+        for value in values(without_intercept.collect(dense=True)).values()
     )
     assert all(
         math.isclose(value, 0.0, abs_tol=1e-12)
-        for value in values(with_intercept.data).values()
+        for value in values(with_intercept.collect(dense=True)).values()
     )
 
 

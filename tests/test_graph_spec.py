@@ -47,7 +47,7 @@ def test_graph_spec_round_trip_and_compilation() -> None:
     )
 
     assert restored.spec().to_dict() == specification.to_dict()
-    assert restored.compute().data.equals(original.compute().data)
+    assert restored.compute().collect(dense=True).equals(original.compute().collect(dense=True))
 
 
 def test_graph_spec_round_trips_named_panel_parameters() -> None:
@@ -74,7 +74,7 @@ def test_graph_spec_round_trips_named_panel_parameters() -> None:
     assert node["panel_parameters"] == {"group": ["industry"]}
     restored = Graph.from_spec(specification, inputs=all_inputs)
     assert restored.spec().to_dict() == specification.to_dict()
-    assert restored.compute().data.equals(original.compute().data)
+    assert restored.compute().collect(dense=True).equals(original.compute().collect(dense=True))
 
 
 def test_graph_spec_rejects_unknown_operations() -> None:

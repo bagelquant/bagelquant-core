@@ -39,7 +39,7 @@ def _static_panel(
 
 def _dense_values(panel: Panel) -> np.ndarray:
     return (
-        panel.data.sort(["asset_id", "time"])
+        panel.collect(dense=True).sort(["asset_id", "time"])
         .get_column("value")
         .to_numpy()
         .astype(float, copy=False)

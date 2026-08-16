@@ -71,10 +71,6 @@ def weighted_mean(*frames: pl.DataFrame, weights: Sequence[float]) -> pl.DataFra
     )
 
 
-min = minimum
-max = maximum
-
-
 def _plan_aggregation(
     frames: tuple[pl.LazyFrame, ...],
     config: Mapping[str, object],

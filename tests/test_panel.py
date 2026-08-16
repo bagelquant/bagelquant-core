@@ -17,9 +17,9 @@ def test_panel_normalizes_to_time_asset_id_grid() -> None:
         domain,
     )
 
-    assert panel.data.columns == ["time", "asset_id", "value"]
-    assert panel.data.height == 4
-    assert panel.data.filter(pl.col("asset_id") == "a")["value"].to_list()[0] == 1.0
+    assert panel.collect(dense=True).columns == ["time", "asset_id", "value"]
+    assert panel.collect(dense=True).height == 4
+    assert panel.collect(dense=True).filter(pl.col("asset_id") == "a")["value"].to_list()[0] == 1.0
 
 
 def test_dynamic_membership_masks_inactive_rows() -> None:
@@ -44,8 +44,8 @@ def test_dynamic_membership_masks_inactive_rows() -> None:
         domain,
     )
 
-    assert panel.data.to_dicts() == [
-        {"time": panel.data["time"][0], "asset_id": "a", "value": 1.0}
+    assert panel.collect(dense=True).to_dicts() == [
+        {"time": panel.collect(dense=True)["time"][0], "asset_id": "a", "value": 1.0}
     ]
 
 
@@ -72,8 +72,8 @@ def test_dynamic_membership_treats_missing_rows_as_inactive() -> None:
     )
 
     assert domain.asset_ids.to_list() == ["a"]
-    assert panel.data.to_dicts() == [
-        {"time": panel.data["time"][0], "asset_id": "a", "value": 1.0}
+    assert panel.collect(dense=True).to_dicts() == [
+        {"time": panel.collect(dense=True)["time"][0], "asset_id": "a", "value": 1.0}
     ]
 
 
@@ -182,7 +182,7 @@ def test_dynamic_membership_is_reapplied_after_transformers() -> None:
     graph = rolling_mean(source, window=2, min_periods=1)
     graph.compute()
 
-    assert graph.output.data.to_dicts() == [
+    assert graph.output.collect(dense=True).to_dicts() == [
         {"time": domain.times[0], "asset_id": "a", "value": 1.0}
     ]
 
@@ -210,7 +210,7 @@ def test_dynamic_membership_is_reapplied_after_composers() -> None:
     graph = add(left, right)
     graph.compute()
 
-    assert graph.output.data.to_dicts() == [
+    assert graph.output.collect(dense=True).to_dicts() == [
         {"time": domain.times[0], "asset_id": "a", "value": 3.0}
     ]
 
@@ -258,4 +258,4 @@ def test_category_panel_accepts_non_numeric_values() -> None:
         domain,
     )
 
-    assert panel.data["value"].to_list() == ["tech"]
+    assert panel.collect(dense=True)["value"].to_list() == ["tech"]

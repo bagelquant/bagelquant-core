@@ -55,8 +55,6 @@ class Panel(Node):
         self._validated_keys = _validated_keys
         self._exact_domain = _exact_domain
         self._key_identity = _key_identity or self._identity
-        # Compatibility for code that previously used the payload hash.
-        self._data_hash = self._identity
 
     @classmethod
     def from_domain(
@@ -167,15 +165,11 @@ class Panel(Node):
     def compute(self, *inputs: pl.DataFrame) -> pl.DataFrame:
         if inputs:
             raise ValueError("Panel does not accept inputs")
-        return self.data
+        return self.collect(dense=True)
 
     @property
     def output(self) -> "Panel":
         return self
-
-    @property
-    def data(self) -> pl.DataFrame:
-        return self.collect(dense=True, include_traces=False)
 
     def collect(
         self,

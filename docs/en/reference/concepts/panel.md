@@ -40,11 +40,11 @@ the complete domain.
 
 ```python
 sparse = price.collect(dense=False)
-dense = price.collect()  # domain-aligned compatibility result
+dense = price.collect(dense=True)  # explicit domain-aligned result
 dense_with_traces = price.collect(include_traces=True)
 ```
 
-`Panel.data` remains a dense defensive copy for 0.1 compatibility.
+`Panel.collect(dense=True)` returns a dense defensive copy.
 
 ## Role
 
@@ -66,7 +66,7 @@ Panels:
 - Use `time`, `asset_id`, and `value` columns
 - Contain only numeric values
 - Preserve lazy input plans without eager collection
-- Return a defensive copy when data is accessed through `Panel.data`
+- Return a defensive copy when data is accessed through `Panel.collect(dense=True)`
 - Are immutable from the public API
 - Match their Domain's trading times and asset ids
 - Mask inactive cells for dynamic universes

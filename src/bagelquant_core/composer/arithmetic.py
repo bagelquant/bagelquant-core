@@ -28,11 +28,6 @@ def div(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
     return binary(lhs, rhs, lambda left, right: left / right)
 
 
-subtract = sub
-multiply = mul
-divide = div
-
-
 def _plan_arithmetic(
     frames: tuple[pl.LazyFrame, ...],
     operation: str,

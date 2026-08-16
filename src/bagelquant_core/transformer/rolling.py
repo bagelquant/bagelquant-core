@@ -291,10 +291,6 @@ def ewm_std(
     )
 
 
-rolling_ewm = ewm_mean
-rolling_ew_std = ewm_std
-
-
 @transformer
 def rolling_ewm_fw(
     frame: pl.DataFrame, *, halflife: float, min_periods: int = 0

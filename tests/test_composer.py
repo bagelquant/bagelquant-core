@@ -20,7 +20,7 @@ def test_add_joins_on_time_asset_id() -> None:
     graph = add(left, right)
     graph.compute()
 
-    assert values(graph.output.data) == {
+    assert values(graph.output.collect(dense=True)) == {
         ("2024-01-01", "a"): 11.0,
         ("2024-01-01", "b"): 22.0,
     }
@@ -33,7 +33,7 @@ def test_group_mean_uses_group_panel() -> None:
     graph = group_mean(frame, group=group)
     graph.compute()
 
-    assert values(graph.output.data) == {
+    assert values(graph.output.collect(dense=True)) == {
         ("2024-01-01", "a"): 2.0,
         ("2024-01-01", "b"): 2.0,
     }
@@ -68,8 +68,8 @@ def test_wide_aggregation_preserves_sparse_inner_alignment() -> None:
         ("2024-01-02", "a"): None,
         ("2024-01-02", "b"): 28.0,
     }
-    assert values(summed.output.data) == expected
-    assert values(weighted.output.data) == expected
+    assert values(summed.output.collect(dense=True)) == expected
+    assert values(weighted.output.collect(dense=True)) == expected
 
 
 def test_wide_aggregation_direct_output_remains_sorted() -> None:

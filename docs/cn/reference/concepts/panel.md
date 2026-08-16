@@ -1,6 +1,6 @@
 # Panel
 
-`Panel` 是 BagelQuant 中显式的数据对象。每个输入 panel 都通过 `Domain` 创建，并继承该研究域的交易日历和资产空间。0.2 起内部保存稀疏 `LazyFrame`，构造时不再创建完整 `T×A` 网格。
+`Panel` 是 BagelQuant 中显式的数据对象。每个输入 panel 都通过 `Domain` 创建，并继承该研究域的交易日历和资产空间。当前实现内部保存稀疏 `LazyFrame`，构造时不创建完整 `T×A` 网格。
 
 ```python
 panel = Panel.from_domain(lazy_frame, domain, trace_columns=("available_date",))
@@ -8,7 +8,7 @@ sparse = panel.collect(dense=False)
 dense = panel.collect()
 ```
 
-`.data` 仍是兼容接口，返回稠密的防御性副本。只有调用方能够保证输入内容不可变且等价时才应传入稳定 `identity`。
+`.collect(dense=True)` 仍是兼容接口，返回稠密的防御性副本。只有调用方能够保证输入内容不可变且等价时才应传入稳定 `identity`。
 
 ## 角色
 
@@ -23,7 +23,7 @@ Panel 可以表示：
 
 ## 不变量
 
-Panel 要求唯一的一维索引和列名，只包含数值，构造时复制输入数据，通过 `Panel.data` 访问时返回防御性副本，并从公开 API 角度保持不可变。
+Panel 要求唯一的一维索引和列名，只包含数值，构造时复制输入数据，通过 `Panel.collect(dense=True)` 访问时返回防御性副本，并从公开 API 角度保持不可变。
 
 Panel 必须匹配 `Domain` 的交易日历和资产列。对于动态资产池，非活跃单元会被屏蔽。
 

@@ -38,8 +38,8 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
     if kind == "composer":
         graph = operation(source, auxiliary, **config)
         inputs = (
-            ExamplePanel("input_1", source.data),
-            ExamplePanel("input_2", auxiliary.data),
+            ExamplePanel("input_1", source.collect(dense=True)),
+            ExamplePanel("input_2", auxiliary.collect(dense=True)),
         )
         panel_parameters: dict[str, tuple[ExamplePanel, ...]] = {}
         call = f"{name}(input_1, input_2{_config_call(config)})"
@@ -56,10 +56,10 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
             )
             panel_arguments[parameter] = (panel,) if multiple else panel
             parameter_examples[parameter] = (
-                ExamplePanel(parameter, panel.data),
+                ExamplePanel(parameter, panel.collect(dense=True)),
             )
         graph = operation(source, **panel_arguments, **config)
-        inputs = (ExamplePanel("source", source.data),)
+        inputs = (ExamplePanel("source", source.collect(dense=True)),)
         panel_parameters = parameter_examples
         panel_call = "".join(
             f", {parameter}="
@@ -73,7 +73,7 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
         call=call,
         inputs=inputs,
         panel_parameters=panel_parameters,
-        output=ExamplePanel("output", graph.compute().data),
+        output=ExamplePanel("output", graph.compute().collect(dense=True)),
     )
 
 

@@ -58,7 +58,7 @@ def test_simple_lazy_graph_materializes_only_the_final_output() -> None:
 
     output = graph.compute(runtime=runtime)
 
-    assert output.data["value"].to_list() == [1000.0, 1100.0, 1200.0]
+    assert output.collect(dense=True)["value"].to_list() == [1000.0, 1100.0, 1200.0]
     assert runtime.eager_barriers == 0
     assert runtime.materializations == 1
 
@@ -82,8 +82,8 @@ def test_compiled_graph_rebinds_inputs_without_revalidating_topology() -> None:
     second_source = _traced_panel(identity="month:2024-02")
     second = compiled.compute({"input": second_source}, runtime=runtime)
 
-    assert first.data["value"].to_list() == [20.0, 22.0, 24.0]
-    assert second.data.equals(first.data)
+    assert first.collect(dense=True)["value"].to_list() == [20.0, 22.0, 24.0]
+    assert second.collect(dense=True).equals(first.collect(dense=True))
     assert runtime.materializations == 2
 
 
@@ -303,12 +303,12 @@ def test_semantically_equal_eager_nodes_share_physical_result() -> None:
 
 
 def test_same_key_composer_uses_positional_plan() -> None:
-    source = Panel.from_domain(_traced_panel().data, _traced_panel().domain)
+    source = Panel.from_domain(_traced_panel().collect(dense=True), _traced_panel().domain)
     runtime = ExecutionRuntime()
 
     output = sum_frames(*([source] * 10)).compute(runtime=runtime)
 
-    assert output.data["value"].to_list() == [100.0, 110.0, 120.0]
+    assert output.collect(dense=True)["value"].to_list() == [100.0, 110.0, 120.0]
     assert runtime._diagnostics["positional_composer_hits"] == 1
     assert "SORT BY" not in output.lazy(dense=False).explain().upper()
 
@@ -351,7 +351,7 @@ def test_custom_operation_remains_scoped_sorted_and_conservative() -> None:
             ]
         )
 
-    output = disorder(source).compute().data
+    output = disorder(source).compute().collect(dense=True)
 
     assert output.select("time", "asset_id").rows() == [
         (days[0], "A"),

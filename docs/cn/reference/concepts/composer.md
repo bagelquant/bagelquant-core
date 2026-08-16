@@ -12,7 +12,7 @@ Composer 是多输入函数式操作：
 
 Composer 覆盖的操作包括：
 
-- 算术组合，例如 `add`、`subtract`、`multiply`、`divide`
+- 算术组合，例如 `add`、`sub`、`mul`、`div`
 - 多输入聚合，例如 `mean`、`sum_frames`、`weighted_sum`
 - 逻辑或条件组合，例如 `mask`、`coalesce`
 - 分组截面处理，例如 `group_mean`、`group_zscore`

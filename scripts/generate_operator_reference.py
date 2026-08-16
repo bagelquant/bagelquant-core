@@ -91,8 +91,6 @@ EXAMPLE_CONFIG = {
     "power": "exponent=2",
     "rate_of_change": "interval=1",
     "replace_non_nan": "value=1",
-    "rolling_ew_std": "span=2",
-    "rolling_ewm": "span=2",
     "rolling_ewm_fw": "halflife=2",
     "signed_power": "exponent=0.5",
     "trim": "lower=-1, upper=1",
@@ -323,8 +321,6 @@ print(result)"""
         "mean",
         "maximum",
         "minimum",
-        "max",
-        "min",
         "product",
         "sum_frames",
     }:

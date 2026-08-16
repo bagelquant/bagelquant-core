@@ -100,7 +100,7 @@ signal = rolling_mean(rank(prediction), window=20, name="signal")
 ```python
 signal.compute()
 result = signal.output
-frame = result.data
+frame = result.collect(dense=True)
 ```
 
 `frame` 可以继续交给组合构建或回测模块。

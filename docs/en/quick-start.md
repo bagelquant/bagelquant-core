@@ -110,7 +110,7 @@ upstream dependencies once and caches intermediate panels for the current run.
 ```python
 signal.compute()
 result = signal.output
-frame = result.data
+frame = result.collect(dense=True)
 ```
 
 Use `frame` as input to downstream portfolio construction or backtesting.

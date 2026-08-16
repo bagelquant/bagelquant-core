@@ -77,17 +77,17 @@ def test_missing_value_and_sign_filters_keep_distinct_contracts() -> None:
     for graph in (filled, present, positive, negative, signed):
         graph.compute()
 
-    assert list(values(filled.output.data).values()) == [0.0, 0.0, -1.0, 0.0, 2.0]
-    assert list(values(present.output.data).values()) == [0.0, 0.0, 1.0, 1.0, 1.0]
-    positive_values = list(values(positive.output.data).values())
-    negative_values = list(values(negative.output.data).values())
+    assert list(values(filled.output.collect(dense=True)).values()) == [0.0, 0.0, -1.0, 0.0, 2.0]
+    assert list(values(present.output.collect(dense=True)).values()) == [0.0, 0.0, 1.0, 1.0, 1.0]
+    positive_values = list(values(positive.output.collect(dense=True)).values())
+    negative_values = list(values(negative.output.collect(dense=True)).values())
     assert positive_values[0] is None
     assert positive_values[1] is None
     assert positive_values[2:] == [None, 0.0, 2.0]
     assert negative_values[0] is None
     assert negative_values[1] is None
     assert negative_values[2:] == [-1.0, 0.0, None]
-    assert list(values(signed.output.data).values()) == [
+    assert list(values(signed.output.collect(dense=True)).values()) == [
         None,
         None,
         -1.0,
@@ -109,7 +109,7 @@ def test_missing_values_are_canonical_and_forward_fill_is_bounded() -> None:
     graph = ffill(source, limit=1)
     graph.compute()
 
-    assert list(values(graph.output.data).values()) == [1.0, 1.0, None, 4.0]
+    assert list(values(graph.output.collect(dense=True)).values()) == [1.0, 1.0, None, 4.0]
 
 
 def test_date_age_constraint_uses_trailing_valid_observations() -> None:
@@ -126,7 +126,7 @@ def test_date_age_constraint_uses_trailing_valid_observations() -> None:
     graph = date_age_constraint(source, window=3, min_valid=2)
     graph.compute()
 
-    assert list(values(graph.output.data).values()) == [
+    assert list(values(graph.output.collect(dense=True)).values()) == [
         None,
         None,
         3.0,
@@ -147,7 +147,7 @@ def test_rate_of_change_is_interval_scaled_difference() -> None:
     graph = rate_of_change(source, interval=2)
     graph.compute()
 
-    assert values(graph.output.data)[("2024-01-03", "a")] == 4.0
+    assert values(graph.output.collect(dense=True))[("2024-01-03", "a")] == 4.0
 
 
 def test_cross_sectional_scaling_and_rank_contracts() -> None:
@@ -162,26 +162,26 @@ def test_cross_sectional_scaling_and_rank_contracts() -> None:
     for graph in (normalized, net, dense, average_log, equivalent_log, inverse):
         graph.compute()
 
-    assert list(values(normalized.output.data).values()) == pytest.approx([
+    assert list(values(normalized.output.collect(dense=True)).values()) == pytest.approx([
         -1.0,
         -0.6,
         0.2,
         0.2,
         1.0,
     ])
-    assert list(values(net.output.data).values()) == pytest.approx(
+    assert list(values(net.output.collect(dense=True)).values()) == pytest.approx(
         [-2 / 3, -1 / 3, 1 / 5, 1 / 5, 3 / 5]
     )
-    assert list(values(dense.output.data).values()) == pytest.approx(
+    assert list(values(dense.output.collect(dense=True)).values()) == pytest.approx(
         [0.25, 0.5, 0.75, 0.75, 1.0]
     )
-    assert list(values(average_log.output.data).values()) == pytest.approx(
+    assert list(values(average_log.output.collect(dense=True)).values()) == pytest.approx(
         [math.log(0.2), math.log(0.4), math.log(0.7), math.log(0.7), 0.0]
     )
-    assert values(equivalent_log.output.data) == pytest.approx(
-        values(average_log.output.data)
+    assert values(equivalent_log.output.collect(dense=True)) == pytest.approx(
+        values(average_log.output.collect(dense=True))
     )
-    assert values(inverse.output.data)[("2024-01-01", "e")] == 0.0
+    assert values(inverse.output.collect(dense=True))[("2024-01-01", "e")] == 0.0
 
 
 def test_log_boxcox_trig_and_anscombe_respect_math_domains() -> None:
@@ -194,11 +194,11 @@ def test_log_boxcox_trig_and_anscombe_respect_math_domains() -> None:
     for graph in (logged, logged1p, boxed, trigged, stabilized):
         graph.compute()
 
-    assert list(values(logged.output.data).values())[:3] == [None, None, None]
-    assert list(values(logged1p.output.data).values())[:2] == [None, None]
-    assert list(values(boxed.output.data).values())[:3] == [None, None, None]
-    assert values(trigged.output.data)[("2024-01-01", "a")] is None
-    assert values(stabilized.output.data)[("2024-01-01", "a")] == pytest.approx(
+    assert list(values(logged.output.collect(dense=True)).values())[:3] == [None, None, None]
+    assert list(values(logged1p.output.collect(dense=True)).values())[:2] == [None, None]
+    assert list(values(boxed.output.collect(dense=True)).values())[:3] == [None, None, None]
+    assert values(trigged.output.collect(dense=True))[("2024-01-01", "a")] is None
+    assert values(stabilized.output.collect(dense=True))[("2024-01-01", "a")] == pytest.approx(
         2 * math.sqrt(3 / 8)
     )
 
@@ -210,7 +210,7 @@ def test_xand_is_logical_equivalence() -> None:
     graph = xand(lhs, rhs)
     graph.compute()
 
-    assert list(values(graph.output.data).values()) == [1.0, 0.0, 0.0, 1.0]
+    assert list(values(graph.output.collect(dense=True)).values()) == [1.0, 0.0, 0.0, 1.0]
 
 
 def test_project_mask_and_replace_helpers_keep_their_public_semantics() -> None:
@@ -224,10 +224,10 @@ def test_project_mask_and_replace_helpers_keep_their_public_semantics() -> None:
     for graph in (projected, masked, ones, zeros):
         graph.compute()
 
-    assert list(values(projected.output.data).values()) == [1.0, None, None]
-    assert list(values(masked.output.data).values()) == [1.0, 2.0, -1.0]
-    assert list(values(ones.output.data).values()) == [1.0, 1.0, 1.0]
-    assert list(values(zeros.output.data).values()) == [0.0, 0.0, 0.0]
+    assert list(values(projected.output.collect(dense=True)).values()) == [1.0, None, None]
+    assert list(values(masked.output.collect(dense=True)).values()) == [1.0, 2.0, -1.0]
+    assert list(values(ones.output.collect(dense=True)).values()) == [1.0, 1.0, 1.0]
+    assert list(values(zeros.output.collect(dense=True)).values()) == [0.0, 0.0, 0.0]
 
 
 def test_group_dense_rank_and_average_percentile_are_distinct() -> None:
@@ -239,10 +239,10 @@ def test_group_dense_rank_and_average_percentile_are_distinct() -> None:
     dense.compute()
     average.compute()
 
-    assert list(values(dense.output.data).values()) == pytest.approx(
+    assert list(values(dense.output.collect(dense=True)).values()) == pytest.approx(
         [1 / 3, 1 / 3, 2 / 3, 1.0]
     )
-    assert list(values(average.output.data).values()) == pytest.approx(
+    assert list(values(average.output.collect(dense=True)).values()) == pytest.approx(
         [0.375, 0.375, 0.75, 1.0]
     )
 
@@ -279,7 +279,7 @@ def test_rolling_ols_supports_multiple_factors_and_excludes_current_target() -> 
     graph = rolling_ols(target, factors=(first, second), window=3)
     graph.compute()
 
-    assert values(graph.output.data)[("2024-01-04", "a")] == pytest.approx(10.0)
+    assert values(graph.output.collect(dense=True))[("2024-01-04", "a")] == pytest.approx(10.0)
 
 
 def test_rolling_rank_ties_and_higher_moments_match_reference_formulas() -> None:
@@ -298,8 +298,8 @@ def test_rolling_rank_ties_and_higher_moments_match_reference_formulas() -> None
     for graph in (ranked, percentile, skewed, kurtosis):
         graph.compute()
 
-    assert values(ranked.output.data)[("2024-01-03", "a")] == 2.5
-    assert values(percentile.output.data)[("2024-01-03", "a")] == pytest.approx(
+    assert values(ranked.output.collect(dense=True))[("2024-01-03", "a")] == 2.5
+    assert values(percentile.output.collect(dense=True))[("2024-01-03", "a")] == pytest.approx(
         2.5 / 3
     )
 
@@ -319,10 +319,10 @@ def test_rolling_rank_ties_and_higher_moments_match_reference_formulas() -> None
         n * (n + 1) / ((n - 1) * (n - 2) * (n - 3)) * fourth
         - 3 * (n - 1) ** 2 / ((n - 2) * (n - 3))
     )
-    assert values(skewed.output.data)[("2024-01-04", "a")] == pytest.approx(
+    assert values(skewed.output.collect(dense=True))[("2024-01-04", "a")] == pytest.approx(
         expected_skew
     )
-    assert values(kurtosis.output.data)[("2024-01-04", "a")] == pytest.approx(
+    assert values(kurtosis.output.collect(dense=True))[("2024-01-04", "a")] == pytest.approx(
         expected_kurtosis
     )
 

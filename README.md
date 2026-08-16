@@ -53,7 +53,7 @@ book = Panel.from_domain(
 factor = rank(zscore(div(book, price)), name="factor")
 factor.compute()
 
-print(factor.output.data)
+print(factor.output.collect(dense=True))
 ```
 
 Graphs also have a JSON-compatible declarative representation. Only registered
@@ -66,9 +66,9 @@ compiled = Graph.compile(specification)
 result = compiled.compute({"price": price, "book": book})
 ```
 
-Core 0.2 keeps sparse inputs as Polars `LazyFrame` plans. Use
+Core 0.6 keeps sparse inputs as Polars `LazyFrame` plans. Use
 `panel.collect(dense=False)` for sparse output, `panel.collect()` or
-`panel.data` for a dense domain-aligned result, and pass an
+`panel.collect(dense=True)` for a dense domain-aligned result, and pass an
 `ExecutionRuntime` when a compiled graph is rebound repeatedly.
 
 Time-series operations group by `asset_id` and order by `time`.

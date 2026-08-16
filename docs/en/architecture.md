@@ -24,7 +24,7 @@ Cached Panel outputs
 
 A `Panel` is an immutable numeric plan indexed by time and asset. Every input
 is normalized through a `Domain`, which owns its trading sessions and compact
-asset membership. Inputs remain sparse; `Panel.data` is the compatibility
+asset membership. Inputs remain sparse; `Panel.collect(dense=True)` is the explicit dense
 dense, defensive-copy boundary.
 
 ```python
@@ -95,7 +95,7 @@ Users do not construct internal nodes directly.
 ## Execution
 
 Calling `Graph.compute()` compiles the DAG into lazy `PlanValue` objects.
-Lazy-compatible nodes fuse into one Polars plan. Dense alignment is inserted
+Lazy nodes fuse into one Polars plan. Dense alignment is inserted
 only for operations whose contracts require it, and NumPy/regression
 operations create explicit eager barriers. Shared nodes execute once and
 multi-output graphs use one final collection boundary.

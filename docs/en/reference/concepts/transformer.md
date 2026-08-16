@@ -143,9 +143,7 @@ Constant rows produce `NaN` values where normalization is undefined.
 
 The rolling family also includes `rolling_var`, `rolling_skew`, `rolling_kurt`,
 `rolling_median`, `rolling_rank`, `rolling_percentile`, and `rolling_zscore`.
-`rolling_ewm` and `rolling_ew_std` are half-life-compatible aliases for the
-general EWM operations, while `rolling_ewm_fw` exposes expanding exponentially
-weighted means.
+`rolling_ewm_fw` exposes expanding exponentially weighted means.
 
 ## Named Panel parameters
 

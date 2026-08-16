@@ -6,17 +6,15 @@ import surface compact.
 """
 
 from .aggregation import (
-    max,
     maximum,
     mean,
-    min,
     minimum,
     product,
     sum_frames,
     weighted_mean,
     weighted_sum,
 )
-from .arithmetic import add, div, divide, mul, multiply, sub, subtract
+from .arithmetic import add, div, mul, sub
 from .core import COMPOSER_REGISTRY, ComposerFunction, composer
 from .general import coalesce
 from .math import (
@@ -45,19 +43,15 @@ __all__ = [
     "coalesce",
     "composer",
     "div",
-    "divide",
     "equal",
     "greater",
     "greater_equal",
     "less",
     "less_equal",
-    "max",
     "maximum",
     "mean",
-    "min",
     "minimum",
     "mul",
-    "multiply",
     "or_",
     "power",
     "power_df",
@@ -65,7 +59,6 @@ __all__ = [
     "rolling_corr",
     "rolling_cov",
     "sub",
-    "subtract",
     "sum_frames",
     "weighted_mean",
     "weighted_sum",

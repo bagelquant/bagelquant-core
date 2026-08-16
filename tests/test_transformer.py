@@ -32,7 +32,7 @@ def test_cross_sectional_rank_uses_time_groups() -> None:
     graph = rank(source)
     graph.compute()
 
-    assert values(graph.output.data) == {
+    assert values(graph.output.collect(dense=True)) == {
         ("2024-01-01", "a"): 1.0,
         ("2024-01-01", "b"): 0.5,
     }
@@ -51,8 +51,8 @@ def test_rolling_mean_uses_asset_id_groups() -> None:
     graph = rolling_mean(source, window=2, min_periods=1)
     graph.compute()
 
-    assert values(graph.output.data)[("2024-01-02", "a")] == 2.0
-    assert values(graph.output.data)[("2024-01-02", "b")] == 15.0
+    assert values(graph.output.collect(dense=True))[("2024-01-02", "a")] == 2.0
+    assert values(graph.output.collect(dense=True))[("2024-01-02", "b")] == 15.0
 
 
 def test_pct_change_frame_supports_runtime_consumers_without_a_graph() -> None:
@@ -90,7 +90,7 @@ def test_lag_uses_daily_domain_sessions_for_sparse_monthly_inputs() -> None:
     delayed = lag(source, periods=1)
     delayed.compute()
 
-    assert delayed.output.data.to_dicts() == [
+    assert delayed.output.collect(dense=True).to_dicts() == [
         {"time": date(2024, 1, 31), "asset_id": "a", "value": None},
         {"time": date(2024, 2, 1), "asset_id": "a", "value": 1.0},
         {"time": date(2024, 2, 2), "asset_id": "a", "value": None},
@@ -110,8 +110,8 @@ def test_zscore_constant_cross_section_returns_null_or_nan() -> None:
     graph.compute()
 
     assert (
-        graph.output.data["value"].null_count()
-        + graph.output.data["value"].is_nan().sum()
+        graph.output.collect(dense=True)["value"].null_count()
+        + graph.output.collect(dense=True)["value"].is_nan().sum()
         == 2
     )
 
@@ -165,7 +165,7 @@ def test_kelly_private_plan_matches_public_operation(
         domain,
     )
 
-    expected = operation.operation(source.data, **parameters)
-    actual = operation(source, **parameters).compute().data
+    expected = operation.operation(source.collect(dense=True), **parameters)
+    actual = operation(source, **parameters).compute().collect(dense=True)
 
     assert_frame_equal(actual, expected)

@@ -113,6 +113,54 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
         source_values = [1.0, 2.0, 4.0, 7.0, 2.0, 3.0, 5.0, 8.0]
         auxiliary_values = [1.0, 1.5, 2.0, 3.0, 1.0, 2.0, 2.5, 4.0]
         groups = ["one"] * 4 + ["two"] * 4
+    elif name in {
+        "anscombe",
+        "arccos",
+        "arcsin",
+        "arctanh",
+        "boxcox",
+        "fisher",
+        "freeman",
+        "log",
+        "log1p",
+        "sqrt",
+    }:
+        times = [date(2024, 1, 2), date(2024, 1, 3)]
+        assets = ["a", "b", "c"]
+        source_values = [-2.0, -1.0, 0.0, 0.5, 1.0, 2.0]
+        auxiliary_values = [1.0, 2.0, 4.0, 0.0, 1.0, 2.0]
+        groups = ["left", "left", "right", "left", "left", "right"]
+    elif name in {
+        "and_",
+        "equal",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal",
+        "not_",
+        "or_",
+        "xand",
+        "xor",
+    }:
+        times = [date(2024, 1, 2), date(2024, 1, 3)]
+        assets = ["a", "b", "c"]
+        source_values = [0.0, 1.0, None, 1.0, 0.0, 2.0]
+        auxiliary_values = [0.0, 0.0, 1.0, 1.0, 2.0, None]
+        groups = ["left", "left", "right", "left", "left", "right"]
+    elif name in {
+        "bfill",
+        "coalesce",
+        "ffill",
+        "fillna_zero",
+        "nonnans",
+        "notnan",
+        "replace_inf",
+    }:
+        times = [date(2024, 1, 2), date(2024, 1, 3)]
+        assets = ["a", "b", "c"]
+        source_values = [1.0, None, float("nan"), None, 3.0, float("inf")]
+        auxiliary_values = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+        groups = ["left", "left", "right", "left", "left", "right"]
     else:
         times = [date(2024, 1, 2), date(2024, 1, 3)]
         assets = ["a", "b", "c"]
@@ -146,6 +194,8 @@ def _config(name: str) -> dict[str, Any]:
         return {"lower": 0.0, "upper": 5.0}
     if name in {"power", "signed_power"}:
         return {"exponent": 2.0}
+    if name == "boxcox":
+        return {"lambda_": 0.5}
     if name == "replace_non_nan":
         return {"value": 1.0}
     if name in {"weighted_mean", "weighted_sum"}:

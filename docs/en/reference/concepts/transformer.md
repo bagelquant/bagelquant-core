@@ -187,11 +187,6 @@ industry_percentile = group_percentile(raw_factor, group=industry)
 | `group_zscore(source, *, group=...)` | Calculate z-scores within each group and date. |
 | `orthogonalize(source, *, factors=(...), fit_intercept=False)` | Return same-date OLS residuals against one or more factor Panels. |
 
-`category_*` operations have been removed. Migrate `category_demean`,
-`category_mean`, and `category_zscore` to the matching `group_*` name. The old
-`category_rank` calculated percentiles, so its mathematical replacement is
-`group_percentile`, not `group_rank`.
-
 Other named Panel parameters include `mask_frame`, `binary`, `volatility`, and
 the `factors` tuple used by rolling regressions. Each reference page includes
 the actual source, Panel-parameter, and output tables produced by executing its

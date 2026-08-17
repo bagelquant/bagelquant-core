@@ -1,6 +1,7 @@
-# API Reference
+# Operation reference
 
-BagelQuant operations build lazy graphs from `Panel` inputs.
+BagelQuant operations build deterministic lazy graphs from sparse long-form
+`Panel` inputs.
 
 - [Transformer reference](./transformers/index.md): 98 public operations
 - [Composer reference](./composers/index.md): 24 public operations

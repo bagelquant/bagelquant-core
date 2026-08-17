@@ -1,7 +1,7 @@
-# Transformer Reference
+# Transformer reference
 
-Each public transformer has a dedicated reference page with its signature,
-parameters, return value, notes, and an example.
+Each public transformer has a generated reference page with an exact signature,
+parameter contract, executable Panel example, and temporal semantics.
 
 ## Element-wise
 

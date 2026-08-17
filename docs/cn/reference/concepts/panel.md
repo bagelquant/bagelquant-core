@@ -47,4 +47,4 @@ domain = Domain(
 
 ## CategoryPanel
 
-`CategoryPanel` 用于行业、板块、国家等标签数据。它与 `Panel` 具有相同的时间乘资产形状，但接受字符串标签，可配合 `bagelquant_core.transformer` 中的 category 操作使用。
+`CategoryPanel` 用于行业、板块、国家等标签数据。它与 `Panel` 具有相同的时间乘资产形状，但接受字符串标签。将它传给 `group_*` Transformer 的仅限关键字参数，例如 `group_demean(source, group=industry)`。

@@ -137,5 +137,5 @@ industry = CategoryPanel.from_domain(
 )
 ```
 
-Use category panels with the category operations exported from
-`bagelquant_core.transformer`.
+Pass category panels to the keyword-only `group` parameter of the governed
+`group_*` transformers, such as `group_demean(source, group=industry)`.

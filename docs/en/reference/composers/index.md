@@ -1,7 +1,7 @@
-# Composer Reference
+# Composer reference
 
-Each public composer has a dedicated reference page with its signature,
-parameters, return value, notes, and an example.
+Each public composer has a generated reference page with an exact signature,
+parameter contract, executable Panel example, and temporal semantics.
 
 ## Arithmetic
 

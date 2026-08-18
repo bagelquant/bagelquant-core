@@ -42,10 +42,15 @@ Composer 用多个 `Panel` 或 `Graph` 输入生成一个新图，适合算术�
 ## Prediction composer
 
 Prediction 构建是 allowlist 中的终端 graph operation。Identity、equal-weight、rolling
-positive-IC、rolling OLS 与 rolling GLS 消费已经由调用方 Alpha Policy 完成日期对齐和
+positive-IC、rolling positive quantile-rank-IC、rolling OLS 与 rolling GLS 消费已经由调用方 Alpha Policy 完成日期对齐和
 standardization 的 AlphaValue Panel。监督式 composer 接收通用 target 与 availability
 Panel；core 不持有价格、schedule、standardization 或回测 policy。Window 长度由调用方
 准备的 period 计数，缺失值不会 forward-fill。
+
+`QuantileICWeightedPredictionComposer(window, quantiles)` 先用截面内所有有限 Alpha
+值确定等人数分组，不会因 target 缺失而重划边界；随后计算高到低 quantile 分数与各组
+target 均值的 Spearman 相关，并使用完整窗口平均 IC 的正值部分。Graph identity 同时
+序列化 `window` 与 `quantiles`。
 
 对于由应用层编排的学习流程，`ElasticNetPredictionComposer` 会完整序列化 walk-forward、
 coverage、target、validation 与 Elastic Net contract，同时不依赖回测包。

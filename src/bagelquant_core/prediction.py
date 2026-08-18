@@ -10,6 +10,7 @@ backtesting package.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any, ClassVar, Mapping
@@ -80,6 +81,10 @@ class PredictionComposer(ABC):
 
     @property
     def window(self) -> int | None:
+        return None
+
+    @property
+    def quantiles(self) -> int | None:
         return None
 
     def compose(
@@ -191,6 +196,8 @@ class _PredictionComposerNode(Node):
         }
         if self._composer.window is not None:
             result["window"] = self._composer.window
+        if self._composer.quantiles is not None:
+            result["quantiles"] = self._composer.quantiles
         return result
 
 
@@ -249,40 +256,48 @@ class ICWeightedPredictionComposer(_WindowPredictionComposer):
         targets: pl.DataFrame,
         availability: pl.DataFrame,
     ) -> pl.DataFrame:
-        data = _join_training(wide, targets, availability)
-        alpha_names = _alpha_names(wide)
-        records: list[tuple[date, int, np.ndarray]] = []
-        for period in _training_periods(data):
-            sample = data.filter(pl.col(TIME) == period)
-            ic_values = np.full(len(alpha_names), np.nan)
-            target = _float_array(sample, "target")
-            for index, column in enumerate(alpha_names):
-                values = _float_array(sample, column)
-                valid = np.isfinite(values) & np.isfinite(target)
-                if valid.sum() > 1 and np.unique(values[valid]).size > 1 and np.unique(target[valid]).size > 1:
-                    ic_values[index] = _spearman(values[valid], target[valid])
-            records.append((period, _period_availability(sample), ic_values))
+        return _rank_weighted_prediction(
+            wide,
+            targets,
+            availability,
+            window=self.window,
+            metric="spearman",
+        )
 
-        rows: list[dict[str, object]] = []
-        all_periods = _prediction_periods(wide)
-        for period in _prediction_periods(wide):
-            history = _available_history(records, period, self.window, all_periods)
-            if history is None:
-                continue
-            matrix = np.stack([item[2] for item in history])
-            valid_alpha = np.isfinite(matrix).all(axis=0)
-            weights = np.zeros(len(alpha_names), dtype=float)
-            weights[valid_alpha] = np.maximum(matrix[:, valid_alpha].mean(axis=0), 0.0)
-            if weights.sum() <= 0:
-                continue
-            current = wide.filter(pl.col(TIME) == period)
-            for item in current.iter_rows(named=True):
-                values = np.array([_finite_or_nan(item[name]) for name in alpha_names])
-                usable = np.isfinite(values) & (weights > 0)
-                denominator = weights[usable].sum()
-                if denominator > 0:
-                    rows.append({TIME: period, ASSET_ID: item[ASSET_ID], VALUE: float(np.dot(values[usable], weights[usable]) / denominator)})
-        return _rows_frame(rows)
+
+class QuantileICWeightedPredictionComposer(_WindowPredictionComposer):
+    """Combine AlphaValues with positive rolling mean quantile-rank IC."""
+
+    kind = "quantile_ic_weighted"
+
+    def __init__(self, window: int, quantiles: int) -> None:
+        super().__init__(window)
+        if (
+            not isinstance(quantiles, int)
+            or isinstance(quantiles, bool)
+            or quantiles < 2
+        ):
+            raise ValueError("prediction composer quantiles must be at least 2")
+        self._quantiles = quantiles
+
+    @property
+    def quantiles(self) -> int:
+        return self._quantiles
+
+    def _compose_supervised(
+        self,
+        wide: pl.DataFrame,
+        targets: pl.DataFrame,
+        availability: pl.DataFrame,
+    ) -> pl.DataFrame:
+        return _rank_weighted_prediction(
+            wide,
+            targets,
+            availability,
+            window=self.window,
+            metric="quantile_rank",
+            quantiles=self.quantiles,
+        )
 
 
 class OLSPredictionComposer(_WindowPredictionComposer):
@@ -372,6 +387,129 @@ def _join_training(
         )
         .sort([TIME, ASSET_ID])
     )
+
+
+def quantile_rank_information_coefficient(
+    values: Iterable[object],
+    targets: Iterable[object],
+    *,
+    quantiles: int,
+) -> float | None:
+    """Return the monotonic IC of equal-count quantile mean target returns.
+
+    Quantile membership is determined from every finite value before target
+    availability is considered.  The first quantile contains the highest
+    values, so monotonically descending q1-to-qN target means produce ``+1``.
+    """
+
+    if (
+        not isinstance(quantiles, int)
+        or isinstance(quantiles, bool)
+        or quantiles < 2
+    ):
+        raise ValueError("quantiles must be an integer of at least 2")
+    value_array = np.asarray(tuple(values), dtype=float)
+    target_array = np.asarray(tuple(targets), dtype=float)
+    if value_array.ndim != 1 or target_array.ndim != 1:
+        raise ValueError("values and targets must be one-dimensional")
+    if value_array.size != target_array.size:
+        raise ValueError("values and targets must have equal lengths")
+    finite_value_positions = np.flatnonzero(np.isfinite(value_array))
+    count = int(finite_value_positions.size)
+    if count < quantiles:
+        return None
+    ordered_positions = finite_value_positions[
+        np.argsort(-value_array[finite_value_positions], kind="stable")
+    ]
+    buckets = (
+        np.floor(np.arange(count, dtype=float) * quantiles / count).astype(int) + 1
+    )
+    group_returns = np.full(quantiles, np.nan, dtype=float)
+    for bucket in range(1, quantiles + 1):
+        members = ordered_positions[buckets == bucket]
+        finite_targets = target_array[members]
+        finite_targets = finite_targets[np.isfinite(finite_targets)]
+        if finite_targets.size == 0:
+            return None
+        group_returns[bucket - 1] = float(finite_targets.mean())
+    if np.unique(group_returns).size < 2:
+        return None
+    high_factor_scores = np.arange(quantiles, 0, -1, dtype=float)
+    result = _spearman(high_factor_scores, group_returns)
+    return result if np.isfinite(result) else None
+
+
+def _rank_weighted_prediction(
+    wide: pl.DataFrame,
+    targets: pl.DataFrame,
+    availability: pl.DataFrame,
+    *,
+    window: int,
+    metric: str,
+    quantiles: int | None = None,
+) -> pl.DataFrame:
+    data = _join_training(wide, targets, availability)
+    alpha_names = _alpha_names(wide)
+    records: list[tuple[date, int, np.ndarray]] = []
+    for period in _training_periods(data):
+        sample = data.filter(pl.col(TIME) == period)
+        metric_values = np.full(len(alpha_names), np.nan)
+        target = _float_array(sample, "target")
+        for index, column in enumerate(alpha_names):
+            values = _float_array(sample, column)
+            if metric == "quantile_rank":
+                if quantiles is None:
+                    raise AssertionError("quantile-rank metric requires quantiles")
+                result = quantile_rank_information_coefficient(
+                    values,
+                    target,
+                    quantiles=quantiles,
+                )
+                if result is not None:
+                    metric_values[index] = result
+                continue
+            valid = np.isfinite(values) & np.isfinite(target)
+            if (
+                valid.sum() > 1
+                and np.unique(values[valid]).size > 1
+                and np.unique(target[valid]).size > 1
+            ):
+                metric_values[index] = _spearman(values[valid], target[valid])
+        records.append((period, _period_availability(sample), metric_values))
+
+    rows: list[dict[str, object]] = []
+    all_periods = _prediction_periods(wide)
+    for period in all_periods:
+        history = _available_history(records, period, window, all_periods)
+        if history is None:
+            continue
+        matrix = np.stack([item[2] for item in history])
+        valid_alpha = np.isfinite(matrix).all(axis=0)
+        weights = np.zeros(len(alpha_names), dtype=float)
+        weights[valid_alpha] = np.maximum(
+            matrix[:, valid_alpha].mean(axis=0),
+            0.0,
+        )
+        if weights.sum() <= 0:
+            continue
+        current = wide.filter(pl.col(TIME) == period)
+        for item in current.iter_rows(named=True):
+            values = np.array(
+                [_finite_or_nan(item[name]) for name in alpha_names]
+            )
+            usable = np.isfinite(values) & (weights > 0)
+            denominator = weights[usable].sum()
+            if denominator > 0:
+                rows.append(
+                    {
+                        TIME: period,
+                        ASSET_ID: item[ASSET_ID],
+                        VALUE: float(
+                            np.dot(values[usable], weights[usable]) / denominator
+                        ),
+                    }
+                )
+    return _rows_frame(rows)
 
 
 def _regression_prediction(
@@ -508,6 +646,7 @@ for _composer_type in (
     IdentityPredictionComposer,
     EqualWeightPredictionComposer,
     ICWeightedPredictionComposer,
+    QuantileICWeightedPredictionComposer,
     OLSPredictionComposer,
     GLSPredictionComposer,
 ):
@@ -523,4 +662,6 @@ __all__ = [
     "OLSPredictionComposer",
     "PredictionComposer",
     "PredictionTrainingContext",
+    "QuantileICWeightedPredictionComposer",
+    "quantile_rank_information_coefficient",
 ]

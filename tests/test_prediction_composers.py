@@ -18,6 +18,8 @@ from bagelquant_core import (
     Panel,
     PredictionPanel,
     PredictionTrainingContext,
+    QuantileICWeightedPredictionComposer,
+    quantile_rank_information_coefficient,
 )
 from bagelquant_core.transformer import rank
 
@@ -155,6 +157,104 @@ def test_ic_weighted_uses_only_positive_full_window_ic() -> None:
 
     assert result.get_column("time").unique().to_list() == [times[2]]
     assert result.get_column("value").to_list() == pytest.approx([1.0, 2.0, 3.0])
+
+
+def test_quantile_rank_ic_uses_complete_high_to_low_group_returns() -> None:
+    values = list(range(10, 0, -1))
+
+    assert quantile_rank_information_coefficient(
+        values,
+        list(range(10, 0, -1)),
+        quantiles=10,
+    ) == pytest.approx(1.0)
+    assert quantile_rank_information_coefficient(
+        values,
+        list(range(1, 11)),
+        quantiles=10,
+    ) == pytest.approx(-1.0)
+    assert (
+        quantile_rank_information_coefficient(
+            values,
+            [1.0] * 10,
+            quantiles=10,
+        )
+        is None
+    )
+    assert quantile_rank_information_coefficient(
+        [1.0] * 10,
+        list(range(10, 0, -1)),
+        quantiles=10,
+    ) == pytest.approx(1.0)
+    assert quantile_rank_information_coefficient(
+        [float(20 - index) for index in range(20)],
+        [None, 10.0, 9.0, 9.0, 8.0, 8.0, 7.0, 7.0, 6.0, 6.0,
+         5.0, 5.0, 4.0, 4.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0],
+        quantiles=10,
+    ) == pytest.approx(1.0)
+    assert (
+        quantile_rank_information_coefficient(
+            values,
+            [None, *range(9, 0, -1)],
+            quantiles=10,
+        )
+        is None
+    )
+
+
+def test_quantile_ic_weighted_uses_positive_full_window_and_serializes() -> None:
+    times = [
+        date(2024 + index // 12, index % 12 + 1, 1) for index in range(13)
+    ]
+    assets = [f"A{index:02d}" for index in range(10)]
+    domain = Domain(calendar=times, universe=assets)
+    positive = [
+        (current, asset, float(10 - index))
+        for current in times
+        for index, asset in enumerate(assets)
+    ]
+    negative = [
+        (current, asset, float(index + 1))
+        for current in times
+        for index, asset in enumerate(assets)
+    ]
+    targets = [
+        (current, asset, float(10 - index))
+        for current in times[:12]
+        for index, asset in enumerate(assets)
+    ]
+    availability = [
+        (current, asset, float(times[time_index + 1].toordinal()))
+        for time_index, current in enumerate(times[:12])
+        for asset in assets
+    ]
+    composer = QuantileICWeightedPredictionComposer(window=12, quantiles=10)
+    graph = composer.compose(
+        _panel(domain, "positive", positive),
+        _panel(domain, "negative", negative),
+        training=PredictionTrainingContext(
+            _panel(domain, "targets", targets),
+            _panel(domain, "availability", availability),
+        ),
+    )
+
+    result = graph.compute(dense_output=False).collect(dense=False)
+    composer_node = next(
+        node
+        for node in graph.spec().to_dict()["nodes"]
+        if node["node_type"] == "prediction_composer"
+    )
+
+    assert result.get_column("time").unique().to_list() == [times[12]]
+    assert result.get_column("value").to_list() == pytest.approx(
+        [float(10 - index) for index in range(10)]
+    )
+    assert composer_node["config"] == {
+        "prediction_composer": "quantile_ic_weighted",
+        "alpha_count": 2,
+        "window": 12,
+        "quantiles": 10,
+    }
+    Graph.compile(graph.spec().to_dict())
 
 
 def test_gls_combines_two_invertible_period_covariances() -> None:

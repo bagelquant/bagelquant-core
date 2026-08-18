@@ -253,11 +253,14 @@ class Graph(Generic[OutputT]):
                 else:
                     alpha_count = int(config.pop("alpha_count"))
                     composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
-                    composer = (
-                        composer_type(int(config.pop("window")))
-                        if "window" in config
-                        else composer_type()
-                    )
+                    composer_parameters = {}
+                    if "window" in config:
+                        composer_parameters["window"] = int(config.pop("window"))
+                    if "quantiles" in config:
+                        composer_parameters["quantiles"] = int(
+                            config.pop("quantiles")
+                        )
+                    composer = composer_type(**composer_parameters)
                     if config:
                         raise GraphValidationError(
                             f"unknown prediction composer parameters: {sorted(config)}"
@@ -356,7 +359,13 @@ class Graph(Generic[OutputT]):
                 else:
                     composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
                     window = config.get("window")
-                    operation = composer_type(int(window)) if window is not None else composer_type()
+                    quantiles = config.get("quantiles")
+                    parameters = {}
+                    if window is not None:
+                        parameters["window"] = int(window)
+                    if quantiles is not None:
+                        parameters["quantiles"] = int(quantiles)
+                    operation = composer_type(**parameters)
             except KeyError as error:
                 raise GraphValidationError(str(error)) from error
             try:

@@ -41,6 +41,25 @@ prediction = weighted_sum(ratio, quality, weights=[0.6, 0.4])
 The generated composer reference is in
 [`reference/composers/index.md`](composers/index.md).
 
+## Prediction Composers
+
+Terminal prediction construction is exported from `bagelquant_core`. The
+quantile-rank implementation and its composer share one public numerical
+contract:
+
+```python
+from bagelquant_core import (
+    QuantileICWeightedPredictionComposer,
+    quantile_rank_information_coefficient,
+)
+
+composer = QuantileICWeightedPredictionComposer(window=12, quantiles=10)
+```
+
+`q1` contains the highest Alpha values. A strictly decreasing q1-to-qN target
+return path has quantile rank IC `+1`; incomplete groups or equal group means
+produce no IC.
+
 ## Custom Operations
 
 Use decorators when project-specific logic should behave like built-in

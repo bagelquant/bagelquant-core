@@ -38,6 +38,23 @@ prediction = weighted_sum(ratio, quality, weights=[0.6, 0.4])
 
 完整列表见 [Composer reference](../../en/reference/composers/index.md)。
 
+## Prediction Composer
+
+终端 Prediction 构建从 `bagelquant_core` 导出。Quantile rank IC 数值函数和 composer
+共用同一公开口径：
+
+```python
+from bagelquant_core import (
+    QuantileICWeightedPredictionComposer,
+    quantile_rank_information_coefficient,
+)
+
+composer = QuantileICWeightedPredictionComposer(window=12, quantiles=10)
+```
+
+`q1` 包含最高 Alpha 值。若 q1 到 qN 的 target 收益严格递减，quantile rank IC 为
+`+1`；分组不完整或组收益完全相同则不产生 IC。
+
 ## 自定义操作
 
 项目内逻辑可以用装饰器注册为与内置操作一致的函数。

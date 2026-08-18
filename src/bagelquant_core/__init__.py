@@ -38,6 +38,8 @@ from .prediction import (
     OLSPredictionComposer,
     PredictionComposer,
     PredictionTrainingContext,
+    QuantileICWeightedPredictionComposer,
+    quantile_rank_information_coefficient,
 )
 from .transformer import pct_change_frame
 
@@ -62,6 +64,7 @@ __all__ = [
     "PredictionComposer",
     "PredictionPanel",
     "PredictionTrainingContext",
+    "QuantileICWeightedPredictionComposer",
     "WalkForwardConfig",
     "WalkForwardFold",
     "ZeroPreservingRmsScaler",
@@ -77,4 +80,5 @@ __all__ = [
     "GLSPredictionComposer",
     "TraceRule",
     "pct_change_frame",
+    "quantile_rank_information_coefficient",
 ]

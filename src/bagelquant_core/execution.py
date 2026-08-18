@@ -560,7 +560,14 @@ class ExecutionRuntime:
                 if node.node_type == "transformer"
                 else False
             ),
-            prediction=node.node_type == "prediction_composer",
+            prediction=(
+                node.node_type == "prediction_composer"
+                or (
+                    node.node_type == "transformer"
+                    and bool(prepared)
+                    and prepared[0].prediction
+                )
+            ),
             cacheable=cacheable,
             key_identity=key_identity,
             order=order,

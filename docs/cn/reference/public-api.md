@@ -40,8 +40,9 @@ prediction = weighted_sum(ratio, quality, weights=[0.6, 0.4])
 
 ## Prediction Composer
 
-终端 Prediction 构建从 `bagelquant_core` 导出。Quantile rank IC 数值函数和 composer
-共用同一公开口径：
+强类型 Prediction 构建从 `bagelquant_core` 导出。生成的 `PredictionPanel` 可以经过
+Transformer 链并保持类型，但不能进入另一个 Composer 或命名 Panel 参数。Quantile rank
+IC 数值函数和 composer 共用同一公开口径：
 
 ```python
 from bagelquant_core import (

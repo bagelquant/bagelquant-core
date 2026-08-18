@@ -21,7 +21,8 @@ from bagelquant_core import (
     QuantileICWeightedPredictionComposer,
     quantile_rank_information_coefficient,
 )
-from bagelquant_core.transformer import rank
+from bagelquant_core.composer import add
+from bagelquant_core.transformer import group_demean, winsorize, zscore
 
 
 def _panel(
@@ -40,7 +41,7 @@ def _panel(
     )
 
 
-def test_identity_prediction_is_typed_terminal_and_round_trips_spec() -> None:
+def test_identity_prediction_is_typed_and_round_trips_spec() -> None:
     day = date(2024, 1, 31)
     domain = Domain(calendar=[day], universe=["A", "B"])
     alpha = _panel(domain, "alpha", [(day, "A", 1.0), (day, "B", 3.0)])
@@ -54,8 +55,33 @@ def test_identity_prediction_is_typed_terminal_and_round_trips_spec() -> None:
     )
     compiled = Graph.compile(graph.spec().to_dict())
     assert isinstance(compiled.compute({"alpha": alpha}, dense_output=False), PredictionPanel)
-    with pytest.raises(ValueError, match="terminal"):
-        rank(graph)
+    transformed_graph = zscore(winsorize(graph, lower=0.0, upper=1.0))
+    transformed = transformed_graph.compute(
+        dense_output=False
+    )
+    assert isinstance(transformed, PredictionPanel)
+    assert transformed.collect(dense=False).get_column("value").to_list() == pytest.approx(
+        [-2**-0.5, 2**-0.5]
+    )
+    restored = Graph.compile(transformed_graph.spec().to_dict()).compute(
+        {"alpha": alpha}, dense_output=False
+    )
+    assert isinstance(restored, PredictionPanel)
+    rebound = winsorize(result, lower=0.0, upper=1.0).compute(dense_output=False)
+    assert isinstance(rebound, PredictionPanel)
+
+
+def test_prediction_may_only_feed_transformer_semantic_inputs() -> None:
+    day = date(2024, 1, 31)
+    domain = Domain(calendar=[day], universe=["A", "B"])
+    alpha = _panel(domain, "alpha", [(day, "A", 1.0), (day, "B", 3.0)])
+    groups = _panel(domain, "groups", [(day, "A", 1.0), (day, "B", 2.0)])
+    prediction = IdentityPredictionComposer().compose(alpha)
+
+    with pytest.raises(ValueError, match="semantic input"):
+        add(prediction, alpha)
+    with pytest.raises(ValueError, match="semantic input"):
+        group_demean(groups, group=prediction)
 
 
 def test_equal_weight_renormalizes_available_alpha_values() -> None:

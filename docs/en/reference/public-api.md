@@ -43,7 +43,9 @@ The generated composer reference is in
 
 ## Prediction Composers
 
-Terminal prediction construction is exported from `bagelquant_core`. The
+Typed prediction construction is exported from `bagelquant_core`. A resulting
+`PredictionPanel` may pass through Transformer chains while retaining its type,
+but it cannot feed another Composer or a named Panel parameter. The
 quantile-rank implementation and its composer share one public numerical
 contract:
 

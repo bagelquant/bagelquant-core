@@ -12,8 +12,9 @@
 
 参见 [Panel](reference/concepts/panel.md)。
 
-`PredictionPanel` 是只能由 `PredictionComposer` 生成的强类型终端 subtype。普通 composer
-始终输出普通 `Panel`，表示 AlphaValue，而不是 prediction。
+`PredictionPanel` 是由 `PredictionComposer` 生成的强类型 subtype。Transformer 可以对其
+主输入继续处理并保持该类型；普通 composer 和 Transformer 的辅助 Panel 参数都不能消费
+prediction。普通 composer 仍只输出表示 AlphaValue 的普通 `Panel`。
 
 ## Graph
 
@@ -41,11 +42,14 @@ Composer 用多个 `Panel` 或 `Graph` 输入生成一个新图，适合算术�
 
 ## Prediction composer
 
-Prediction 构建是 allowlist 中的终端 graph operation。Identity、equal-weight、rolling
+Prediction 构建是 allowlist 中的强类型 graph operation。Identity、equal-weight、rolling
 positive-IC、rolling positive quantile-rank-IC、rolling OLS 与 rolling GLS 消费已经由调用方 Alpha Policy 完成日期对齐和
 standardization 的 AlphaValue Panel。监督式 composer 接收通用 target 与 availability
 Panel；core 不持有价格、schedule、standardization 或回测 policy。Window 长度由调用方
 准备的 period 计数，缺失值不会 forward-fill。
+
+PredictionComposer 输出可以进入 Transformer 链，每一步都保持 `PredictionPanel` 边界；
+prediction 不能进入另一个 Composer，也不能作为 Transformer 的命名 Panel 参数。
 
 `QuantileICWeightedPredictionComposer(window, quantiles)` 先用截面内所有有限 Alpha
 值确定等人数分组，不会因 target 缺失而重划边界；随后计算高到低 quantile 分数与各组

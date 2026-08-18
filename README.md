@@ -66,7 +66,7 @@ compiled = Graph.compile(specification)
 result = compiled.compute({"price": price, "book": book})
 ```
 
-Core 0.6 keeps sparse inputs as Polars `LazyFrame` plans. Use
+Core 0.7 keeps sparse inputs as Polars `LazyFrame` plans. Use
 `panel.collect(dense=False)` for sparse output, `panel.collect()` or
 `panel.collect(dense=True)` for a dense domain-aligned result, and pass an
 `ExecutionRuntime` when a compiled graph is rebound repeatedly.
@@ -74,6 +74,9 @@ Core 0.6 keeps sparse inputs as Polars `LazyFrame` plans. Use
 Time-series operations group by `asset_id` and order by `time`.
 Cross-sectional operations group by `time`.
 Composer operations join inputs on `(time, asset_id)`.
+Prediction composers produce a strongly typed `PredictionPanel`. Transformer
+chains may post-process that typed value and preserve its type, while ordinary
+Composers and auxiliary Panel parameters cannot consume it.
 Universes can be static lists/Series or sparse dynamic membership frames with
 `time`, `asset_id`, and boolean `active`; missing dynamic rows are inactive and
 are not forward-filled.

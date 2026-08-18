@@ -1,10 +1,11 @@
 """Strongly typed AlphaValue-to-prediction composition.
 
-Prediction composers are terminal graph operations.  They consume AlphaValue
-panels that have already been aligned and standardized by an Alpha Policy and
-produce a :class:`PredictionPanel`.  Supervised composers may additionally
-consume an explicit target/availability context supplied by a higher-level
-backtesting package.
+Prediction composers consume AlphaValue panels that have already been aligned
+and standardized by an Alpha Policy and produce a :class:`PredictionPanel`.
+That typed result may pass through Transformer nodes while remaining a
+PredictionPanel; it cannot enter another Composer or serve as an auxiliary
+Panel parameter.  Supervised composers may additionally consume an explicit
+target/availability context supplied by a higher-level backtesting package.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ _PREDICTION_CONTRACT = OperationContract(
 
 
 class PredictionComposer(ABC):
-    """Base class for terminal, allowlisted PredictionPanel graph composers."""
+    """Base class for allowlisted PredictionPanel graph composers."""
 
     kind: ClassVar[str]
     supervised: ClassVar[bool] = False
@@ -94,7 +95,7 @@ class PredictionComposer(ABC):
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> "Graph[PredictionPanel]":
-        """Build a terminal prediction-composer graph."""
+        """Build a typed prediction-composer graph."""
 
         from .graph import Graph
 

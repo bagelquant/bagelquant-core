@@ -17,9 +17,10 @@ values during execution.
 
 See [Panel](reference/concepts/panel.md).
 
-`PredictionPanel` is the strong terminal subtype produced only by a
-`PredictionComposer`. Ordinary composers always produce ordinary `Panel` values,
-which represent AlphaValues rather than predictions.
+`PredictionPanel` is the strong subtype produced by a `PredictionComposer`.
+Transformers may post-process its semantic input and preserve that type;
+ordinary composers and auxiliary Panel parameters cannot consume predictions.
+Ordinary composers continue to produce `Panel` AlphaValues.
 
 ## Graph
 
@@ -52,7 +53,7 @@ See [Composer](reference/concepts/composer.md).
 
 ## Prediction composers
 
-Prediction construction is an allowlisted terminal graph operation. Identity,
+Prediction construction is an allowlisted typed graph operation. Identity,
 equal-weight, rolling positive-IC, rolling positive quantile-rank-IC, rolling
 OLS, and rolling GLS composers consume
 AlphaValue Panels already aligned and standardized by the caller's Alpha Policy.
@@ -60,6 +61,10 @@ Supervised composers receive generic target and availability Panels; core does
 not own prices, schedules, standardization, or backtest policies. Window length
 is measured in periods prepared by the caller, and missing values are never
 forward-filled.
+
+A PredictionComposer output may feed a Transformer chain. Each Transformer
+keeps the `PredictionPanel` boundary, but predictions cannot enter another
+Composer or be supplied as a Transformer's named Panel parameter.
 
 `QuantileICWeightedPredictionComposer(window, quantiles)` groups every finite
 Alpha cross section before target missingness is considered, computes Spearman

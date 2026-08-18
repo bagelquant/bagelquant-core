@@ -498,6 +498,7 @@ class Graph(Generic[OutputT]):
             dfs(node)
 
     def _validate_parents(self) -> None:
+        prediction_nodes: set[int] = set()
         for node in self._nodes:
             for parent in node.parents:
                 if not isinstance(parent, Node):
@@ -520,19 +521,29 @@ class Graph(Generic[OutputT]):
                     f"PredictionComposer '{node.name}' must have at least one parent"
                 )
 
-            if node.node_type != "prediction_composer" and any(
-                parent.node_type == "prediction_composer"
-                or parent.__class__.__name__ == "PredictionPanel"
-                for parent in node.parents
+            if (
+                node.node_type == "prediction_composer"
+                or node.__class__.__name__ == "PredictionPanel"
+            ):
+                prediction_nodes.add(id(node))
+                continue
+
+            prediction_parents = tuple(
+                parent for parent in node.parents if id(parent) in prediction_nodes
+            )
+            if not prediction_parents:
+                continue
+            semantic_inputs = node.spec_inputs()
+            if (
+                node.node_type != "transformer"
+                or len(semantic_inputs) != 1
+                or id(semantic_inputs[0]) not in prediction_nodes
+                or len(prediction_parents) != 1
             ):
                 raise GraphValidationError(
-                    "PredictionComposer outputs are terminal and cannot feed other nodes"
+                    "PredictionPanel values may only feed a Transformer's semantic input"
                 )
-
-        output_ids = {id(node) for node in self._outputs}
-        for node in self._nodes:
-            if node.node_type == "prediction_composer" and id(node) not in output_ids:
-                raise GraphValidationError("PredictionComposer nodes must be graph outputs")
+            prediction_nodes.add(id(node))
 
     def topological_sort(self) -> tuple[Node, ...]:
         return self._nodes

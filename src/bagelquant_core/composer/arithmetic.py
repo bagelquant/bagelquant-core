@@ -8,6 +8,12 @@ from ..frame import binary
 from .core import _horizontal_value_plan, composer
 
 
+def _safe_divide(left: pl.Expr, right: pl.Expr) -> pl.Expr:
+    """Return null where division is undefined because the divisor is zero."""
+
+    return pl.when(right == 0).then(None).otherwise(left / right)
+
+
 @composer
 def add(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
     return binary(lhs, rhs, lambda left, right: left + right)
@@ -25,7 +31,7 @@ def mul(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
 
 @composer
 def div(lhs: pl.DataFrame, rhs: pl.DataFrame) -> pl.DataFrame:
-    return binary(lhs, rhs, lambda left, right: left / right)
+    return binary(lhs, rhs, _safe_divide)
 
 
 def _plan_arithmetic(
@@ -39,7 +45,7 @@ def _plan_arithmetic(
         "add": values[0] + values[1],
         "sub": values[0] - values[1],
         "mul": values[0] * values[1],
-        "div": values[0] / values[1],
+        "div": _safe_divide(values[0], values[1]),
     }
     return (
         combined.select(

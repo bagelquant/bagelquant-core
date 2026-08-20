@@ -46,15 +46,20 @@ IC 数值函数和 composer 共用同一公开口径：
 
 ```python
 from bagelquant_core import (
+    ICWeightedDecayPredictionComposer,
     QuantileICWeightedPredictionComposer,
     quantile_rank_information_coefficient,
 )
 
 composer = QuantileICWeightedPredictionComposer(window=12, quantiles=10)
+decayed = ICWeightedDecayPredictionComposer(window=12, half_life=6)
 ```
 
 `q1` 包含最高 Alpha 值。若 q1 到 qN 的 target 收益严格递减，quantile rank IC 为
 `+1`；分组不完整或组收益完全相同则不产生 IC。
+
+衰减 Composer 沿用完整窗口和正 IC 规则；经过调用方指定的 `half_life` 个 period 后，
+旧 IC 观测的权重是最新观测的一半。
 
 ## 自定义操作
 

@@ -54,8 +54,8 @@ See [Composer](reference/concepts/composer.md).
 ## Prediction composers
 
 Prediction construction is an allowlisted typed graph operation. Identity,
-equal-weight, rolling positive-IC, rolling positive quantile-rank-IC, rolling
-OLS, and rolling GLS composers consume
+equal-weight, rolling positive-IC, exponentially decayed rolling positive-IC,
+rolling positive quantile-rank-IC, rolling OLS, and rolling GLS composers consume
 AlphaValue Panels already aligned and standardized by the caller's Alpha Policy.
 Supervised composers receive generic target and availability Panels; core does
 not own prices, schedules, standardization, or backtest policies. Window length
@@ -71,6 +71,12 @@ Alpha cross section before target missingness is considered, computes Spearman
 correlation between high-to-low quantile scores and quantile mean targets, and
 uses the positive part of the complete-window mean IC. Its graph identity
 serializes both `window` and `quantiles`.
+
+`ICWeightedDecayPredictionComposer(window, half_life)` applies exponentially
+decaying period weights to the same complete contiguous Spearman-IC window.
+For observations ordered oldest to newest, period `i` receives weight
+`2 ** (-(window - 1 - i) / half_life)`. The positive weighted mean becomes the
+Alpha weight, and graph identity serializes both `window` and `half_life`.
 
 For application-orchestrated learning, `ElasticNetPredictionComposer` serializes
 the complete walk-forward, coverage, target, validation, and Elastic Net

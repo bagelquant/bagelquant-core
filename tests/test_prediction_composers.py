@@ -12,6 +12,7 @@ from bagelquant_core import (
     EqualWeightPredictionComposer,
     GLSPredictionComposer,
     Graph,
+    ICWeightedDecayPredictionComposer,
     ICWeightedPredictionComposer,
     IdentityPredictionComposer,
     OLSPredictionComposer,
@@ -183,6 +184,96 @@ def test_ic_weighted_uses_only_positive_full_window_ic() -> None:
 
     assert result.get_column("time").unique().to_list() == [times[2]]
     assert result.get_column("value").to_list() == pytest.approx([1.0, 2.0, 3.0])
+
+
+def test_ic_weighted_decay_prefers_recent_ic_and_serializes_half_life() -> None:
+    times = [date(2024, month, 1) for month in range(1, 4)]
+    assets = ["A", "B", "C"]
+    domain = Domain(calendar=times, universe=assets)
+
+    def alpha(
+        name: str,
+        periods: list[list[float | None]],
+    ) -> Panel:
+        return _panel(
+            domain,
+            name,
+            [
+                (current, asset_id, periods[period_index][asset_index])
+                for period_index, current in enumerate(times)
+                for asset_index, asset_id in enumerate(assets)
+            ],
+        )
+
+    recent = alpha(
+        "recent",
+        [[3.0, 2.0, 1.0], [1.0, 2.0, 3.0], [3.0, None, 3.0]],
+    )
+    steady = alpha(
+        "steady",
+        [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [0.0, 2.0, None]],
+    )
+    fading = alpha(
+        "fading",
+        [[1.0, 2.0, 3.0], [3.0, 2.0, 1.0], [100.0, 100.0, 100.0]],
+    )
+    incomplete = alpha(
+        "incomplete",
+        [[1.0, 1.0, 1.0], [1.0, 2.0, 3.0], [100.0, 100.0, 100.0]],
+    )
+    targets = _panel(
+        domain,
+        "targets",
+        [
+            (current, asset_id, float(asset_index + 1))
+            for current in times[:2]
+            for asset_index, asset_id in enumerate(assets)
+        ],
+    )
+    availability = _panel(
+        domain,
+        "availability",
+        [
+            (current, asset_id, float(times[period_index + 1].toordinal()))
+            for period_index, current in enumerate(times[:2])
+            for asset_id in assets
+        ],
+    )
+    composer = ICWeightedDecayPredictionComposer(window=2, half_life=1)
+    graph = composer.compose(
+        recent,
+        steady,
+        fading,
+        incomplete,
+        training=PredictionTrainingContext(targets, availability),
+    )
+
+    result = graph.compute(dense_output=False).collect(dense=False)
+    composer_node = next(
+        node
+        for node in graph.spec().to_dict()["nodes"]
+        if node["node_type"] == "prediction_composer"
+    )
+
+    # recent has IC [-1, +1], so its half-life-one score is 1/3; steady is 1.
+    # fading is clipped at zero and incomplete lacks a finite full window.
+    assert result.get_column("time").unique().to_list() == [times[2]]
+    assert result.get_column("value").to_list() == pytest.approx([0.75, 2.0, 3.0])
+    assert composer_node["config"] == {
+        "prediction_composer": "ic_weighted_decay",
+        "alpha_count": 4,
+        "window": 2,
+        "half_life": 1,
+    }
+    Graph.compile(graph.spec().to_dict())
+
+
+@pytest.mark.parametrize("half_life", [0, -1, True, 1.5])
+def test_ic_weighted_decay_requires_positive_integer_half_life(
+    half_life: object,
+) -> None:
+    with pytest.raises(ValueError, match="half_life"):
+        ICWeightedDecayPredictionComposer(window=12, half_life=half_life)  # type: ignore[arg-type]
 
 
 def test_quantile_rank_ic_uses_complete_high_to_low_group_returns() -> None:

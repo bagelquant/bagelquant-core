@@ -33,6 +33,7 @@ from .panel import CategoryPanel, Domain, Panel, PredictionPanel
 from .prediction import (
     EqualWeightPredictionComposer,
     GLSPredictionComposer,
+    ICWeightedDecayPredictionComposer,
     ICWeightedPredictionComposer,
     IdentityPredictionComposer,
     OLSPredictionComposer,
@@ -75,6 +76,7 @@ __all__ = [
     "fit_elastic_net",
     "IdentityPredictionComposer",
     "EqualWeightPredictionComposer",
+    "ICWeightedDecayPredictionComposer",
     "ICWeightedPredictionComposer",
     "OLSPredictionComposer",
     "GLSPredictionComposer",

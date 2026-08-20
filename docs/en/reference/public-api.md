@@ -51,16 +51,22 @@ contract:
 
 ```python
 from bagelquant_core import (
+    ICWeightedDecayPredictionComposer,
     QuantileICWeightedPredictionComposer,
     quantile_rank_information_coefficient,
 )
 
 composer = QuantileICWeightedPredictionComposer(window=12, quantiles=10)
+decayed = ICWeightedDecayPredictionComposer(window=12, half_life=6)
 ```
 
 `q1` contains the highest Alpha values. A strictly decreasing q1-to-qN target
 return path has quantile rank IC `+1`; incomplete groups or equal group means
 produce no IC.
+
+The decayed composer uses the same complete-window and positive-IC rules while
+giving each IC observation half the newest observation's weight after
+`half_life` caller-supplied periods.
 
 ## Custom Operations
 

@@ -88,6 +88,10 @@ class PredictionComposer(ABC):
     def quantiles(self) -> int | None:
         return None
 
+    @property
+    def half_life(self) -> int | None:
+        return None
+
     def compose(
         self,
         *alpha_values: "Panel | Graph[Panel]",
@@ -199,6 +203,8 @@ class _PredictionComposerNode(Node):
             result["window"] = self._composer.window
         if self._composer.quantiles is not None:
             result["quantiles"] = self._composer.quantiles
+        if self._composer.half_life is not None:
+            result["half_life"] = self._composer.half_life
         return result
 
 
@@ -263,6 +269,41 @@ class ICWeightedPredictionComposer(_WindowPredictionComposer):
             availability,
             window=self.window,
             metric="spearman",
+        )
+
+
+class ICWeightedDecayPredictionComposer(_WindowPredictionComposer):
+    """Combine AlphaValues with positive exponentially weighted Spearman IC."""
+
+    kind = "ic_weighted_decay"
+
+    def __init__(self, window: int, half_life: int) -> None:
+        super().__init__(window)
+        if (
+            not isinstance(half_life, int)
+            or isinstance(half_life, bool)
+            or half_life <= 0
+        ):
+            raise ValueError("prediction composer half_life must be a positive integer")
+        self._half_life = half_life
+
+    @property
+    def half_life(self) -> int:
+        return self._half_life
+
+    def _compose_supervised(
+        self,
+        wide: pl.DataFrame,
+        targets: pl.DataFrame,
+        availability: pl.DataFrame,
+    ) -> pl.DataFrame:
+        return _rank_weighted_prediction(
+            wide,
+            targets,
+            availability,
+            window=self.window,
+            metric="spearman",
+            half_life=self.half_life,
         )
 
 
@@ -448,6 +489,7 @@ def _rank_weighted_prediction(
     window: int,
     metric: str,
     quantiles: int | None = None,
+    half_life: int | None = None,
 ) -> pl.DataFrame:
     data = _join_training(wide, targets, availability)
     alpha_names = _alpha_names(wide)
@@ -487,10 +529,17 @@ def _rank_weighted_prediction(
         matrix = np.stack([item[2] for item in history])
         valid_alpha = np.isfinite(matrix).all(axis=0)
         weights = np.zeros(len(alpha_names), dtype=float)
-        weights[valid_alpha] = np.maximum(
-            matrix[:, valid_alpha].mean(axis=0),
-            0.0,
-        )
+        if half_life is None:
+            metric_means = matrix[:, valid_alpha].mean(axis=0)
+        else:
+            ages = np.arange(window - 1, -1, -1, dtype=float)
+            period_weights = np.power(2.0, -ages / float(half_life))
+            metric_means = np.average(
+                matrix[:, valid_alpha],
+                axis=0,
+                weights=period_weights,
+            )
+        weights[valid_alpha] = np.maximum(metric_means, 0.0)
         if weights.sum() <= 0:
             continue
         current = wide.filter(pl.col(TIME) == period)
@@ -647,6 +696,7 @@ for _composer_type in (
     IdentityPredictionComposer,
     EqualWeightPredictionComposer,
     ICWeightedPredictionComposer,
+    ICWeightedDecayPredictionComposer,
     QuantileICWeightedPredictionComposer,
     OLSPredictionComposer,
     GLSPredictionComposer,
@@ -658,6 +708,7 @@ __all__ = [
     "PREDICTION_COMPOSER_REGISTRY",
     "EqualWeightPredictionComposer",
     "GLSPredictionComposer",
+    "ICWeightedDecayPredictionComposer",
     "ICWeightedPredictionComposer",
     "IdentityPredictionComposer",
     "OLSPredictionComposer",

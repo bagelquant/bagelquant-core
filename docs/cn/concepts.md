@@ -43,7 +43,7 @@ Composer 用多个 `Panel` 或 `Graph` 输入生成一个新图，适合算术�
 ## Prediction composer
 
 Prediction 构建是 allowlist 中的强类型 graph operation。Identity、equal-weight、rolling
-positive-IC、rolling positive quantile-rank-IC、rolling OLS 与 rolling GLS 消费已经由调用方 Alpha Policy 完成日期对齐和
+positive-IC、指数衰减 rolling positive-IC、rolling positive quantile-rank-IC、rolling OLS 与 rolling GLS 消费已经由调用方 Alpha Policy 完成日期对齐和
 standardization 的 AlphaValue Panel。监督式 composer 接收通用 target 与 availability
 Panel；core 不持有价格、schedule、standardization 或回测 policy。Window 长度由调用方
 准备的 period 计数，缺失值不会 forward-fill。
@@ -55,6 +55,11 @@ prediction 不能进入另一个 Composer，也不能作为 Transformer 的命�
 值确定等人数分组，不会因 target 缺失而重划边界；随后计算高到低 quantile 分数与各组
 target 均值的 Spearman 相关，并使用完整窗口平均 IC 的正值部分。Graph identity 同时
 序列化 `window` 与 `quantiles`。
+
+`ICWeightedDecayPredictionComposer(window, half_life)` 对同一个完整、连续的 Spearman
+IC 窗口施加指数衰减期权重。观测按由旧到新排列时，第 `i` 期的权重是
+`2 ** (-(window - 1 - i) / half_life)`；其加权平均的正值成为 Alpha 权重，Graph
+identity 同时序列化 `window` 与 `half_life`。
 
 对于由应用层编排的学习流程，`ElasticNetPredictionComposer` 会完整序列化 walk-forward、
 coverage、target、validation 与 Elastic Net contract，同时不依赖回测包。

@@ -260,6 +260,10 @@ class Graph(Generic[OutputT]):
                         composer_parameters["quantiles"] = int(
                             config.pop("quantiles")
                         )
+                    if "half_life" in config:
+                        composer_parameters["half_life"] = int(
+                            config.pop("half_life")
+                        )
                     composer = composer_type(**composer_parameters)
                     if config:
                         raise GraphValidationError(
@@ -360,11 +364,14 @@ class Graph(Generic[OutputT]):
                     composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
                     window = config.get("window")
                     quantiles = config.get("quantiles")
+                    half_life = config.get("half_life")
                     parameters = {}
                     if window is not None:
                         parameters["window"] = int(window)
                     if quantiles is not None:
                         parameters["quantiles"] = int(quantiles)
+                    if half_life is not None:
+                        parameters["half_life"] = int(half_life)
                     operation = composer_type(**parameters)
             except KeyError as error:
                 raise GraphValidationError(str(error)) from error

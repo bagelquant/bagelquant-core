@@ -7,7 +7,14 @@ from typing import Any
 
 import polars as pl
 
-from ..frame import ASSET_ID, TIME, VALUE, normalize_asset_ids, normalize_time_series
+from ..frame import (
+    ASSET_ID,
+    TIME,
+    VALUE,
+    normalize_asset_ids,
+    normalize_date_expression,
+    normalize_time_series,
+)
 from ..hashing import hash_dataframe, hash_mapping
 
 
@@ -115,7 +122,7 @@ class Domain:
         if data.height != self.size:
             return False
         keys = data.select(TIME, ASSET_ID).with_columns(
-            pl.col(TIME).cast(pl.Date, strict=False),
+            normalize_date_expression(TIME, data.schema[TIME]),
             pl.col(ASSET_ID).cast(pl.String),
         )
         if self._is_dynamic:
@@ -209,7 +216,7 @@ class Domain:
                 f"dynamic universe is missing required columns: {missing}"
             )
         normalized = universe.select(TIME, ASSET_ID, "active").with_columns(
-            pl.col(TIME).cast(pl.Date, strict=False),
+            normalize_date_expression(TIME, universe.schema[TIME]),
             pl.col(ASSET_ID).cast(pl.String),
             pl.col("active").cast(pl.Boolean, strict=False),
         )

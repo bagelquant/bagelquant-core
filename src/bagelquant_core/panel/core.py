@@ -7,7 +7,14 @@ from typing import Any, Mapping, Sequence
 
 import polars as pl
 
-from ..frame import ASSET_ID, TIME, VALUE, align_frames, normalize_panel_frame
+from ..frame import (
+    ASSET_ID,
+    TIME,
+    VALUE,
+    align_frames,
+    normalize_date_expression,
+    normalize_panel_frame,
+)
 from ..node import Node
 from .domain import Domain
 
@@ -238,7 +245,7 @@ class Panel(Node):
             if not trace_columns:
                 return base.lazy()
             traces = data.select(TIME, ASSET_ID, *trace_columns).with_columns(
-                pl.col(TIME).cast(pl.Date, strict=False),
+                normalize_date_expression(TIME, data.schema[TIME]),
                 pl.col(ASSET_ID).cast(pl.String),
             )
             return base.join(
@@ -255,7 +262,7 @@ class Panel(Node):
         if cls is Panel and not schema[VALUE].is_numeric():
             raise TypeError("panel value column must be numeric")
         frame = data.select(TIME, ASSET_ID, VALUE, *trace_columns).with_columns(
-            pl.col(TIME).cast(pl.Date, strict=False),
+            normalize_date_expression(TIME, schema[TIME]),
             pl.col(ASSET_ID).cast(pl.String),
         )
         if cls is Panel and schema[VALUE].is_float():
@@ -279,7 +286,7 @@ class Panel(Node):
         traces = collected.select(
             TIME, ASSET_ID, *self._trace_columns
         ).with_columns(
-            pl.col(TIME).cast(pl.Date, strict=False),
+            normalize_date_expression(TIME, collected.schema[TIME]),
             pl.col(ASSET_ID).cast(pl.String),
         )
         return base.join(traces, on=[TIME, ASSET_ID], how="left").sort(

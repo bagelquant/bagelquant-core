@@ -8,6 +8,51 @@ import polars as pl
 from bagelquant_core import CategoryPanel, Domain, Panel
 from bagelquant_core.composer import add
 from bagelquant_core.transformer import rolling_mean
+from bagelquant_core.frame import normalize_panel_frame, normalize_time_series
+
+
+def test_string_times_use_explicit_date_parsing_without_deprecation() -> None:
+    series = normalize_time_series(["2024-01-01", "2024-01-02"])
+    frame = normalize_panel_frame(
+        pl.DataFrame(
+            {
+                "time": ["2024-01-01"],
+                "asset_id": ["a"],
+                "value": [1.0],
+            }
+        )
+    )
+
+    assert series.dtype == pl.Date
+    assert frame.schema["time"] == pl.Date
+    assert frame["time"].to_list() == [date(2024, 1, 1)]
+
+
+def test_string_times_normalize_across_dynamic_domain_and_panel_traces() -> None:
+    domain = Domain(
+        calendar=["2024-01-01"],
+        universe=pl.DataFrame(
+            {
+                "time": ["2024-01-01"],
+                "asset_id": ["a"],
+                "active": [True],
+            }
+        ),
+    )
+    panel = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": ["2024-01-01"],
+                "asset_id": ["a"],
+                "value": [1.0],
+                "available_at": [date(2024, 1, 1)],
+            }
+        ),
+        domain,
+        trace_columns=("available_at",),
+    )
+
+    assert panel.collect(include_traces=True).schema["time"] == pl.Date
 
 
 def test_panel_normalizes_to_time_asset_id_grid() -> None:

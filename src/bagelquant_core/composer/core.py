@@ -164,9 +164,13 @@ def _horizontal_value_plan(
             )
         ],
     ]
-    return pl.concat(plans, how="horizontal"), [
-        pl.col(column) for column in columns
-    ]
+    try:
+        combined = pl.concat(plans, how="horizontal_extend")
+    except ValueError as error:
+        if "horizontal_extend" not in str(error):
+            raise
+        combined = pl.concat(plans, how="horizontal")
+    return combined, [pl.col(column) for column in columns]
 
 
 def _horizontal_expression_plan(

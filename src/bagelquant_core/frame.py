@@ -14,9 +14,24 @@ VALUE = "value"
 PANEL_KEYS = (TIME, ASSET_ID)
 
 
+def normalize_date_expression(column: str, dtype: pl.DataType) -> pl.Expr:
+    """Normalize a known-schema date column without deprecated string casts."""
+
+    expression = pl.col(column)
+    return (
+        expression.str.to_date(format="%Y-%m-%d", strict=False)
+        if dtype == pl.String
+        else expression.cast(pl.Date, strict=False)
+    )
+
+
 def normalize_time_series(values: Sequence[Any] | pl.Series) -> pl.Series:
     series = values if isinstance(values, pl.Series) else pl.Series(TIME, values)
-    normalized = series.cast(pl.Date, strict=False)
+    normalized = (
+        series.str.to_date(format="%Y-%m-%d", strict=False)
+        if series.dtype == pl.String
+        else series.cast(pl.Date, strict=False)
+    )
     if normalized.is_empty():
         raise ValueError("calendar must contain at least one time")
     if normalized.null_count() > 0:
@@ -57,7 +72,7 @@ def normalize_panel_frame(
         raise ValueError(f"panel data is missing required columns: {missing}")
     normalized = frame.select(*PANEL_KEYS, value_column).rename({value_column: VALUE})
     normalized = normalized.with_columns(
-        pl.col(TIME).cast(pl.Date, strict=False),
+        normalize_date_expression(TIME, normalized.schema[TIME]),
         pl.col(ASSET_ID).cast(pl.String),
     )
     if normalized.select(

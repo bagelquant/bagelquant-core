@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import polars as pl
 
 from bagelquant_core import Domain, Panel
@@ -9,8 +11,27 @@ from bagelquant_core.composer import (
     weighted_sum,
 )
 from bagelquant_core.transformer import group_mean
+from bagelquant_core.composer.core import _horizontal_value_plan
 
 from helpers import panel, values
+
+
+def test_horizontal_value_plan_preserves_positionally_aligned_lazy_rows() -> None:
+    keys = pl.DataFrame(
+        {
+            "time": [date(2024, 1, 1), date(2024, 1, 2)],
+            "asset_id": ["a", "b"],
+        }
+    )
+    left = keys.with_columns(pl.Series("value", [1.0, 2.0])).lazy()
+    right = keys.with_columns(pl.Series("value", [10.0, 20.0])).lazy()
+
+    combined, values = _horizontal_value_plan((left, right))
+
+    assert combined.select(*values).collect().to_dicts() == [
+        {"__value_0": 1.0, "__value_1": 10.0},
+        {"__value_0": 2.0, "__value_1": 20.0},
+    ]
 
 
 def test_add_joins_on_time_asset_id() -> None:

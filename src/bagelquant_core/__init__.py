@@ -32,6 +32,7 @@ from .operation_contract import (
 from .panel import CategoryPanel, Domain, Panel, PredictionPanel
 from .prediction import (
     EqualWeightPredictionComposer,
+    FamaMacBethOLSResult,
     GLSPredictionComposer,
     ICWeightedDecayPredictionComposer,
     ICWeightedPredictionComposer,
@@ -40,6 +41,7 @@ from .prediction import (
     PredictionComposer,
     PredictionTrainingContext,
     QuantileICWeightedPredictionComposer,
+    fama_macbeth_ols_prediction,
     quantile_rank_information_coefficient,
 )
 from .transformer import pct_change_frame
@@ -53,6 +55,7 @@ __all__ = [
     "Graph",
     "GraphSpec",
     "GraphValidationError",
+    "FamaMacBethOLSResult",
     "ElasticNetCandidate",
     "ElasticNetConfig",
     "ElasticNetModel",
@@ -74,6 +77,7 @@ __all__ = [
     "elastic_net_candidates",
     "equal_period_sample_weights",
     "fit_elastic_net",
+    "fama_macbeth_ols_prediction",
     "IdentityPredictionComposer",
     "EqualWeightPredictionComposer",
     "ICWeightedDecayPredictionComposer",

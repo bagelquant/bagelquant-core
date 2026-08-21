@@ -20,6 +20,7 @@ from bagelquant_core import (
     PredictionPanel,
     PredictionTrainingContext,
     QuantileICWeightedPredictionComposer,
+    fama_macbeth_ols_prediction,
     quantile_rank_information_coefficient,
 )
 from bagelquant_core.composer import add
@@ -469,6 +470,113 @@ def test_ols_waits_for_available_full_period_window() -> None:
 
     assert result.get_column("time").unique().to_list() == [times[2], times[3]]
     assert result.filter(pl.col("time") == times[3]).height == len(assets)
+
+
+def test_fama_macbeth_ols_exposes_same_prediction_and_diagnostics() -> None:
+    times = [date(2024, month, 1) for month in range(1, 4)]
+    assets = ["A", "B", "C", "D", "E"]
+    domain = Domain(calendar=times, universe=assets)
+    first_values = [-2.0, -1.0, 0.0, 1.0, 2.0]
+    second_values = [0.0, 1.0, 4.0, 1.0, 0.0]
+    first_rows = [
+        (current, asset, first_values[index])
+        for current in times
+        for index, asset in enumerate(assets)
+    ]
+    second_rows = [
+        (current, asset, second_values[index])
+        for current in times
+        for index, asset in enumerate(assets)
+    ]
+    target_rows: list[tuple[date, str, float]] = []
+    availability_rows: list[tuple[date, str, float]] = []
+    coefficients = ((0.1, 0.2, -0.3), (0.3, 0.4, -0.1))
+    for period_index, current in enumerate(times[:2]):
+        intercept, first_beta, second_beta = coefficients[period_index]
+        for asset_index, asset in enumerate(assets):
+            target_rows.append(
+                (
+                    current,
+                    asset,
+                    intercept
+                    + first_beta * first_values[asset_index]
+                    + second_beta * second_values[asset_index],
+                )
+            )
+            availability_rows.append(
+                (current, asset, float(times[period_index + 1].toordinal()))
+            )
+    first = _panel(domain, "first", first_rows)
+    second = _panel(domain, "second", second_rows)
+    targets = _panel(domain, "targets", target_rows)
+    availability = _panel(domain, "availability", availability_rows)
+
+    diagnostic = fama_macbeth_ols_prediction(
+        {
+            "first_factor": first.collect(dense=False),
+            "second_factor": second.collect(dense=False),
+        },
+        targets.collect(dense=False),
+        availability.collect(dense=False),
+        window=2,
+    )
+    composer_prediction = (
+        OLSPredictionComposer(2)
+        .compose(
+            first,
+            second,
+            training=PredictionTrainingContext(targets, availability),
+        )
+        .compute(dense_output=False)
+        .collect(dense=False)
+    )
+
+    assert diagnostic.prediction.equals(composer_prediction)
+    assert diagnostic.factor_returns.get_column("factor").unique().sort().to_list() == [
+        "first_factor",
+        "intercept",
+        "second_factor",
+    ]
+    assert diagnostic.rolling_premia.filter(
+        pl.col("time") == times[2]
+    ).select("factor", "mean_coefficient").sort("factor").to_dicts() == [
+        {"factor": "first_factor", "mean_coefficient": pytest.approx(0.3)},
+        {"factor": "intercept", "mean_coefficient": pytest.approx(0.2)},
+        {"factor": "second_factor", "mean_coefficient": pytest.approx(-0.2)},
+    ]
+    assert diagnostic.period_diagnostics.get_column("status").to_list() == [
+        "complete",
+        "complete",
+    ]
+    assert diagnostic.period_diagnostics.get_column("rank").to_list() == [3, 3]
+
+
+def test_fama_macbeth_ols_reports_rank_deficiency() -> None:
+    times = [date(2024, 1, 1), date(2024, 2, 1)]
+    assets = ["A", "B", "C", "D", "E"]
+    first = pl.DataFrame(
+        {
+            "time": [times[0]] * len(assets) + [times[1]] * len(assets),
+            "asset_id": assets * 2,
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0] * 2,
+        }
+    )
+    second = first.with_columns((pl.col("value") * 2.0).alias("value"))
+    targets = first.filter(pl.col("time") == times[0])
+    availability = targets.with_columns(
+        pl.lit(float(times[1].toordinal())).alias("value")
+    )
+
+    result = fama_macbeth_ols_prediction(
+        {"first": first, "second": second},
+        targets,
+        availability,
+        window=1,
+    )
+
+    assert result.prediction.is_empty()
+    assert result.factor_returns.is_empty()
+    assert result.period_diagnostics.row(0, named=True)["status"] == "rank_deficient"
 
 
 def test_ols_requires_consecutive_completed_training_periods() -> None:

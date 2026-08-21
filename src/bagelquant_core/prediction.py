@@ -49,6 +49,16 @@ class PredictionTrainingContext:
     availability: "Panel | Graph[Panel]"
 
 
+@dataclass(frozen=True, slots=True)
+class FamaMacBethOLSResult:
+    """Prediction and auditable rolling cross-sectional OLS diagnostics."""
+
+    prediction: pl.DataFrame
+    factor_returns: pl.DataFrame
+    rolling_premia: pl.DataFrame
+    period_diagnostics: pl.DataFrame
+
+
 PREDICTION_COMPOSER_REGISTRY: Registry[type["PredictionComposer"]] = Registry(
     "prediction composer"
 )
@@ -353,13 +363,13 @@ class OLSPredictionComposer(_WindowPredictionComposer):
         targets: pl.DataFrame,
         availability: pl.DataFrame,
     ) -> pl.DataFrame:
-        return _regression_prediction(
+        return _fama_macbeth_ols_from_wide(
             wide,
             targets,
             availability,
             window=self.window,
-            method="ols",
-        )
+            factor_names=tuple(_alpha_names(wide)),
+        ).prediction
 
 
 class GLSPredictionComposer(_WindowPredictionComposer):
@@ -373,12 +383,11 @@ class GLSPredictionComposer(_WindowPredictionComposer):
         targets: pl.DataFrame,
         availability: pl.DataFrame,
     ) -> pl.DataFrame:
-        return _regression_prediction(
+        return _gls_prediction(
             wide,
             targets,
             availability,
             window=self.window,
-            method="gls",
         )
 
 
@@ -562,40 +571,16 @@ def _rank_weighted_prediction(
     return _rows_frame(rows)
 
 
-def _regression_prediction(
+def _gls_prediction(
     wide: pl.DataFrame,
     targets: pl.DataFrame,
     availability: pl.DataFrame,
     *,
     window: int,
-    method: str,
 ) -> pl.DataFrame:
     data = _join_training(wide, targets, availability)
     alpha_names = _alpha_names(wide)
-    coefficient_count = len(alpha_names) + 1
-    records: list[tuple[date, int, tuple[np.ndarray, np.ndarray] | None]] = []
-    for period in _training_periods(data):
-        sample = data.filter(pl.col(TIME) == period)
-        features = np.column_stack([_float_array(sample, name) for name in alpha_names])
-        target = _float_array(sample, "target")
-        valid = np.isfinite(target) & np.isfinite(features).all(axis=1)
-        estimate: tuple[np.ndarray, np.ndarray] | None = None
-        if valid.sum() > coefficient_count:
-            design = np.column_stack([np.ones(valid.sum()), features[valid]])
-            if np.linalg.matrix_rank(design) == coefficient_count:
-                gram = design.T @ design
-                try:
-                    inverse = np.linalg.inv(gram)
-                except np.linalg.LinAlgError:
-                    inverse = None
-                if inverse is not None:
-                    beta = inverse @ design.T @ target[valid]
-                    residual = target[valid] - design @ beta
-                    sigma2 = float(np.dot(residual, residual) / (valid.sum() - coefficient_count))
-                    covariance = sigma2 * inverse
-                    if np.isfinite(beta).all() and np.isfinite(covariance).all():
-                        estimate = (beta, covariance)
-        records.append((period, _period_availability(sample), estimate))
+    records, _ = _cross_sectional_regression_records(data, alpha_names)
 
     rows: list[dict[str, object]] = []
     all_periods = _prediction_periods(wide)
@@ -605,24 +590,267 @@ def _regression_prediction(
             continue
         estimates = [item[2] for item in history]
         assert all(estimate is not None for estimate in estimates)
-        if method == "ols":
-            beta = np.stack([estimate[0] for estimate in estimates if estimate is not None]).mean(axis=0)
-        else:
-            try:
-                precisions = [np.linalg.inv(estimate[1]) for estimate in estimates if estimate is not None]
-                precision = np.sum(precisions, axis=0)
-                beta = np.linalg.inv(precision) @ np.sum(
-                    [weight @ estimate[0] for weight, estimate in zip(precisions, estimates, strict=True) if estimate is not None],
-                    axis=0,
-                )
-            except np.linalg.LinAlgError:
-                continue
+        try:
+            precisions = [
+                np.linalg.inv(estimate[1])
+                for estimate in estimates
+                if estimate is not None
+            ]
+            precision = np.sum(precisions, axis=0)
+            beta = np.linalg.inv(precision) @ np.sum(
+                [
+                    weight @ estimate[0]
+                    for weight, estimate in zip(
+                        precisions, estimates, strict=True
+                    )
+                    if estimate is not None
+                ],
+                axis=0,
+            )
+        except np.linalg.LinAlgError:
+            continue
         current = wide.filter(pl.col(TIME) == period)
         for item in current.iter_rows(named=True):
             values = np.array([_finite_or_nan(item[name]) for name in alpha_names])
             if np.isfinite(values).all():
                 rows.append({TIME: period, ASSET_ID: item[ASSET_ID], VALUE: float(beta[0] + np.dot(values, beta[1:]))})
     return _rows_frame(rows)
+
+
+def fama_macbeth_ols_prediction(
+    alpha_values: Mapping[str, pl.DataFrame],
+    targets: pl.DataFrame,
+    availability: pl.DataFrame,
+    *,
+    window: int,
+) -> FamaMacBethOLSResult:
+    """Return rolling Fama--MacBeth OLS predictions and diagnostics.
+
+    Each completed source period is fit independently with an intercept. The
+    prediction at a later period uses the arithmetic mean coefficient vector
+    from the latest complete, contiguous, and causally available ``window``.
+    """
+
+    if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+        raise ValueError("Fama-MacBeth OLS window must be a positive integer")
+    if len(alpha_values) < 2:
+        raise ValueError("Fama-MacBeth OLS requires at least two AlphaValues")
+    factor_names = tuple(alpha_values)
+    if any(not isinstance(name, str) or not name.strip() for name in factor_names):
+        raise ValueError("Fama-MacBeth factor names must be non-blank strings")
+    if "intercept" in factor_names:
+        raise ValueError("Fama-MacBeth factor name 'intercept' is reserved")
+    wide = _prediction_wide(tuple(alpha_values.values()))
+    return _fama_macbeth_ols_from_wide(
+        wide,
+        targets,
+        availability,
+        window=window,
+        factor_names=factor_names,
+    )
+
+
+def _fama_macbeth_ols_from_wide(
+    wide: pl.DataFrame,
+    targets: pl.DataFrame,
+    availability: pl.DataFrame,
+    *,
+    window: int,
+    factor_names: tuple[str, ...],
+) -> FamaMacBethOLSResult:
+    data = _join_training(wide, targets, availability)
+    alpha_names = _alpha_names(wide)
+    if len(alpha_names) != len(factor_names):
+        raise ValueError("Fama-MacBeth factor names do not match AlphaValues")
+    records, period_diagnostics = _cross_sectional_regression_records(
+        data,
+        alpha_names,
+    )
+    terms = ("intercept", *factor_names)
+    factor_rows: list[dict[str, object]] = []
+    for period, available_at, estimate in records:
+        if estimate is None:
+            continue
+        beta, covariance = estimate
+        standard_errors = np.sqrt(np.maximum(np.diag(covariance), 0.0))
+        for term, coefficient, standard_error in zip(
+            terms,
+            beta,
+            standard_errors,
+            strict=True,
+        ):
+            factor_rows.append(
+                {
+                    TIME: period,
+                    "available_at": date.fromordinal(available_at),
+                    "factor": term,
+                    "coefficient": float(coefficient),
+                    "cross_sectional_standard_error": float(standard_error),
+                }
+            )
+
+    prediction_rows: list[dict[str, object]] = []
+    rolling_rows: list[dict[str, object]] = []
+    all_periods = _prediction_periods(wide)
+    for period in all_periods:
+        history = _available_history(records, period, window, all_periods)
+        if history is None or any(item[2] is None for item in history):
+            continue
+        estimates = [item[2] for item in history]
+        assert all(estimate is not None for estimate in estimates)
+        beta = np.stack(
+            [estimate[0] for estimate in estimates if estimate is not None]
+        ).mean(axis=0)
+        for term, coefficient in zip(terms, beta, strict=True):
+            rolling_rows.append(
+                {
+                    TIME: period,
+                    "window_start": history[0][0],
+                    "window_end": history[-1][0],
+                    "factor": term,
+                    "mean_coefficient": float(coefficient),
+                }
+            )
+        current = wide.filter(pl.col(TIME) == period)
+        for item in current.iter_rows(named=True):
+            values = np.array([_finite_or_nan(item[name]) for name in alpha_names])
+            if np.isfinite(values).all():
+                prediction_rows.append(
+                    {
+                        TIME: period,
+                        ASSET_ID: item[ASSET_ID],
+                        VALUE: float(beta[0] + np.dot(values, beta[1:])),
+                    }
+                )
+    return FamaMacBethOLSResult(
+        prediction=_rows_frame(prediction_rows),
+        factor_returns=_fama_macbeth_factor_frame(factor_rows),
+        rolling_premia=_fama_macbeth_rolling_frame(rolling_rows),
+        period_diagnostics=period_diagnostics,
+    )
+
+
+def _cross_sectional_regression_records(
+    data: pl.DataFrame,
+    alpha_names: list[str],
+) -> tuple[
+    list[tuple[date, int, tuple[np.ndarray, np.ndarray] | None]],
+    pl.DataFrame,
+]:
+    coefficient_count = len(alpha_names) + 1
+    records: list[tuple[date, int, tuple[np.ndarray, np.ndarray] | None]] = []
+    diagnostic_rows: list[dict[str, object]] = []
+    for period in _training_periods(data):
+        sample = data.filter(pl.col(TIME) == period)
+        features = np.column_stack(
+            [_float_array(sample, name) for name in alpha_names]
+        )
+        target = _float_array(sample, "target")
+        valid = np.isfinite(target) & np.isfinite(features).all(axis=1)
+        observation_count = int(valid.sum())
+        available_at = _period_availability(sample)
+        estimate: tuple[np.ndarray, np.ndarray] | None = None
+        rank: int | None = None
+        condition_number: float | None = None
+        r_squared: float | None = None
+        residual_standard_error: float | None = None
+        status = "insufficient_observations"
+        if observation_count:
+            design = np.column_stack([np.ones(observation_count), features[valid]])
+            rank = int(np.linalg.matrix_rank(design))
+            condition = float(np.linalg.cond(design))
+            condition_number = condition if np.isfinite(condition) else None
+        if observation_count > coefficient_count:
+            if rank != coefficient_count:
+                status = "rank_deficient"
+            else:
+                gram = design.T @ design
+                try:
+                    inverse = np.linalg.inv(gram)
+                except np.linalg.LinAlgError:
+                    inverse = None
+                    status = "singular"
+                if inverse is not None:
+                    beta = inverse @ design.T @ target[valid]
+                    residual = target[valid] - design @ beta
+                    sigma2 = float(
+                        np.dot(residual, residual)
+                        / (observation_count - coefficient_count)
+                    )
+                    covariance = sigma2 * inverse
+                    target_deviation = target[valid] - target[valid].mean()
+                    total_sum_squares = float(
+                        np.dot(target_deviation, target_deviation)
+                    )
+                    if total_sum_squares > 0:
+                        r_squared = float(
+                            1.0
+                            - np.dot(residual, residual) / total_sum_squares
+                        )
+                    residual_standard_error = float(np.sqrt(max(sigma2, 0.0)))
+                    if np.isfinite(beta).all() and np.isfinite(covariance).all():
+                        estimate = (beta, covariance)
+                        status = "complete"
+                    else:
+                        status = "non_finite"
+        records.append((period, available_at, estimate))
+        diagnostic_rows.append(
+            {
+                TIME: period,
+                "available_at": date.fromordinal(available_at),
+                "status": status,
+                "observation_count": observation_count,
+                "feature_count": len(alpha_names),
+                "rank": rank,
+                "condition_number": condition_number,
+                "r_squared": r_squared,
+                "residual_standard_error": residual_standard_error,
+            }
+        )
+    return records, _fama_macbeth_period_frame(diagnostic_rows)
+
+
+def _fama_macbeth_factor_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
+    schema = {
+        TIME: pl.Date,
+        "available_at": pl.Date,
+        "factor": pl.String,
+        "coefficient": pl.Float64,
+        "cross_sectional_standard_error": pl.Float64,
+    }
+    if not rows:
+        return pl.DataFrame(schema=schema)
+    return pl.DataFrame(rows, schema=schema).sort(TIME, "factor")
+
+
+def _fama_macbeth_rolling_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
+    schema = {
+        TIME: pl.Date,
+        "window_start": pl.Date,
+        "window_end": pl.Date,
+        "factor": pl.String,
+        "mean_coefficient": pl.Float64,
+    }
+    if not rows:
+        return pl.DataFrame(schema=schema)
+    return pl.DataFrame(rows, schema=schema).sort(TIME, "factor")
+
+
+def _fama_macbeth_period_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
+    schema = {
+        TIME: pl.Date,
+        "available_at": pl.Date,
+        "status": pl.String,
+        "observation_count": pl.Int64,
+        "feature_count": pl.Int64,
+        "rank": pl.Int64,
+        "condition_number": pl.Float64,
+        "r_squared": pl.Float64,
+        "residual_standard_error": pl.Float64,
+    }
+    if not rows:
+        return pl.DataFrame(schema=schema)
+    return pl.DataFrame(rows, schema=schema).sort(TIME)
 
 
 def _available_history(records, period: date, window: int, all_periods: list[date]):
@@ -707,6 +935,7 @@ for _composer_type in (
 __all__ = [
     "PREDICTION_COMPOSER_REGISTRY",
     "EqualWeightPredictionComposer",
+    "FamaMacBethOLSResult",
     "GLSPredictionComposer",
     "ICWeightedDecayPredictionComposer",
     "ICWeightedPredictionComposer",
@@ -715,5 +944,6 @@ __all__ = [
     "PredictionComposer",
     "PredictionTrainingContext",
     "QuantileICWeightedPredictionComposer",
+    "fama_macbeth_ols_prediction",
     "quantile_rank_information_coefficient",
 ]

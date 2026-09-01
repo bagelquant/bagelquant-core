@@ -14,11 +14,6 @@ def identity(frame: pl.DataFrame) -> pl.DataFrame:
 
 
 @transformer
-def abs_value(frame: pl.DataFrame) -> pl.DataFrame:
-    return unary(frame, pl.col(VALUE).abs())
-
-
-@transformer
 def negate(frame: pl.DataFrame) -> pl.DataFrame:
     return unary(frame, -pl.col(VALUE))
 
@@ -105,14 +100,6 @@ pct_change._set_plan_operation(  # type: ignore[attr-defined]
 identity._set_plan_operation(  # type: ignore[attr-defined]
     lambda frame, config, order, asset_time_ordered: (
         frame.select(TIME, ASSET_ID, VALUE),
-        order,
-        asset_time_ordered,
-    )
-)
-abs_value._set_plan_operation(  # type: ignore[attr-defined]
-    lambda frame, config, order, asset_time_ordered: _expression_plan(
-        frame,
-        pl.col(VALUE).abs(),
         order,
         asset_time_ordered,
     )

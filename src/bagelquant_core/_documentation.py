@@ -8,7 +8,6 @@ from typing import Any
 
 OPERATION_DESCRIPTIONS = {
     "abs": "Return the absolute value of each element.",
-    "abs_value": "Return the absolute value of each element while preserving panel keys.",
     "add": "Add two key-aligned panel values element-wise.",
     "and_": "Return one where both corresponding elements are truthy and zero elsewhere.",
     "anscombe": "Apply the Anscombe square-root transform to stabilize count-data variance.",
@@ -22,10 +21,10 @@ OPERATION_DESCRIPTIONS = {
     "constant": "Replace every present keyed value with the configured constant while preserving missing membership.",
     "cos": "Return the cosine of each element.",
     "date_age_constraint": "Keep a value only when its per-asset trailing window contains the required number of valid observations.",
-    "delta": "Subtract the value `interval` observations earlier within each asset ordered by time.",
     "demean": "Subtract the same-date cross-sectional mean from every present value.",
     "denoise": "Set same-date cross-sectional deviations below the configured magnitude threshold to zero.",
     "diff": "Return the per-asset difference from the observation `periods` rows earlier.",
+    "diff_from_last_change": "Return the adjacent difference only when the per-asset value changes.",
     "div": "Divide the first key-aligned panel by the second element-wise.",
     "equal": "Return one where corresponding elements are equal and zero elsewhere.",
     "ewm_mean": "Return the per-asset exponentially weighted moving mean in time order.",
@@ -34,7 +33,6 @@ OPERATION_DESCRIPTIONS = {
     "ffill": "Fill each asset's missing rows from earlier observations, ordered by time and bounded by the finite limit.",
     "fillna": "Replace missing panel values with the configured scalar.",
     "fillna_zero": "Replace null and NaN panel values with zero.",
-    "fisher": "Apply the Fisher transform inside `(-1, 1)` and mask invalid inputs.",
     "freeman": "Apply the Freeman-Tukey square-root transform to stabilize count-data variance.",
     "greater": "Return one where the first input is greater than the second and zero elsewhere.",
     "greater_equal": "Return one where the first input is greater than or equal to the second and zero elsewhere.",
@@ -59,8 +57,7 @@ OPERATION_DESCRIPTIONS = {
     "less_equal": "Return one where the first input is less than or equal to the second and zero elsewhere.",
     "log": "Return the natural logarithm of positive values and mask invalid inputs.",
     "log1p": "Return `log(1 + value)` for values greater than `-1` and mask invalid inputs.",
-    "log_rank": "Apply a negative logarithm to same-date cross-sectional percentile ranks.",
-    "logrank": "Return a logarithmically transformed same-date cross-sectional rank.",
+    "log_rank": "Apply a natural logarithm to same-date cross-sectional percentile ranks.",
     "mask": "Keep source values where the key-aligned mask is truthy and use the configured replacement elsewhere.",
     "maximum": "Return the element-wise maximum across the aligned input panels.",
     "mean": "Return the element-wise arithmetic mean across aligned input panels.",
@@ -72,7 +69,6 @@ OPERATION_DESCRIPTIONS = {
     "net_scale": "Scale positive and negative cross-sectional values independently by their absolute-side sums.",
     "non_nan_to_one": "Replace every non-missing value with one while retaining missing rows.",
     "non_nan_to_zero": "Replace every non-missing value with zero while retaining missing rows.",
-    "nonnans": "Replace null and NaN values with zero.",
     "normalize": "Scale each cross-section linearly to `[-1, 1]`.",
     "not_": "Return one where elements are falsy and zero where they are truthy.",
     "notnan": "Return one for present values and zero for null or NaN values.",
@@ -80,6 +76,7 @@ OPERATION_DESCRIPTIONS = {
     "or_": "Return one where either corresponding element is truthy and zero elsewhere.",
     "orthogonalize": "Return same-date cross-sectional residuals after regressing the source on the named factor Panels.",
     "pct_change": "Return each asset's percentage change from the observation `periods` rows earlier.",
+    "pct_change_from_last_change": "Return the adjacent percentage change only when the per-asset value changes.",
     "posonly": "Keep positive values and suppress non-positive values.",
     "power": "Raise each present source value to the configured scalar exponent.",
     "power_df": "Raise each element of the first input to the corresponding element of the second input.",
@@ -87,7 +84,7 @@ OPERATION_DESCRIPTIONS = {
     "project": "Keep source values only where the key-aligned binary Panel equals one.",
     "rank": "Return average-tie ranks within each date cross-section while preserving missing membership.",
     "rankpct": "Return dense percentile ranks within each date cross-section.",
-    "rate_of_change": "Return the value difference over `interval` observations divided by that interval.",
+    "repeat_count": "Count consecutive equal valid values within each asset in time order.",
     "remove_repeated": "Mask per-asset values that repeat the immediately preceding observation.",
     "replace_inf": "Replace positive and negative infinity with missing values.",
     "replace_non_nan": "Replace every non-missing value with the configured scalar.",
@@ -115,6 +112,7 @@ OPERATION_DESCRIPTIONS = {
     "signed_log1p": "Return `sign(value) * log(1 + abs(value))` element-wise.",
     "signed_power": "Raise absolute values to a scalar power and restore their original signs.",
     "sqrt": "Return the square root of non-negative values and mask invalid inputs.",
+    "streak_count": "Count consecutive increases or decreases within each asset in time order.",
     "sub": "Subtract the second key-aligned panel from the first element-wise.",
     "sum_frames": "Return the element-wise sum across all aligned input panels.",
     "translate_to_pos": "Shift each same-date cross-section so its minimum present value is zero.",
@@ -147,10 +145,12 @@ def operation_category(name: str, *, kind: str) -> str:
     if name.startswith(("rolling_", "ewm_")) or name in {
         "lag",
         "diff",
-        "delta",
+        "diff_from_last_change",
         "pct_change",
-        "rate_of_change",
+        "pct_change_from_last_change",
+        "repeat_count",
         "remove_repeated",
+        "streak_count",
     }:
         return "Rolling statistics"
     if name in {"mask", "project", "vol_scale"}:
@@ -161,7 +161,6 @@ def operation_category(name: str, *, kind: str) -> str:
         "ffill",
         "bfill",
         "coalesce",
-        "nonnans",
         "replace_inf",
     }:
         return "Missing data"

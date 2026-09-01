@@ -1,19 +1,17 @@
-# `rate_of_change`
+# `pct_change_from_last_change`
 
-Return the value difference over `interval` observations divided by that interval.
+Return the adjacent percentage change only when the per-asset value changes.
 
 ## Signature
 
 ```python
-rate_of_change(source, *, interval=1, name=None, metadata=None)
+pct_change_from_last_change(source, *, name=None, metadata=None)
 ```
 
 ## Parameters
 
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
-**interval** : int, default `1`
-: Number of prior rows between observations. Must be a positive integer.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`
@@ -27,7 +25,7 @@ rate_of_change(source, *, interval=1, name=None, metadata=None)
 ## Executable Panel example
 
 ```python
-rate_of_change(source)
+pct_change_from_last_change(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
@@ -39,13 +37,15 @@ output.
 | time | asset_id | value |
 |---|---|---:|
 | 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 3.0 |
-| 2024-01-04 | a | 4.0 |
-| 2024-01-04 | b | 5.0 |
-| 2024-01-05 | a | 7.0 |
-| 2024-01-05 | b | 8.0 |
+| 2024-01-02 | b | 3.0 |
+| 2024-01-03 | a | 1.0 |
+| 2024-01-03 | b | 2.0 |
+| 2024-01-04 | a | 2.0 |
+| 2024-01-04 | b | 1.0 |
+| 2024-01-05 | a | 2.0 |
+| 2024-01-05 | b | 1.0 |
+| 2024-01-08 | a | 3.0 |
+| 2024-01-08 | b | 0.0 |
 
 ### Output
 
@@ -53,12 +53,14 @@ output.
 |---|---|---:|
 | 2024-01-02 | a | missing |
 | 2024-01-02 | b | missing |
-| 2024-01-03 | a | 1.0 |
-| 2024-01-03 | b | 1.0 |
-| 2024-01-04 | a | 2.0 |
-| 2024-01-04 | b | 2.0 |
-| 2024-01-05 | a | 3.0 |
-| 2024-01-05 | b | 3.0 |
+| 2024-01-03 | a | missing |
+| 2024-01-03 | b | -0.33333333333333337 |
+| 2024-01-04 | a | 1.0 |
+| 2024-01-04 | b | -0.5 |
+| 2024-01-05 | a | missing |
+| 2024-01-05 | b | missing |
+| 2024-01-08 | a | 0.5 |
+| 2024-01-08 | b | -1.0 |
 
 ## Panel and temporal semantics
 

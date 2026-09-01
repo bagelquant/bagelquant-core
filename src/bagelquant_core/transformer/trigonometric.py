@@ -45,8 +45,3 @@ def trig(frame: pl.DataFrame) -> pl.DataFrame:
     value = pl.col(VALUE)
     transformed = value.arccos() * value.arcsin()
     return unary(frame, pl.when(value.abs() <= 1).then(transformed).otherwise(None))
-
-
-@transformer
-def fisher(frame: pl.DataFrame) -> pl.DataFrame:
-    return arctanh.operation(frame)

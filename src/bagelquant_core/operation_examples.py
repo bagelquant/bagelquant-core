@@ -96,12 +96,21 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
         source_values = [1.0, 3.0, 6.0, 10.0]
         auxiliary_values = [1.0, 1.0, 2.0, 3.0]
         groups = ["tech", "tech", "bank", "bank"]
+    elif name in {
+        "diff_from_last_change",
+        "pct_change_from_last_change",
+        "repeat_count",
+        "streak_count",
+    }:
+        times = [date(2024, 1, day) for day in (2, 3, 4, 5, 8)]
+        assets = ["a", "b"]
+        source_values = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 2.0, 1.0, 1.0, 0.0]
+        auxiliary_values = [1.0] * 10
+        groups = ["one"] * 5 + ["two"] * 5
     elif name.startswith("rolling_") or name.startswith("ewm_") or name in {
         "lag",
         "diff",
-        "delta",
         "pct_change",
-        "rate_of_change",
         "remove_repeated",
         "kelly",
         "kelly_nonan_standardize",
@@ -119,7 +128,6 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
         "arcsin",
         "arctanh",
         "boxcox",
-        "fisher",
         "freeman",
         "log",
         "log1p",
@@ -152,7 +160,6 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
         "coalesce",
         "ffill",
         "fillna_zero",
-        "nonnans",
         "notnan",
         "replace_inf",
     }:

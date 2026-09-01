@@ -11,11 +11,6 @@ from .core import _expression_plan, _ordered_expression_plan, transformer
 
 
 @transformer
-def nonnans(frame: pl.DataFrame) -> pl.DataFrame:
-    return unary(frame, pl.col(VALUE).fill_nan(None).fill_null(0.0))
-
-
-@transformer
 def notnan(frame: pl.DataFrame) -> pl.DataFrame:
     present = pl.col(VALUE).is_not_null() & ~pl.col(VALUE).is_nan()
     return unary(frame, present.cast(pl.Float64))
@@ -50,24 +45,6 @@ def lag(frame: pl.DataFrame, *, periods: int = 1) -> pl.DataFrame:
     _validate_periods(periods, operation="lag")
     return panel_like(
         frame.sort([ASSET_ID, TIME]), pl.col(VALUE).shift(periods).over(ASSET_ID)
-    )
-
-
-@transformer
-def delta(frame: pl.DataFrame, *, interval: int = 1) -> pl.DataFrame:
-    _validate_periods(interval, operation="delta")
-    return panel_like(
-        frame.sort([ASSET_ID, TIME]),
-        pl.col(VALUE) - pl.col(VALUE).shift(interval).over(ASSET_ID),
-    )
-
-
-@transformer
-def rate_of_change(frame: pl.DataFrame, *, interval: int = 1) -> pl.DataFrame:
-    _validate_periods(interval, operation="rate_of_change")
-    return panel_like(
-        frame.sort([ASSET_ID, TIME]),
-        pl.col(VALUE).diff(interval).over(ASSET_ID) / interval,
     )
 
 
@@ -137,19 +114,7 @@ def _plan_general_time_series(
     order: str | None,
     asset_time_ordered: bool,
 ) -> tuple[pl.LazyFrame, str | None, bool]:
-    if name in {"delta", "rate_of_change"}:
-        interval = config.get("interval", 1)
-        _validate_periods(interval, operation=name)
-        if name == "delta":
-            expression = (
-                pl.col(VALUE)
-                - pl.col(VALUE).shift(interval).over(ASSET_ID)
-            )
-        else:
-            expression = (
-                pl.col(VALUE).diff(interval).over(ASSET_ID) / interval
-            )
-    elif name == "remove_repeated":
+    if name == "remove_repeated":
         previous = pl.col(VALUE).shift(1).over(ASSET_ID)
         expression = (
             pl.when(pl.col(VALUE) == previous)
@@ -199,8 +164,6 @@ def _plan_general_time_series(
 
 
 for _plan_name, _plan_transformer in {
-    "delta": delta,
-    "rate_of_change": rate_of_change,
     "remove_repeated": remove_repeated,
     "date_age_constraint": date_age_constraint,
 }.items():
@@ -225,9 +188,7 @@ def _plan_general_pointwise(
     asset_time_ordered: bool,
 ) -> tuple[pl.LazyFrame, str | None, bool]:
     value = pl.col(VALUE)
-    if name == "nonnans":
-        expression = value.fill_nan(None).fill_null(0.0)
-    elif name == "notnan":
+    if name == "notnan":
         expression = (value.is_not_null() & ~value.is_nan()).cast(pl.Float64)
     elif name == "denoise":
         threshold = config.get("threshold", 1e-12)
@@ -260,7 +221,6 @@ def _plan_general_pointwise(
 
 
 for _plan_name, _plan_transformer in {
-    "nonnans": nonnans,
     "notnan": notnan,
     "denoise": denoise,
     "posonly": posonly,

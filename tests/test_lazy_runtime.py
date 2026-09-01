@@ -22,10 +22,12 @@ from bagelquant_core.transformer import (
     identity,
     lag,
     pct_change,
+    repeat_count,
     rolling_ols,
     rolling_mean,
     rolling_percentile,
     rolling_rank,
+    streak_count,
 )
 from bagelquant_core.transformer.core import transformer
 
@@ -165,6 +167,43 @@ def test_trace_rules_preserve_exact_shift_fill_and_rolling_dates() -> None:
         "backward": [days[0], days[2], days[2]],
         "rolling": [days[0], days[0], days[2]],
     }
+
+
+def test_run_length_traces_cover_only_the_current_causal_run() -> None:
+    days = [date(2024, 3, day) for day in range(1, 6)]
+    available = [days[0], days[4], days[2], days[3], days[4]]
+    domain = Domain(calendar=days, universe=["A"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": days,
+                "asset_id": ["A"] * 5,
+                "value": [1.0, 1.0, 2.0, 2.0, 3.0],
+                "observation_date": days,
+                "base_available_date": available,
+            }
+        ),
+        domain,
+        trace_columns=("observation_date", "base_available_date"),
+    )
+
+    repeated = repeat_count(source).compute().collect(include_traces=True)
+    streaked = streak_count(source).compute().collect(include_traces=True)
+
+    assert repeated["base_available_date"].to_list() == [
+        days[0],
+        days[4],
+        days[4],
+        days[4],
+        days[4],
+    ]
+    assert streaked["base_available_date"].to_list() == [
+        days[0],
+        days[4],
+        days[4],
+        days[3],
+        days[4],
+    ]
 
 
 def test_custom_operator_with_traces_must_declare_trace_rule() -> None:

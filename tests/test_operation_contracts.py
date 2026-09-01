@@ -19,13 +19,12 @@ from bagelquant_core.transformer import (
     group_percentile,
     group_rankpct,
     inv_log_sqrt_rank,
+    fillna_zero,
     log,
     log1p,
     log_rank,
-    logrank,
     negonly,
     net_scale,
-    nonnans,
     non_nan_to_one,
     non_nan_to_zero,
     normalize,
@@ -35,7 +34,6 @@ from bagelquant_core.transformer import (
     orthogonalize,
     project,
     rankpct,
-    rate_of_change,
     rolling_kurt,
     rolling_ols,
     rolling_percentile,
@@ -69,7 +67,7 @@ def _single_time(values_: list[float | None], *, name: str = "x"):
 def test_missing_value_and_sign_filters_keep_distinct_contracts() -> None:
     source = _single_time([None, float("nan"), -1.0, 0.0, 2.0])
 
-    filled = nonnans(source)
+    filled = fillna_zero(source)
     present = notnan(source)
     positive = posonly(source)
     negative = negonly(source)
@@ -135,31 +133,15 @@ def test_date_age_constraint_uses_trailing_valid_observations() -> None:
     ]
 
 
-def test_rate_of_change_is_interval_scaled_difference() -> None:
-    source = panel(
-        [
-            ("2024-01-01", "a", 10.0),
-            ("2024-01-02", "a", 13.0),
-            ("2024-01-03", "a", 18.0),
-        ]
-    )
-
-    graph = rate_of_change(source, interval=2)
-    graph.compute()
-
-    assert values(graph.output.collect(dense=True))[("2024-01-03", "a")] == 4.0
-
-
 def test_cross_sectional_scaling_and_rank_contracts() -> None:
     source = _single_time([-2.0, -1.0, 1.0, 1.0, 3.0])
 
     normalized = normalize(source)
     net = net_scale(source)
     dense = rankpct(source)
-    average_log = logrank(source)
-    equivalent_log = log_rank(source)
+    average_log = log_rank(source)
     inverse = inv_log_sqrt_rank(source)
-    for graph in (normalized, net, dense, average_log, equivalent_log, inverse):
+    for graph in (normalized, net, dense, average_log, inverse):
         graph.compute()
 
     assert list(values(normalized.output.collect(dense=True)).values()) == pytest.approx([
@@ -177,9 +159,6 @@ def test_cross_sectional_scaling_and_rank_contracts() -> None:
     )
     assert list(values(average_log.output.collect(dense=True)).values()) == pytest.approx(
         [math.log(0.2), math.log(0.4), math.log(0.7), math.log(0.7), 0.0]
-    )
-    assert values(equivalent_log.output.collect(dense=True)) == pytest.approx(
-        values(average_log.output.collect(dense=True))
     )
     assert values(inverse.output.collect(dense=True))[("2024-01-01", "e")] == 0.0
 

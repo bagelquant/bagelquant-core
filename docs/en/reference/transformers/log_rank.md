@@ -1,6 +1,6 @@
 # `log_rank`
 
-Apply a negative logarithm to same-date cross-sectional percentile ranks.
+Apply a natural logarithm to same-date cross-sectional percentile ranks.
 
 ## Signature
 

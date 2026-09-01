@@ -26,7 +26,7 @@ from bagelquant_core.composer import (
     weighted_sum,
 )
 from bagelquant_core.transformer import (
-    abs_value,
+    abs as absolute_value,
     constant,
     ewm_mean,
     negate,
@@ -497,7 +497,7 @@ def _case_runner(
                 graph = (
                     negate(graph)
                     if index % 2 == 0
-                    else abs_value(graph)
+                    else absolute_value(graph)
                 )
         elif case == "rolling_chain_20":
             graph = base
@@ -525,7 +525,7 @@ def _case_runner(
                 elif index % 4 == 2:
                     graph = ewm_mean(graph, alpha=0.2)
                 else:
-                    graph = abs_value(graph)
+                    graph = absolute_value(graph)
         elif case == "semantic_cse_5":
             graph = Graph(
                 outputs=[

@@ -61,14 +61,14 @@ _DENSE_TRANSFORMERS = {
     "bfill",
     "constant",
     "date_age_constraint",
-    "delta",
     "diff",
+    "diff_from_last_change",
     "ffill",
     "fillna",
     "fillna_zero",
     "lag",
     "pct_change",
-    "rate_of_change",
+    "pct_change_from_last_change",
     "remove_repeated",
 }
 _EAGER_TRANSFORMERS = {
@@ -152,7 +152,12 @@ def _transformer_trace_rule(name: str) -> TraceRule:
         return TraceRule.PARENT_MAX
     if name == "lag":
         return TraceRule.SHIFT
-    if name in {"diff", "pct_change", "delta", "rate_of_change"}:
+    if name in {
+        "diff",
+        "diff_from_last_change",
+        "pct_change",
+        "pct_change_from_last_change",
+    }:
         return TraceRule.CURRENT_AND_SHIFT_MAX
     if name.startswith("rolling_") or name.startswith("ewm_"):
         return TraceRule.ROLLING_MAX

@@ -12,11 +12,11 @@ Panel | Graph -> Graph
 
 内置 transformer 覆盖常见因子处理步骤：
 
-- 基础元素级操作，例如 `identity`、`abs_value`、`negate`
+- 基础元素级操作，例如 `identity`、`abs`、`negate`
 - 缺失值处理，例如 `fillna`、`ffill`、`bfill`
 - 滚动窗口，例如 `rolling_mean`、`rolling_std`、`rolling_zscore`
 - 标准化和排序，例如 `rank`、`rankpct`、`zscore`、`winsorize`
-- 极值和变换，例如 `truncate`、`trim`、`boxcox`、`fisher`
+- 极值和变换，例如 `truncate`、`trim`、`boxcox`、`arctanh`
 - 同日期截面操作，例如 `rank`、`zscore`、`winsorize`
 - 带命名 Panel 参数的分组与中性化操作，例如
   `group_demean(source, group=industry)` 和

@@ -45,7 +45,7 @@ def test_all_registered_operations_have_curated_authoritative_summaries() -> Non
         )
     ]
 
-    assert len(transformers) == 98
+    assert len(transformers) == 96
     assert len(composers) == 24
     for operation in [*transformers, *composers]:
         name = operation.operation.__name__
@@ -74,3 +74,20 @@ def test_operation_classification_and_examples_cover_the_public_catalog() -> Non
             assert example.inputs
             assert not example.output.data.is_empty()
             assert operation_category(name, kind=kind)
+
+
+def test_duplicate_transformer_names_are_not_registered() -> None:
+    removed = {
+        "abs_value",
+        "delta",
+        "fisher",
+        "logrank",
+        "nonnans",
+        "rate_of_change",
+    }
+    names = {
+        TRANSFORMER_REGISTRY.get(runtime).operation.__name__
+        for runtime in TRANSFORMER_REGISTRY.names()
+    }
+
+    assert removed.isdisjoint(names)

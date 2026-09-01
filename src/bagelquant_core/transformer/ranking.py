@@ -21,12 +21,6 @@ def nrank(frame: pl.DataFrame) -> pl.DataFrame:
     return unary(pct, 2.0 * pl.col(VALUE) - 1.0)
 
 
-@transformer
-def logrank(frame: pl.DataFrame) -> pl.DataFrame:
-    ranked = cross_section_rank(frame, pct=True)
-    return unary(ranked, pl.col(VALUE).log())
-
-
 def _plan_ranking(
     frame: pl.LazyFrame,
     operation: str,
@@ -39,15 +33,13 @@ def _plan_ranking(
             value.rank("dense").over(TIME)
             / value.n_unique().over(TIME)
         )
-    else:
+    elif operation == "nrank":
         percentile = (
             value.rank("average").over(TIME) / value.count().over(TIME)
         )
-        expression = (
-            2.0 * percentile - 1.0
-            if operation == "nrank"
-            else percentile.log()
-        )
+        expression = 2.0 * percentile - 1.0
+    else:
+        raise ValueError(f"unsupported ranking operation: {operation}")
     return _expression_plan(
         frame,
         expression,
@@ -59,7 +51,6 @@ def _plan_ranking(
 for _plan_name, _plan_transformer in {
     "rankpct": rankpct,
     "nrank": nrank,
-    "logrank": logrank,
 }.items():
     _plan_transformer._set_plan_operation(  # type: ignore[attr-defined]
         lambda frame, config, order, asset_time_ordered, name=_plan_name: (

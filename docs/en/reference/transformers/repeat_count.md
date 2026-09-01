@@ -1,11 +1,11 @@
-# `logrank`
+# `repeat_count`
 
-Return a logarithmically transformed same-date cross-sectional rank.
+Count consecutive equal valid values within each asset in time order.
 
 ## Signature
 
 ```python
-logrank(source, *, name=None, metadata=None)
+repeat_count(source, *, name=None, metadata=None)
 ```
 
 ## Parameters
@@ -25,7 +25,7 @@ logrank(source, *, name=None, metadata=None)
 ## Executable Panel example
 
 ```python
-logrank(source)
+repeat_count(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
@@ -37,23 +37,33 @@ output.
 | time | asset_id | value |
 |---|---|---:|
 | 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
+| 2024-01-02 | b | 3.0 |
+| 2024-01-03 | a | 1.0 |
 | 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| 2024-01-04 | a | 2.0 |
+| 2024-01-04 | b | 1.0 |
+| 2024-01-05 | a | 2.0 |
+| 2024-01-05 | b | 1.0 |
+| 2024-01-08 | a | 3.0 |
+| 2024-01-08 | b | 0.0 |
 
 ### Output
 
 | time | asset_id | value |
 |---|---|---:|
-| 2024-01-02 | a | -1.0986122886681098 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | -0.40546510810816444 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | -0.6931471805599453 |
-| 2024-01-03 | c | 0.0 |
+| 2024-01-02 | a | 1 |
+| 2024-01-02 | b | 1 |
+| 2024-01-03 | a | 2 |
+| 2024-01-03 | b | 1 |
+| 2024-01-04 | a | 1 |
+| 2024-01-04 | b | 1 |
+| 2024-01-05 | a | 2 |
+| 2024-01-05 | b | 2 |
+| 2024-01-08 | a | 1 |
+| 2024-01-08 | b | 1 |
 
 ## Panel and temporal semantics
 
 The primary input is one sparse long-form Panel keyed by `(time, asset_id)`; absent keys remain absent.
+
+History is grouped by `asset_id` and ordered by `time`; rows with insufficient observations remain missing.

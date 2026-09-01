@@ -6,15 +6,19 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from bagelquant_core import Domain, Panel, pct_change_frame
+from bagelquant_core import Domain, Graph, Panel, pct_change_frame
 from bagelquant_core.transformer import (
+    diff_from_last_change,
     kelly,
     kelly_nonan_standardize,
     kelly_rank_boxcox,
     kelly_rescaling_weight,
     lag,
+    pct_change_from_last_change,
     rank,
+    repeat_count,
     rolling_mean,
+    streak_count,
     zscore,
 )
 
@@ -96,6 +100,126 @@ def test_lag_uses_daily_domain_sessions_for_sparse_monthly_inputs() -> None:
         {"time": date(2024, 2, 2), "asset_id": "a", "value": None},
         {"time": date(2024, 2, 5), "asset_id": "a", "value": None},
     ]
+
+
+def test_repeat_and_change_transformers_reset_at_missing_values() -> None:
+    times = [f"2024-01-{day:02d}" for day in range(1, 9)]
+    domain = Domain(calendar=times, universe=["a", "b"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": times * 2,
+                "asset_id": ["a"] * 8 + ["b"] * 8,
+                "value": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    2.0,
+                    None,
+                    2.0,
+                    2.0,
+                    3.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    2.0,
+                    2.0,
+                ],
+            }
+        ),
+        domain,
+        name="input",
+    )
+
+    repeated = repeat_count(source).compute().collect(dense=True)
+    changed = diff_from_last_change(source).compute().collect(dense=True)
+    pct_changed = pct_change_from_last_change(source).compute().collect(dense=True)
+
+    assert repeated.filter(pl.col("asset_id") == "a")["value"].to_list() == [
+        1,
+        2,
+        3,
+        1,
+        None,
+        1,
+        2,
+        1,
+    ]
+    assert changed.filter(pl.col("asset_id") == "a")["value"].to_list() == [
+        None,
+        None,
+        None,
+        1.0,
+        None,
+        None,
+        None,
+        1.0,
+    ]
+    pct_b = pct_changed.filter(pl.col("asset_id") == "b")["value"].to_list()
+    assert pct_b[:2] == [None, None]
+    assert pct_b[2] == float("inf")
+    assert pct_b[3:6] == [None, -1.0, None]
+    assert pct_b[6] == float("inf")
+    assert pct_b[7] is None
+    assert repeated.schema["value"] == pl.Int64
+
+
+def test_streak_count_reversals_equal_values_and_missing_values() -> None:
+    times = [f"2024-01-{day:02d}" for day in range(1, 10)]
+    domain = Domain(calendar=times, universe=["a"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": times,
+                "asset_id": ["a"] * 9,
+                "value": [1.0, 2.0, 3.0, 2.0, 1.0, 1.0, 0.0, None, -1.0],
+            }
+        ),
+        domain,
+        name="input",
+    )
+
+    resetting = streak_count(source).compute().collect(dense=True)
+    holding = streak_count(
+        source, reset_on_equal=False, name="holding"
+    ).compute().collect(dense=True)
+
+    assert resetting["value"].to_list() == [0, 1, 2, 0, -1, 0, -1, None, 0]
+    assert holding["value"].to_list() == [0, 1, 2, 0, -1, -1, -2, None, 0]
+    assert resetting.schema["value"] == pl.Int64
+
+
+def test_streak_plan_matches_direct_execution_and_compiled_graph() -> None:
+    source = panel(
+        [
+            ("2024-01-01", "a", 1.0),
+            ("2024-01-02", "a", 2.0),
+            ("2024-01-03", "a", 3.0),
+            ("2024-01-04", "a", 3.0),
+            ("2024-01-05", "a", 4.0),
+        ],
+        name="input",
+    )
+    dense = source.collect(dense=True).sort(["asset_id", "time"], descending=True)
+    expected = streak_count.operation(dense, reset_on_equal=False)
+    graph = streak_count(source, reset_on_equal=False, name="streak")
+    actual = graph.compute().collect(dense=True)
+    compiled = Graph.compile(graph.spec())
+    restored = compiled.compute({"input": source}).collect(dense=True)
+
+    assert_frame_equal(actual, expected)
+    assert_frame_equal(restored, expected)
+    assert actual["value"].to_list() == [0, 1, 2, 2, 3]
+
+
+def test_streak_count_requires_a_boolean_reset_flag() -> None:
+    source = panel([("2024-01-01", "a", 1.0)])
+
+    with pytest.raises(TypeError, match="must be a boolean"):
+        streak_count(source, reset_on_equal=1).compute()
 
 
 def test_zscore_constant_cross_section_returns_null_or_nan() -> None:

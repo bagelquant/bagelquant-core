@@ -34,7 +34,7 @@ Built-ins are grouped by behavior:
 
 | Family | Transformers |
 | --- | --- |
-| Basic | `identity`, `abs_value`, `negate`, `diff`, `pct_change` |
+| Basic | `identity`, `abs`, `negate`, `diff`, `pct_change` |
 | Missing values | `fillna`, `fillna_zero`, `ffill`, `bfill` |
 | Replacement | `replace_non_nan`, `non_nan_to_one`, `non_nan_to_zero` |
 | Rolling | `rolling_mean`, `rolling_std`, `rolling_min`, `rolling_max`, `rolling_sum`, `ewm_mean`, `ewm_std`, `ewm_var` |
@@ -44,11 +44,12 @@ Built-ins are grouped by behavior:
 | Group & neutralization | `group_demean`, `group_mean`, `group_rank`, `group_percentile`, `group_zscore`, `orthogonalize` |
 | Masking & scaling | `mask`, `project`, `vol_scale` |
 | Rolling regression | `rolling_ols`, `rolling_ridge`, `rolling_lasso`, `rolling_elastic_net` |
-| General | `nonnans`, `notnan`, `denoise`, `posonly`, `negonly`, `lag`, `delta`, `rate_of_change`, `remove_repeated`, `date_age_constraint`, `constant`, `replace_inf` |
+| General | `notnan`, `denoise`, `posonly`, `negonly`, `lag`, `remove_repeated`, `date_age_constraint`, `constant`, `replace_inf` |
+| Streaks | `repeat_count`, `diff_from_last_change`, `pct_change_from_last_change`, `streak_count` |
 | Translation | `demean`, `translate_to_pos` |
-| Rank | `rankpct`, `nrank`, `logrank` |
+| Rank | `rankpct`, `nrank`, `log_rank` |
 | Outliers | `truncate`, `trim`, `trim_quantile` |
-| Variance stabilization | `boxcox`, `anscombe`, `freeman`, `fisher` |
+| Variance stabilization | `boxcox`, `anscombe`, `freeman`, `arctanh` |
 | Trigonometric | `sin`, `cos`, `arcsin`, `arccos`, `trig`, `arctanh`, `arctan` |
 | Kelly criterion | `kelly`, `kelly_nonan_standardize`, `kelly_rank_boxcox`, `kelly_rescaling_weight` |
 
@@ -59,7 +60,7 @@ Basic operations are element-wise or run per `asset_id` ordered by `time`:
 | Transformer | Behavior |
 | --- | --- |
 | `identity(source)` | Return input values unchanged. |
-| `abs_value(source)` | Return absolute values. |
+| `abs(source)` | Return absolute values. |
 | `negate(source)` | Negate values. |
 | `diff(source, periods=1)` | Calculate differences over time. |
 | `pct_change(source, periods=1)` | Calculate fractional changes over time, such as returns from a price panel. |

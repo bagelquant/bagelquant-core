@@ -17,6 +17,8 @@ OPERATION_DESCRIPTIONS = {
     "arctanh": "Return the inverse hyperbolic tangent of each element, masking values outside `(-1, 1)`.",
     "bfill": "Fill each asset's missing rows from later observations, ordered by time and bounded by the finite limit.",
     "boxcox": "Apply the Box-Cox power transform element-wise with the supplied lambda.",
+    "broadcast_by_time": "Broadcast one source value per date to every keyed row present in a second Panel.",
+    "ceil": "Round each element upward to the nearest integer.",
     "coalesce": "Return the first non-missing value from the supplied inputs for each cell.",
     "constant": "Replace every present keyed value with the configured constant while preserving missing membership.",
     "cos": "Return the cosine of each element.",

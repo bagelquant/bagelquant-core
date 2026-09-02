@@ -27,3 +27,8 @@ def sign(frame: pl.DataFrame) -> pl.DataFrame:
 @transformer
 def abs(frame: pl.DataFrame) -> pl.DataFrame:
     return unary(frame, pl.col(VALUE).abs())
+
+
+@transformer
+def ceil(frame: pl.DataFrame) -> pl.DataFrame:
+    return unary(frame, pl.col(VALUE).ceil())

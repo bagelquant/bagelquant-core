@@ -12,6 +12,7 @@ parameter contract, executable Panel example, and temporal semantics.
 - [`arctan`](./arctan.md)
 - [`arctanh`](./arctanh.md)
 - [`boxcox`](./boxcox.md)
+- [`ceil`](./ceil.md)
 - [`constant`](./constant.md)
 - [`cos`](./cos.md)
 - [`date_age_constraint`](./date_age_constraint.md)

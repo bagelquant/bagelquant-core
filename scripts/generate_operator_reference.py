@@ -34,6 +34,7 @@ EXCLUDED = {
 
 PARAMETER_DESCRIPTIONS = {
     "source": "Input numeric `Panel` or single-output `Graph`.",
+    "like": "Stock-domain `Panel` or single-output `Graph` whose dated keys define the broadcast output.",
     "lhs": "Left-hand numeric `Panel` or single-output `Graph`.",
     "rhs": "Right-hand numeric `Panel` or single-output `Graph`.",
     "frame": "Input numeric `Panel` or single-output `Graph`.",

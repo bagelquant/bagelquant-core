@@ -16,7 +16,7 @@ from .aggregation import (
 )
 from .arithmetic import add, div, mul, sub
 from .core import COMPOSER_REGISTRY, ComposerFunction, composer
-from .general import coalesce
+from .general import broadcast_by_time, coalesce
 from .math import (
     and_,
     equal,
@@ -40,6 +40,7 @@ __all__ = [
     "ComposerFunction",
     "add",
     "and_",
+    "broadcast_by_time",
     "coalesce",
     "composer",
     "div",

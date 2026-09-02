@@ -22,12 +22,9 @@ parameter contract, executable Panel example, and temporal semantics.
 - [`xand`](./xand.md)
 - [`xor`](./xor.md)
 
-## Missing data
-
-- [`coalesce`](./coalesce.md)
-
 ## Aggregation
 
+- [`broadcast_by_time`](./broadcast_by_time.md)
 - [`maximum`](./maximum.md)
 - [`mean`](./mean.md)
 - [`minimum`](./minimum.md)
@@ -36,6 +33,10 @@ parameter contract, executable Panel example, and temporal semantics.
 - [`sum_frames`](./sum_frames.md)
 - [`weighted_mean`](./weighted_mean.md)
 - [`weighted_sum`](./weighted_sum.md)
+
+## Missing data
+
+- [`coalesce`](./coalesce.md)
 
 ## Rolling statistics
 

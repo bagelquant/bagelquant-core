@@ -36,6 +36,14 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
     source, auxiliary, binary, group = _panels(name)
     config = _config(name)
     if kind == "composer":
+        if name == "broadcast_by_time":
+            source = Panel.from_domain(
+                source.collect(dense=False)
+                .filter(pl.col("asset_id") == "a")
+                .with_columns(pl.lit("benchmark").alias("asset_id")),
+                source.domain,
+                name="source",
+            )
         graph = operation(source, auxiliary, **config)
         inputs = (
             ExamplePanel("input_1", source.collect(dense=True)),

@@ -80,7 +80,7 @@ _EAGER_TRANSFORMERS = {
     "rolling_rank",
     "rolling_ridge",
 }
-_EAGER_COMPOSERS: set[str] = set()
+_EAGER_COMPOSERS = {"broadcast_by_time"}
 
 _PANEL_PARAMETER_TRANSFORMERS = {
     "group_demean",

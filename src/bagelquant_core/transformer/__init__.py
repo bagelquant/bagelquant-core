@@ -72,7 +72,7 @@ from .rolling import (
     rolling_var,
     rolling_zscore,
 )
-from .sign import abs, sign
+from .sign import abs, ceil, sign
 from .streaks import (
     diff_from_last_change,
     pct_change_from_last_change,
@@ -94,6 +94,7 @@ __all__ = [
     "arctanh",
     "bfill",
     "boxcox",
+    "ceil",
     "constant",
     "cos",
     "date_age_constraint",

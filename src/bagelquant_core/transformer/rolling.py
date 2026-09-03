@@ -7,10 +7,47 @@ import polars as pl
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like
+from ..operation_contract import InputDensity, OperationContract, TraceRule
 from .core import transformer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
 _RANK_BYTES_PER_WINDOW_VALUE = 8
+_SMOOTH_WINDOW = 10
+_SMOOTH_HALFLIFE = 3.0
+_SMOOTH_MIN_PERIODS = 5
+
+
+def _smooth_trace(
+    parents: tuple[pl.LazyFrame, ...],
+    result: pl.LazyFrame,
+    _config: dict[str, object],
+    traces: tuple[str, ...],
+) -> pl.LazyFrame:
+    """Carry the latest dependency date across the fixed smooth window."""
+
+    source = parents[0].sort([ASSET_ID, TIME])
+    traced = source.with_columns(
+        pl.col(trace)
+        .cast(pl.Int32)
+        .rolling_max(window_size=_SMOOTH_WINDOW, min_samples=1)
+        .over(ASSET_ID)
+        .cast(pl.Date)
+        .alias(trace)
+        for trace in traces
+    ).select(TIME, ASSET_ID, *traces)
+    return result.select(TIME, ASSET_ID).join(
+        traced,
+        on=[TIME, ASSET_ID],
+        how="left",
+        maintain_order="left",
+    )
+
+
+_SMOOTH_CONTRACT = OperationContract(
+    density=InputDensity.DENSE_REQUIRED,
+    trace_rule=TraceRule.CUSTOM,
+    trace_function=_smooth_trace,
+)
 
 
 def _validate_window(window: int, min_periods: int | None) -> int:
@@ -293,11 +330,58 @@ def ewm_std(
 
 @transformer
 def rolling_ewm_fw(
-    frame: pl.DataFrame, *, halflife: float, min_periods: int = 0
+    frame: pl.DataFrame,
+    *,
+    window: int,
+    halflife: float,
+    min_periods: int = 0,
 ) -> pl.DataFrame:
+    minp = _validate_window(window, min_periods)
     if halflife <= 0:
         raise ValueError("rolling_ewm_fw halflife must be positive")
-    return ewm_mean.operation(frame, halflife=halflife, min_periods=min_periods)
+    return _rolling_expr(
+        frame,
+        _rolling_ewm_fw_expr(
+            window=window,
+            halflife=halflife,
+            min_periods=minp,
+        ),
+    )
+
+
+@transformer(contract=_SMOOTH_CONTRACT)
+def smooth(frame: pl.DataFrame) -> pl.DataFrame:
+    return rolling_ewm_fw.operation(
+        frame,
+        window=_SMOOTH_WINDOW,
+        halflife=_SMOOTH_HALFLIFE,
+        min_periods=_SMOOTH_MIN_PERIODS,
+    )
+
+
+def _rolling_ewm_fw_expr(
+    *, window: int, halflife: float, min_periods: int
+) -> pl.Expr:
+    decay = float(np.exp(np.log(0.5) / halflife))
+    weights = [float(decay**age) for age in range(window - 1, -1, -1)]
+    clean = pl.col(VALUE).fill_nan(None)
+    valid = clean.is_not_null()
+    numerator = clean.fill_null(0.0).rolling_sum(
+        window,
+        weights=weights,
+        min_samples=1,
+    )
+    denominator = valid.cast(pl.Float64).rolling_sum(
+        window,
+        weights=weights,
+        min_samples=1,
+    )
+    valid_count = valid.cast(pl.UInt32).rolling_sum(window, min_samples=1)
+    return (
+        pl.when((valid_count >= min_periods) & (denominator > 0.0))
+        .then(numerator / denominator)
+        .otherwise(None)
+    )
 
 
 def _plan_rolling_operation(
@@ -383,23 +467,27 @@ def _plan_rolling_operation(
             )
         else:
             raise ValueError(f"unsupported rolling plan operation: {name}")
-    else:
-        if name == "rolling_ewm_fw":
-            halflife = float(config["halflife"])
-            if halflife <= 0:
-                raise ValueError("rolling_ewm_fw halflife must be positive")
-            parameters: dict[str, object] = {
-                "com": None,
-                "span": None,
-                "halflife": halflife,
-                "alpha": None,
-                "min_periods": int(config.get("min_periods", 0)),
-                "adjust": True,
-                "ignore_na": False,
-            }
-            name = "ewm_mean"
+    elif name in {"rolling_ewm_fw", "smooth"}:
+        if name == "smooth":
+            window = _SMOOTH_WINDOW
+            rolling_min_periods = _SMOOTH_MIN_PERIODS
+            halflife = _SMOOTH_HALFLIFE
         else:
-            parameters = config
+            rolling_min_periods = config.get("min_periods", 0)
+            halflife = float(config["halflife"])
+        minp = _validate_window(
+            window,
+            None if rolling_min_periods is None else int(rolling_min_periods),
+        )
+        if halflife <= 0:
+            raise ValueError("rolling_ewm_fw halflife must be positive")
+        expression = _rolling_ewm_fw_expr(
+            window=window,
+            halflife=halflife,
+            min_periods=minp,
+        )
+    else:
+        parameters = config
         com = parameters.get("com")
         span = parameters.get("span")
         halflife = parameters.get("halflife")
@@ -471,6 +559,7 @@ for _plan_name, _plan_transformer in {
     "ewm_var": ewm_var,
     "ewm_std": ewm_std,
     "rolling_ewm_fw": rolling_ewm_fw,
+    "smooth": smooth,
 }.items():
     _register_plan_operation(_plan_name, _plan_transformer)
 

@@ -1,6 +1,6 @@
 # `anscombe`
 
-Apply the Anscombe square-root transform to stabilize count-data variance.
+Translate each date cross-section to a zero minimum, then apply the Anscombe square-root transform.
 
 ## Signature
 
@@ -29,31 +29,25 @@ anscombe(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -2.0 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | 1.0 |
-| 2024-01-03 | a | -1.0 |
-| 2024-01-03 | b | 0.5 |
-| 2024-01-03 | c | 2.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -2 | 0 | 1 |
+| 2024-01-03 | -1 | 0.5 | 2 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.224744871391589 |
-| 2024-01-02 | b | 3.082207001484488 |
-| 2024-01-02 | c | 3.6742346141747673 |
-| 2024-01-03 | a | 1.224744871391589 |
-| 2024-01-03 | b | 2.7386127875258306 |
-| 2024-01-03 | c | 3.6742346141747673 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1.22474 | 3.08221 | 3.67423 |
+| 2024-01-03 | 1.22474 | 2.73861 | 3.67423 |
 
 ## Panel and temporal semantics
 
 The primary input is one sparse long-form Panel keyed by `(time, asset_id)`; absent keys remain absent.
+
+Each date cross-section is calculated independently, so values from other dates cannot influence the result.

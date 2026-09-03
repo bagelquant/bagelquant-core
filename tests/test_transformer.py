@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from bagelquant_core import Domain, Graph, Panel, pct_change_frame
+from bagelquant_core import Domain, ExecutionRuntime, Graph, Panel, pct_change_frame
 from bagelquant_core.transformer import (
     diff_from_last_change,
     kelly,
@@ -17,7 +17,9 @@ from bagelquant_core.transformer import (
     pct_change_from_last_change,
     rank,
     repeat_count,
+    rolling_ewm_fw,
     rolling_mean,
+    smooth,
     streak_count,
     zscore,
 )
@@ -57,6 +59,122 @@ def test_rolling_mean_uses_asset_id_groups() -> None:
 
     assert values(graph.output.collect(dense=True))[("2024-01-02", "a")] == 2.0
     assert values(graph.output.collect(dense=True))[("2024-01-02", "b")] == 15.0
+
+
+def test_rolling_ewm_fw_uses_only_the_configured_trailing_window() -> None:
+    source = panel(
+        [
+            ("2024-01-01", "a", 1.0),
+            ("2024-01-02", "a", 2.0),
+            ("2024-01-03", "a", 4.0),
+            ("2024-01-04", "a", 8.0),
+        ]
+    )
+
+    graph = rolling_ewm_fw(
+        source,
+        window=2,
+        halflife=1.0,
+        min_periods=2,
+    )
+    actual = graph.compute().collect(dense=True)
+    eager = rolling_ewm_fw.operation(
+        source.collect(dense=True),
+        window=2,
+        halflife=1.0,
+        min_periods=2,
+    )
+
+    assert_frame_equal(actual, eager)
+    result = values(actual)
+    assert result[("2024-01-01", "a")] is None
+    assert result[("2024-01-03", "a")] == pytest.approx(10.0 / 3.0)
+    assert result[("2024-01-04", "a")] == pytest.approx(20.0 / 3.0)
+
+    default_periods = rolling_ewm_fw(
+        source,
+        window=2,
+        halflife=1.0,
+    ).compute()
+    assert values(default_periods.collect(dense=True))[("2024-01-01", "a")] == 1.0
+
+
+def test_smooth_is_the_fixed_daily_rolling_ewm_preset() -> None:
+    rows = [
+        (f"2024-01-{day:02d}", asset, value)
+        for asset, series in (
+            (
+                "a",
+                [1000.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            ),
+            (
+                "b",
+                [2.0, 4.0, None, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0],
+            ),
+        )
+        for day, value in enumerate(series, start=1)
+    ]
+    source = panel(rows)
+    runtime = ExecutionRuntime()
+
+    actual = smooth(source).compute(runtime=runtime).collect(dense=True)
+    direct = smooth.operation(source.collect(dense=True))
+    expected = rolling_ewm_fw.operation(
+        source.collect(dense=True),
+        window=10,
+        halflife=3.0,
+        min_periods=5,
+    )
+
+    assert_frame_equal(actual, direct)
+    assert_frame_equal(actual, expected)
+    assert runtime.eager_barriers == 0
+    result = values(actual)
+    assert result[("2024-01-04", "a")] is None
+    assert result[("2024-01-05", "a")] is not None
+    assert result[("2024-01-05", "b")] is None
+    assert result[("2024-01-06", "b")] is not None
+
+    changed = panel(
+        [
+            (
+                time,
+                asset,
+                1.0 if time == "2024-01-01" and asset == "a" else value,
+            )
+            for time, asset, value in rows
+        ]
+    )
+    changed_result = values(smooth(changed).compute().collect(dense=True))
+    assert result[("2024-01-10", "a")] != changed_result[("2024-01-10", "a")]
+    assert result[("2024-01-11", "a")] == pytest.approx(
+        changed_result[("2024-01-11", "a")]
+    )
+
+    node = smooth(source).spec().to_dict()["nodes"][-1]
+    assert node["config"] == {
+        "transformer": "bagelquant_core.transformer.rolling.smooth"
+    }
+
+
+def test_smooth_window_counts_missing_domain_sessions() -> None:
+    times = [f"2024-02-{day:02d}" for day in range(1, 12)]
+    domain = Domain(calendar=times, universe=["a"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": [times[0], *times[2:]],
+                "asset_id": ["a"] * 10,
+                "value": [100.0, *([1.0] * 9)],
+            }
+        ),
+        domain,
+        name="source",
+    )
+
+    result = smooth(source).compute().collect(dense=True)
+
+    assert result[-1, "value"] == pytest.approx(1.0)
 
 
 def test_pct_change_frame_supports_runtime_consumers_without_a_graph() -> None:

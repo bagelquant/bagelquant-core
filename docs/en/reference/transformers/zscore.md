@@ -29,30 +29,22 @@ zscore(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 4 | 3 |
+| 2024-01-03 | missing | 2 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -1.0910894511799618 |
-| 2024-01-02 | b | 0.8728715609439696 |
-| 2024-01-02 | c | 0.21821789023599247 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | -0.7071067811865476 |
-| 2024-01-03 | c | 0.7071067811865476 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -1.09109 | 0.872872 | 0.218218 |
+| 2024-01-03 | missing | -0.707107 | 0.707107 |
 
 ## Panel and temporal semantics
 

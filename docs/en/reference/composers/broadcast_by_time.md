@@ -31,40 +31,28 @@ broadcast_by_time(input_1, input_2)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### input_1
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | missing |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | missing |
-| 2024-01-03 | c | missing |
+| time | a |
+|---|---:|
+| 2024-01-02 | 1 |
+| 2024-01-03 | 2 |
 ### input_2
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-02 | c | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 1.0 |
-| 2024-01-03 | c | 4.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 2 | 2 |
+| 2024-01-03 | 2 | 1 | 4 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | missing |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | missing |
-| 2024-01-03 | c | missing |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 1 | 1 |
+| 2024-01-03 | 2 | 2 | 2 |
 
 ## Panel and temporal semantics
 

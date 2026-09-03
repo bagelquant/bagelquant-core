@@ -31,30 +31,22 @@ boxcox(source, lambda_=0.5)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -2.0 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | 1.0 |
-| 2024-01-03 | a | -1.0 |
-| 2024-01-03 | b | 0.5 |
-| 2024-01-03 | c | 2.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -2 | 0 | 1 |
+| 2024-01-03 | -1 | 0.5 | 2 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | 0.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | -0.5857864376269049 |
-| 2024-01-03 | c | 0.8284271247461903 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | missing | missing | 0 |
+| 2024-01-03 | missing | -0.585786 | 0.828427 |
 
 ## Panel and temporal semantics
 

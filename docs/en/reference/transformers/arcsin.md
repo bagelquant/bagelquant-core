@@ -29,30 +29,22 @@ arcsin(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -2.0 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | 1.0 |
-| 2024-01-03 | a | -1.0 |
-| 2024-01-03 | b | 0.5 |
-| 2024-01-03 | c | 2.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -2 | 0 | 1 |
+| 2024-01-03 | -1 | 0.5 | 2 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | 1.5707963267948966 |
-| 2024-01-03 | a | -1.5707963267948966 |
-| 2024-01-03 | b | 0.5235987755982989 |
-| 2024-01-03 | c | missing |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | missing | 0 | 1.5708 |
+| 2024-01-03 | -1.5708 | 0.523599 | missing |
 
 ## Panel and temporal semantics
 

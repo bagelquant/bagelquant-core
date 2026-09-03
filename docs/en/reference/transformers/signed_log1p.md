@@ -29,30 +29,22 @@ signed_log1p(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 4 | 3 |
+| 2024-01-03 | missing | 2 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 0.6931471805599453 |
-| 2024-01-02 | b | 1.6094379124341003 |
-| 2024-01-02 | c | 1.3862943611198906 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 1.0986122886681098 |
-| 2024-01-03 | c | 2.1972245773362196 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 0.693147 | 1.60944 | 1.38629 |
+| 2024-01-03 | missing | 1.09861 | 2.19722 |
 
 ## Panel and temporal semantics
 

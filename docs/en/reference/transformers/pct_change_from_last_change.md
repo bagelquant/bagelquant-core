@@ -29,38 +29,28 @@ pct_change_from_last_change(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 3.0 |
-| 2024-01-03 | a | 1.0 |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-04 | a | 2.0 |
-| 2024-01-04 | b | 1.0 |
-| 2024-01-05 | a | 2.0 |
-| 2024-01-05 | b | 1.0 |
-| 2024-01-08 | a | 3.0 |
-| 2024-01-08 | b | 0.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 3 |
+| 2024-01-03 | 1 | 2 |
+| 2024-01-04 | 2 | 1 |
+| 2024-01-05 | 2 | 1 |
+| 2024-01-08 | 3 | 0 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | -0.33333333333333337 |
-| 2024-01-04 | a | 1.0 |
-| 2024-01-04 | b | -0.5 |
-| 2024-01-05 | a | missing |
-| 2024-01-05 | b | missing |
-| 2024-01-08 | a | 0.5 |
-| 2024-01-08 | b | -1.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | missing | missing |
+| 2024-01-03 | missing | -0.333333 |
+| 2024-01-04 | 1 | -0.5 |
+| 2024-01-05 | missing | missing |
+| 2024-01-08 | 0.5 | -1 |
 
 ## Panel and temporal semantics
 

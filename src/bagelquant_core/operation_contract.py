@@ -31,6 +31,7 @@ class TraceRule(StrEnum):
     SHIFT = "shift"
     CURRENT_AND_SHIFT_MAX = "current_and_shift_max"
     ROLLING_MAX = "rolling_max"
+    CUMULATIVE_MAX = "cumulative_max"
     FORWARD_FILL = "forward_fill"
     BACKWARD_FILL = "backward_fill"
     CUSTOM = "custom"
@@ -67,6 +68,10 @@ _DENSE_TRANSFORMERS = {
     "fillna",
     "fillna_zero",
     "lag",
+    "kelly",
+    "kelly_nonan_standardize",
+    "kelly_rank_boxcox",
+    "kelly_rescaling_weight",
     "pct_change",
     "pct_change_from_last_change",
     "remove_repeated",
@@ -157,9 +162,16 @@ def _transformer_trace_rule(name: str) -> TraceRule:
         "diff_from_last_change",
         "pct_change",
         "pct_change_from_last_change",
+        "remove_repeated",
     }:
         return TraceRule.CURRENT_AND_SHIFT_MAX
-    if name.startswith("rolling_") or name.startswith("ewm_"):
+    if name.startswith("ewm_"):
+        return TraceRule.CUMULATIVE_MAX
+    if (
+        name.startswith("rolling_")
+        or name.startswith("kelly")
+        or name == "date_age_constraint"
+    ):
         return TraceRule.ROLLING_MAX
     if name == "ffill":
         return TraceRule.FORWARD_FILL

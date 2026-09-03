@@ -1,6 +1,6 @@
 # `negonly`
 
-Keep negative values and suppress non-negative values.
+Keep non-positive values, including zero, and mask positive values.
 
 ## Signature
 
@@ -29,30 +29,22 @@ negonly(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -2 | 0 | 1.2 |
+| 2024-01-03 | -0.5 | 0.2 | 2.7 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | missing |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | missing |
-| 2024-01-03 | c | missing |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -2 | 0 | missing |
+| 2024-01-03 | -0.5 | missing | missing |
 
 ## Panel and temporal semantics
 

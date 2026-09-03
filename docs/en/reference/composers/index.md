@@ -8,6 +8,7 @@ parameter contract, executable Panel example, and temporal semantics.
 - [`add`](./add.md)
 - [`div`](./div.md)
 - [`mul`](./mul.md)
+- [`power_df`](./power_df.md)
 - [`sub`](./sub.md)
 
 ## Logical & comparison
@@ -28,7 +29,6 @@ parameter contract, executable Panel example, and temporal semantics.
 - [`maximum`](./maximum.md)
 - [`mean`](./mean.md)
 - [`minimum`](./minimum.md)
-- [`power_df`](./power_df.md)
 - [`product`](./product.md)
 - [`sum_frames`](./sum_frames.md)
 - [`weighted_mean`](./weighted_mean.md)

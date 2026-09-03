@@ -10,8 +10,9 @@ from .core import _expression_plan, transformer
 
 @transformer
 def rankpct(frame: pl.DataFrame) -> pl.DataFrame:
-    dense = pl.col(VALUE).rank("dense").over(TIME)
-    distinct = pl.col(VALUE).n_unique().over(TIME)
+    value = pl.col(VALUE).fill_nan(None)
+    dense = value.rank("dense").over(TIME)
+    distinct = value.drop_nulls().n_unique().over(TIME)
     return panel_like(frame, dense / distinct)
 
 
@@ -29,9 +30,10 @@ def _plan_ranking(
 ) -> tuple[pl.LazyFrame, str | None, bool]:
     value = pl.col(VALUE)
     if operation == "rankpct":
+        clean = value.fill_nan(None)
         expression = (
-            value.rank("dense").over(TIME)
-            / value.n_unique().over(TIME)
+            clean.rank("dense").over(TIME)
+            / clean.drop_nulls().n_unique().over(TIME)
         )
     elif operation == "nrank":
         percentile = (

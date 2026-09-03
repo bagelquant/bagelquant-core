@@ -29,40 +29,28 @@ coalesce(input_1, input_2)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### input_1
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | missing |
-| 2024-01-03 | c | inf |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | missing | 3 |
+| 2024-01-03 | missing | missing | inf |
 ### input_2
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 10.0 |
-| 2024-01-02 | b | 30.0 |
-| 2024-01-02 | c | 50.0 |
-| 2024-01-03 | a | 20.0 |
-| 2024-01-03 | b | 40.0 |
-| 2024-01-03 | c | 60.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 10 | 30 | 50 |
+| 2024-01-03 | 20 | 40 | 60 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 30.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | 20.0 |
-| 2024-01-03 | b | 40.0 |
-| 2024-01-03 | c | inf |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 30 | 3 |
+| 2024-01-03 | 20 | 40 | inf |
 
 ## Panel and temporal semantics
 

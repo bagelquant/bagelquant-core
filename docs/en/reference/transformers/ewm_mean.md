@@ -43,34 +43,26 @@ ewm_mean(source, span=2.0)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 3.0 |
-| 2024-01-04 | a | 4.0 |
-| 2024-01-04 | b | 5.0 |
-| 2024-01-05 | a | 7.0 |
-| 2024-01-05 | b | 8.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 2 |
+| 2024-01-03 | 2 | 3 |
+| 2024-01-04 | 4 | 5 |
+| 2024-01-05 | 7 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 1.75 |
-| 2024-01-03 | b | 2.75 |
-| 2024-01-04 | a | 3.3076923076923075 |
-| 2024-01-04 | b | 4.3076923076923075 |
-| 2024-01-05 | a | 5.8 |
-| 2024-01-05 | b | 6.8 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 2 |
+| 2024-01-03 | 1.75 | 2.75 |
+| 2024-01-04 | 3.30769 | 4.30769 |
+| 2024-01-05 | 5.8 | 6.8 |
 
 ## Panel and temporal semantics
 

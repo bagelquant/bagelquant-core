@@ -29,31 +29,25 @@ log_rank(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 4 | 3 |
+| 2024-01-03 | missing | 2 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -1.0986122886681098 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | -0.40546510810816444 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | -0.6931471805599453 |
-| 2024-01-03 | c | 0.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -1.09861 | 0 | -0.405465 |
+| 2024-01-03 | missing | -0.693147 | 0 |
 
 ## Panel and temporal semantics
 
 The primary input is one sparse long-form Panel keyed by `(time, asset_id)`; absent keys remain absent.
+
+Each date cross-section is calculated independently, so values from other dates cannot influence the result.

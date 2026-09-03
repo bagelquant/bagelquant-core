@@ -71,6 +71,7 @@ from .rolling import (
     rolling_sum,
     rolling_var,
     rolling_zscore,
+    smooth,
 )
 from .sign import abs, ceil, sign
 from .streaks import (
@@ -160,6 +161,7 @@ __all__ = [
     "rolling_sum",
     "rolling_var",
     "rolling_zscore",
+    "smooth",
     "sign",
     "sin",
     "signed_log1p",

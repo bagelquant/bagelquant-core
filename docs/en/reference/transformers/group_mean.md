@@ -31,34 +31,25 @@ group_mean(source, group=group)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 3.0 |
-| 2024-01-02 | c | 6.0 |
-| 2024-01-02 | d | 10.0 |
+| time | a | b | c | d |
+|---|---:|---:|---:|---:|
+| 2024-01-02 | 1 | 3 | 6 | 10 |
 ### Panel parameter: group
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | tech |
-| 2024-01-02 | b | tech |
-| 2024-01-02 | c | bank |
-| 2024-01-02 | d | bank |
+| time | a | b | c | d |
+|---|---:|---:|---:|---:|
+| 2024-01-02 | tech | tech | bank | bank |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 2.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-02 | c | 8.0 |
-| 2024-01-02 | d | 8.0 |
+| time | a | b | c | d |
+|---|---:|---:|---:|---:|
+| 2024-01-02 | 2 | 2 | 8 | 8 |
 
 ## Panel and temporal semantics
 

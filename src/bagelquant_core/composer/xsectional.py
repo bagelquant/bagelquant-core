@@ -18,10 +18,14 @@ _ORTHOGONALIZE_CONDITION_LIMIT = 1e-3
 
 
 def _grouped(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
-    return frame.rename({VALUE: "x"}).join(
-        group.rename({VALUE: "group"}),
-        on=[TIME, ASSET_ID],
-        how="inner",
+    return (
+        frame.rename({VALUE: "x"})
+        .join(
+            group.rename({VALUE: "group"}),
+            on=[TIME, ASSET_ID],
+            how="inner",
+        )
+        .drop_nulls("group")
     )
 
 
@@ -78,19 +82,21 @@ def _orthogonalize_aligned(
             frames[1],
             fit_intercept=fit_intercept,
         )
-    factor_columns = [
-        f"f{index}" for index in range(len(frames) - 1)
-    ]
-    data = frames[0].select(TIME, ASSET_ID).with_columns(
-        frames[0].get_column(VALUE).alias("target"),
-        *[
-            frame.get_column(VALUE).alias(column)
-            for frame, column in zip(
-                frames[1:],
-                factor_columns,
-                strict=True,
-            )
-        ],
+    factor_columns = [f"f{index}" for index in range(len(frames) - 1)]
+    data = (
+        frames[0]
+        .select(TIME, ASSET_ID)
+        .with_columns(
+            frames[0].get_column(VALUE).alias("target"),
+            *[
+                frame.get_column(VALUE).alias(column)
+                for frame, column in zip(
+                    frames[1:],
+                    factor_columns,
+                    strict=True,
+                )
+            ],
+        )
     )
     return _orthogonalize_data(
         data,
@@ -118,10 +124,7 @@ def _orthogonalize_data(
     offsets = group_offsets
     if offsets is None:
         lengths = (
-            data.group_by(TIME, maintain_order=True)
-            .len()
-            .get_column("len")
-            .to_numpy()
+            data.group_by(TIME, maintain_order=True).len().get_column("len").to_numpy()
         )
         offsets = np.empty(len(lengths) + 1, dtype=np.int64)
         offsets[0] = 0
@@ -156,8 +159,7 @@ def _orthogonalize_data(
             if (
                 singular_values[0] > cutoff
                 and singular_values[0]
-                > _ORTHOGONALIZE_CONDITION_LIMIT
-                * singular_values[-1]
+                > _ORTHOGONALIZE_CONDITION_LIMIT * singular_values[-1]
             ):
                 coefficients = np.linalg.solve(
                     gram,
@@ -170,9 +172,7 @@ def _orthogonalize_data(
                     rcond=None,
                 )[0]
             group_residuals = np.full(int(length), np.nan, dtype=float)
-            group_residuals[valid] = (
-                group_y[valid] - design @ coefficients
-            )
+            group_residuals[valid] = group_y[valid] - design @ coefficients
             residuals[offset:end] = group_residuals
     return data.select(TIME, ASSET_ID).with_columns(
         pl.Series(VALUE, residuals, nan_to_null=True)
@@ -209,9 +209,7 @@ def _orthogonalize_one_factor(
         centered_xx = sum_xx - (sum_x * sum_x) / n
         centered_xy = sum_xy - (sum_x * sum_y) / n
         mean_y = sum_y / n
-        slope = pl.when(centered_xx == 0).then(0.0).otherwise(
-            centered_xy / centered_xx
-        )
+        slope = pl.when(centered_xx == 0).then(0.0).otherwise(centered_xy / centered_xx)
         intercept = mean_y - slope * (sum_x / n)
         fitted = intercept + slope * pl.col("factor")
     else:
@@ -278,8 +276,9 @@ def group_zscore(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
 @transformer
 def group_rankpct(frame: pl.DataFrame, *, group: pl.DataFrame) -> pl.DataFrame:
     data = _grouped(frame, group)
-    rank = pl.col("x").rank("dense").over(TIME, "group")
-    count = pl.col("x").n_unique().over(TIME, "group")
+    value = pl.col("x").fill_nan(None)
+    rank = value.rank("dense").over(TIME, "group")
+    count = value.drop_nulls().n_unique().over(TIME, "group")
     return panel_like(data, rank / count)
 
 

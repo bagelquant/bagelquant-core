@@ -1,6 +1,6 @@
 # `denoise`
 
-Set same-date cross-sectional deviations below the configured magnitude threshold to zero.
+Set each value whose absolute magnitude is below the configured threshold to zero.
 
 ## Signature
 
@@ -27,34 +27,26 @@ denoise(source, *, threshold=1e-12, name=None, metadata=None)
 ## Executable Panel example
 
 ```python
-denoise(source)
+denoise(source, threshold=2.5)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 4 | 3 |
+| 2024-01-03 | missing | 2 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 0 | 4 | 3 |
+| 2024-01-03 | missing | 0 | 8 |
 
 ## Panel and temporal semantics
 

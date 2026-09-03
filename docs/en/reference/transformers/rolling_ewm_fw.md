@@ -1,17 +1,19 @@
 # `rolling_ewm_fw`
 
-Return a finite-window exponentially weighted per-asset statistic in time order.
+Return a finite-window exponentially weighted per-asset mean in time order.
 
 ## Signature
 
 ```python
-rolling_ewm_fw(source, *, halflife, min_periods=0, name=None, metadata=None)
+rolling_ewm_fw(source, *, window, halflife, min_periods=0, name=None, metadata=None)
 ```
 
 ## Parameters
 
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
+**window** : int
+: Positive trailing-window length in rows.
 **halflife** : float
 : Half-life decay parameter. Supply exactly one decay parameter.
 **min_periods** : int, default `0`
@@ -29,38 +31,30 @@ rolling_ewm_fw(source, *, halflife, min_periods=0, name=None, metadata=None)
 ## Executable Panel example
 
 ```python
-rolling_ewm_fw(source, halflife=2.0)
+rolling_ewm_fw(source, window=2, halflife=2.0)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 3.0 |
-| 2024-01-04 | a | 4.0 |
-| 2024-01-04 | b | 5.0 |
-| 2024-01-05 | a | 7.0 |
-| 2024-01-05 | b | 8.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 2 |
+| 2024-01-03 | 2 | 3 |
+| 2024-01-04 | 4 | 5 |
+| 2024-01-05 | 7 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 1.585786437626905 |
-| 2024-01-03 | b | 2.585786437626905 |
-| 2024-01-04 | a | 2.6796227589829593 |
-| 2024-01-04 | b | 3.6796227589829593 |
-| 2024-01-05 | a | 4.366835021129445 |
-| 2024-01-05 | b | 5.366835021129445 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 2 |
+| 2024-01-03 | 1.58579 | 2.58579 |
+| 2024-01-04 | 3.17157 | 4.17157 |
+| 2024-01-05 | 5.75736 | 6.75736 |
 
 ## Panel and temporal semantics
 

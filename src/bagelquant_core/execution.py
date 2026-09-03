@@ -1536,6 +1536,15 @@ class ExecutionRuntime:
                 .cast(pl.Date)
                 for trace in available
             )
+        elif rule == TraceRule.CUMULATIVE_MAX:
+            transformed = base.with_columns(
+                pl.col(trace)
+                .cast(pl.Int32)
+                .cum_max()
+                .over(ASSET_ID)
+                .cast(pl.Date)
+                for trace in available
+            )
         elif rule in {TraceRule.FORWARD_FILL, TraceRule.BACKWARD_FILL}:
             strategy = (
                 "forward"

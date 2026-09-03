@@ -29,30 +29,22 @@ arctan(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 4.0 |
-| 2024-01-02 | c | 3.0 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-03 | c | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | 4 | 3 |
+| 2024-01-03 | missing | 2 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 0.7853981633974483 |
-| 2024-01-02 | b | 1.3258176636680326 |
-| 2024-01-02 | c | 1.2490457723982544 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 1.1071487177940904 |
-| 2024-01-03 | c | 1.446441332248135 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 0.785398 | 1.32582 | 1.24905 |
+| 2024-01-03 | missing | 1.10715 | 1.44644 |
 
 ## Panel and temporal semantics
 

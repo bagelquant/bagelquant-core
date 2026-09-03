@@ -15,6 +15,12 @@ from ..frame import (
     _balanced_inner_join,
     panel_like,
 )
+from ..operation_contract import (
+    ExecutionMode,
+    InputDensity,
+    OperationContract,
+    TraceRule,
+)
 from ..transformer.core import transformer
 from .core import _horizontal_value_plan, composer
 
@@ -161,7 +167,56 @@ def _valid_pair(data: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-@composer
+def _rolling_pair_trace(
+    parents: tuple[pl.LazyFrame, ...],
+    result: pl.LazyFrame,
+    config: dict[str, object],
+    traces: tuple[str, ...],
+) -> pl.LazyFrame:
+    """Carry dependency dates across both paired trailing windows."""
+
+    window = config.get("window")
+    if not isinstance(window, int) or isinstance(window, bool):
+        raise ValueError("window must be positive")
+    _validate_window(window, config.get("min_periods"))
+    output = result.select(TIME, ASSET_ID)
+    dependencies: dict[str, list[str]] = {trace: [] for trace in traces}
+    for parent_index, parent in enumerate(parents):
+        aliases = {
+            trace: f"__rolling_pair_trace_{parent_index}_{trace}"
+            for trace in traces
+        }
+        traced = parent.sort([ASSET_ID, TIME]).with_columns(
+            pl.col(trace)
+            .cast(pl.Int32)
+            .rolling_max(window_size=window, min_samples=1)
+            .over(ASSET_ID)
+            .cast(pl.Date)
+            .alias(alias)
+            for trace, alias in aliases.items()
+        )
+        output = output.join(
+            traced.select(TIME, ASSET_ID, *aliases.values()),
+            on=[TIME, ASSET_ID],
+            how="left",
+            maintain_order="left",
+        )
+        for trace, alias in aliases.items():
+            dependencies[trace].append(alias)
+    return output.with_columns(
+        pl.max_horizontal(*columns).alias(trace)
+        for trace, columns in dependencies.items()
+    ).select(TIME, ASSET_ID, *traces)
+
+
+_ROLLING_PAIR_CONTRACT = OperationContract(
+    density=InputDensity.DENSE_REQUIRED,
+    trace_rule=TraceRule.CUSTOM,
+    trace_function=_rolling_pair_trace,
+)
+
+
+@composer(contract=_ROLLING_PAIR_CONTRACT)
 def rolling_corr(
     lhs: pl.DataFrame, rhs: pl.DataFrame, *, window: int, min_periods: int | None = None
 ) -> pl.DataFrame:
@@ -178,7 +233,7 @@ def rolling_corr(
     )
 
 
-@composer
+@composer(contract=_ROLLING_PAIR_CONTRACT)
 def rolling_cov(
     lhs: pl.DataFrame,
     rhs: pl.DataFrame,
@@ -267,6 +322,71 @@ def _validate_non_negative_real(value: float, *, name: str) -> None:
 def _validate_positive_integer(value: int, *, name: str) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _rolling_regression_trace(
+    parents: tuple[pl.LazyFrame, ...],
+    result: pl.LazyFrame,
+    config: dict[str, object],
+    traces: tuple[str, ...],
+) -> pl.LazyFrame:
+    """Trace prior training rows and the current factor observations."""
+
+    window = config.get("window")
+    if not isinstance(window, int) or isinstance(window, bool):
+        raise ValueError("window must be positive")
+    _validate_window(window, window)
+    output = result.select(TIME, ASSET_ID)
+    dependencies: dict[str, list[str]] = {trace: [] for trace in traces}
+    for parent_index, parent in enumerate(parents):
+        aliases = {
+            trace: f"__rolling_regression_trace_{parent_index}_{trace}"
+            for trace in traces
+        }
+        ordered = parent.sort([ASSET_ID, TIME])
+        if parent_index == 0:
+            traced = ordered.with_columns(
+                pl.col(trace).shift(1).over(ASSET_ID).alias(alias)
+                for trace, alias in aliases.items()
+            ).with_columns(
+                pl.col(alias)
+                .cast(pl.Int32)
+                .rolling_max(window_size=window, min_samples=1)
+                .over(ASSET_ID)
+                .cast(pl.Date)
+                .alias(alias)
+                for alias in aliases.values()
+            )
+        else:
+            traced = ordered.with_columns(
+                pl.col(trace)
+                .cast(pl.Int32)
+                .rolling_max(window_size=window + 1, min_samples=1)
+                .over(ASSET_ID)
+                .cast(pl.Date)
+                .alias(alias)
+                for trace, alias in aliases.items()
+            )
+        output = output.join(
+            traced.select(TIME, ASSET_ID, *aliases.values()),
+            on=[TIME, ASSET_ID],
+            how="left",
+            maintain_order="left",
+        )
+        for trace, alias in aliases.items():
+            dependencies[trace].append(alias)
+    return output.with_columns(
+        pl.max_horizontal(*columns).alias(trace)
+        for trace, columns in dependencies.items()
+    ).select(TIME, ASSET_ID, *traces)
+
+
+_ROLLING_REGRESSION_CONTRACT = OperationContract(
+    execution=ExecutionMode.EAGER_BARRIER,
+    density=InputDensity.DENSE_REQUIRED,
+    trace_rule=TraceRule.CUSTOM,
+    trace_function=_rolling_regression_trace,
+)
 
 
 def _joined_regression_data(
@@ -1044,7 +1164,7 @@ def _rolling_regression_aligned(
     )
 
 
-@transformer
+@transformer(contract=_ROLLING_REGRESSION_CONTRACT)
 def rolling_ols(
     target: pl.DataFrame,
     *,
@@ -1054,7 +1174,7 @@ def rolling_ols(
     return _rolling_ols(target, factors, window=window)
 
 
-@transformer
+@transformer(contract=_ROLLING_REGRESSION_CONTRACT)
 def rolling_ridge(
     target: pl.DataFrame,
     *,
@@ -1074,7 +1194,7 @@ def rolling_ridge(
     )
 
 
-@transformer
+@transformer(contract=_ROLLING_REGRESSION_CONTRACT)
 def rolling_elastic_net(
     target: pl.DataFrame,
     *,
@@ -1110,7 +1230,7 @@ def rolling_elastic_net(
     )
 
 
-@transformer
+@transformer(contract=_ROLLING_REGRESSION_CONTRACT)
 def rolling_lasso(
     target: pl.DataFrame,
     *,

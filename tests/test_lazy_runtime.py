@@ -13,20 +13,25 @@ from bagelquant_core import (
     Panel,
     TraceRule,
 )
-from bagelquant_core.composer import add, mul, sum_frames
+from bagelquant_core.composer import add, mul, rolling_corr, sum_frames
 from bagelquant_core.transformer import (
     bfill,
     constant,
+    date_age_constraint,
+    ewm_mean,
     ffill,
     group_demean,
     identity,
+    kelly,
     lag,
     pct_change,
+    remove_repeated,
     repeat_count,
     rolling_ols,
     rolling_mean,
     rolling_percentile,
     rolling_rank,
+    smooth,
     streak_count,
 )
 from bagelquant_core.transformer.core import transformer
@@ -167,6 +172,127 @@ def test_trace_rules_preserve_exact_shift_fill_and_rolling_dates() -> None:
         "backward": [days[0], days[2], days[2]],
         "rolling": [days[0], days[0], days[2]],
     }
+
+
+def test_windowed_transformer_traces_cover_every_read_session() -> None:
+    days = [date(2024, 4, day) for day in range(1, 6)]
+    available = [days[0], days[4], days[2], days[3], days[4]]
+    domain = Domain(calendar=days, universe=["A"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": days,
+                "asset_id": ["A"] * 5,
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "observation_date": days,
+                "base_available_date": available,
+            }
+        ),
+        domain,
+        trace_columns=("observation_date", "base_available_date"),
+    )
+
+    outputs = {
+        "age": date_age_constraint(source, window=3, min_valid=1),
+        "kelly": kelly(source, window=3),
+        "remove_repeated": remove_repeated(source),
+        "smooth": smooth(source),
+    }
+    actual = {
+        name: graph.compute()
+        .collect(include_traces=True)
+        .get_column("base_available_date")
+        .to_list()
+        for name, graph in outputs.items()
+    }
+
+    assert actual == {
+        "age": [days[0], days[4], days[4], days[4], days[4]],
+        "kelly": [days[0], days[4], days[4], days[4], days[4]],
+        "remove_repeated": [days[0], days[4], days[4], days[3], days[4]],
+        "smooth": [days[0], days[4], days[4], days[4], days[4]],
+    }
+
+
+def test_rolling_regression_trace_includes_prior_training_target() -> None:
+    days = [date(2024, 5, day) for day in range(1, 6)]
+    domain = Domain(calendar=days, universe=["A"])
+
+    def traced(name: str, availability: list[date]) -> Panel:
+        return Panel.from_domain(
+            pl.DataFrame(
+                {
+                    "time": days,
+                    "asset_id": ["A"] * 5,
+                    "value": [1.0, 2.0, 3.0, 4.0, 5.0],
+                    "base_available_date": availability,
+                }
+            ),
+            domain,
+            name=name,
+            trace_columns=("base_available_date",),
+        )
+
+    target = traced("target", [days[4], days[1], days[2], days[3], days[4]])
+    factor = traced("factor", days)
+    output = rolling_ols(target, factors=(factor,), window=3).compute().collect(
+        include_traces=True
+    )
+
+    assert output[3, "base_available_date"] == days[4]
+
+
+def test_rolling_pair_trace_includes_both_trailing_windows() -> None:
+    days = [date(2024, 6, day) for day in range(1, 4)]
+    domain = Domain(calendar=days, universe=["A"])
+
+    def traced(name: str, availability: list[date]) -> Panel:
+        return Panel.from_domain(
+            pl.DataFrame(
+                {
+                    "time": days,
+                    "asset_id": ["A"] * 3,
+                    "value": [1.0, 2.0, 4.0],
+                    "base_available_date": availability,
+                }
+            ),
+            domain,
+            name=name,
+            trace_columns=("base_available_date",),
+        )
+
+    left = traced("left", [days[2], days[1], days[2]])
+    right = traced("right", days)
+    output = rolling_corr(left, right, window=2).compute().collect(
+        include_traces=True
+    )
+
+    assert output[1, "base_available_date"] == days[2]
+
+
+def test_expanding_ewm_trace_includes_all_prior_rows() -> None:
+    days = [date(2024, 7, day) for day in range(1, 4)]
+    domain = Domain(calendar=days, universe=["A"])
+    source = Panel.from_domain(
+        pl.DataFrame(
+            {
+                "time": days,
+                "asset_id": ["A"] * 3,
+                "value": [1.0, 2.0, 3.0],
+                "base_available_date": [days[2], days[1], days[2]],
+            }
+        ),
+        domain,
+        trace_columns=("base_available_date",),
+    )
+
+    output = ewm_mean(source, span=2).compute().collect(include_traces=True)
+
+    assert output.get_column("base_available_date").to_list() == [
+        days[2],
+        days[2],
+        days[2],
+    ]
 
 
 def test_run_length_traces_cover_only_the_current_causal_run() -> None:

@@ -38,15 +38,18 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
     if kind == "composer":
         if name == "broadcast_by_time":
             source = Panel.from_domain(
-                source.collect(dense=False)
+                auxiliary.collect(dense=False)
                 .filter(pl.col("asset_id") == "a")
-                .with_columns(pl.lit("benchmark").alias("asset_id")),
+                .select("time", "asset_id", "value"),
                 source.domain,
                 name="source",
             )
         graph = operation(source, auxiliary, **config)
         inputs = (
-            ExamplePanel("input_1", source.collect(dense=True)),
+            ExamplePanel(
+                "input_1",
+                source.collect(dense=name != "broadcast_by_time"),
+            ),
             ExamplePanel("input_2", auxiliary.collect(dense=True)),
         )
         panel_parameters: dict[str, tuple[ExamplePanel, ...]] = {}
@@ -115,15 +118,62 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
         source_values = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 2.0, 1.0, 1.0, 0.0]
         auxiliary_values = [1.0] * 10
         groups = ["one"] * 5 + ["two"] * 5
+    elif name == "smooth":
+        times = [
+            date(2024, 1, day)
+            for day in (2, 3, 4, 5, 8, 9, 10, 11, 12, 15, 16)
+        ]
+        assets = ["a", "b"]
+        source_values = [
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0,
+            11.0,
+            2.0,
+            4.0,
+            None,
+            8.0,
+            10.0,
+            12.0,
+            14.0,
+            16.0,
+            18.0,
+            20.0,
+            22.0,
+        ]
+        auxiliary_values = [1.0] * 22
+        groups = ["one"] * 11 + ["two"] * 11
+    elif name.startswith("kelly"):
+        times = [date(2024, 1, day) for day in (2, 3, 4, 5)]
+        assets = ["a", "b", "c"]
+        source_values = [
+            2.0,
+            None,
+            5.0,
+            2.0,
+            3.0,
+            2.0,
+            1.0,
+            6.0,
+            1.0,
+            4.0,
+            3.0,
+            1.0,
+        ]
+        auxiliary_values = [1.0] * 12
+        groups = ["one"] * 4 + ["two"] * 4 + ["three"] * 4
     elif name.startswith("rolling_") or name.startswith("ewm_") or name in {
         "lag",
         "diff",
         "pct_change",
         "remove_repeated",
-        "kelly",
-        "kelly_nonan_standardize",
-        "kelly_rank_boxcox",
-        "kelly_rescaling_weight",
     }:
         times = [date(2024, 1, day) for day in (2, 3, 4, 5)]
         assets = ["a", "b"]
@@ -146,6 +196,12 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
         source_values = [-2.0, -1.0, 0.0, 0.5, 1.0, 2.0]
         auxiliary_values = [1.0, 2.0, 4.0, 0.0, 1.0, 2.0]
         groups = ["left", "left", "right", "left", "left", "right"]
+    elif name in {"abs", "ceil", "negonly", "posonly", "sign"}:
+        times = [date(2024, 1, 2), date(2024, 1, 3)]
+        assets = ["a", "b", "c"]
+        source_values = [-2.0, -0.5, 0.0, 0.2, 1.2, 2.7]
+        auxiliary_values = [1.0] * 6
+        groups = ["left", "left", "middle", "middle", "right", "right"]
     elif name in {
         "and_",
         "equal",
@@ -218,7 +274,9 @@ def _config(name: str) -> dict[str, Any]:
     if name in {"ewm_mean", "ewm_std", "ewm_var"}:
         return {"span": 2.0}
     if name == "rolling_ewm_fw":
-        return {"halflife": 2.0}
+        return {"window": 2, "halflife": 2.0}
+    if name == "denoise":
+        return {"threshold": 2.5}
     if name.startswith("rolling_") or name.startswith("kelly") or name == (
         "date_age_constraint"
     ):

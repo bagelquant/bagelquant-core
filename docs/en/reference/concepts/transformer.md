@@ -144,7 +144,9 @@ Constant rows produce `NaN` values where normalization is undefined.
 
 The rolling family also includes `rolling_var`, `rolling_skew`, `rolling_kurt`,
 `rolling_median`, `rolling_rank`, `rolling_percentile`, and `rolling_zscore`.
-`rolling_ewm_fw` exposes expanding exponentially weighted means.
+`rolling_ewm_fw` exposes exponentially weighted means over an explicit finite
+trailing window. `smooth` is its parameter-free daily preset with a 10-session
+window, 3-session half-life, and 5 required valid observations.
 
 ## Named Panel parameters
 

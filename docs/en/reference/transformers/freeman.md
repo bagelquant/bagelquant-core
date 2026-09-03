@@ -29,30 +29,22 @@ freeman(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -2.0 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-02 | c | 1.0 |
-| 2024-01-03 | a | -1.0 |
-| 2024-01-03 | b | 0.5 |
-| 2024-01-03 | c | 2.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | -2 | 0 | 1 |
+| 2024-01-03 | -1 | 0.5 | 2 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | 1.0 |
-| 2024-01-02 | c | 2.414213562373095 |
-| 2024-01-03 | a | missing |
-| 2024-01-03 | b | 1.9318516525781364 |
-| 2024-01-03 | c | 3.1462643699419726 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | missing | 1 | 2.41421 |
+| 2024-01-03 | missing | 1.93185 | 3.14626 |
 
 ## Panel and temporal semantics
 

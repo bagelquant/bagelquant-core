@@ -1,6 +1,6 @@
 # `kelly_rank_boxcox`
 
-Rank Kelly-style values cross-sectionally and apply a Box-Cox transform.
+Percentile-rank each date cross-section, apply Box-Cox, then calculate the rolling Kelly mean-to-variance ratio.
 
 ## Signature
 
@@ -33,35 +33,29 @@ kelly_rank_boxcox(source, window=2)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 3.0 |
-| 2024-01-04 | a | 4.0 |
-| 2024-01-04 | b | 5.0 |
-| 2024-01-05 | a | 7.0 |
-| 2024-01-05 | b | 8.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 2 | 3 | 1 |
+| 2024-01-03 | missing | 2 | 4 |
+| 2024-01-04 | 5 | 1 | 3 |
+| 2024-01-05 | 2 | 6 | 1 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-03 | a | -inf |
-| 2024-01-03 | b | missing |
-| 2024-01-04 | a | -inf |
-| 2024-01-04 | b | missing |
-| 2024-01-05 | a | -inf |
-| 2024-01-05 | b | missing |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | missing | missing | missing |
+| 2024-01-03 | missing | -1.4427 | -0.910239 |
+| 2024-01-04 | missing | -10.8987 | -2.4663 |
+| 2024-01-05 | -2.4663 | -0.910239 | -3.13054 |
 
 ## Panel and temporal semantics
 
 The primary input is one sparse long-form Panel keyed by `(time, asset_id)`; absent keys remain absent.
+
+History is grouped by `asset_id` and ordered by `time`; rows with insufficient observations remain missing.

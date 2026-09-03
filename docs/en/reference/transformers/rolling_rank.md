@@ -1,6 +1,6 @@
 # `rolling_rank`
 
-Return the current value's rank within its per-asset trailing window.
+Return the trailing window's latest valid value as an average-tie rank among valid observations.
 
 ## Signature
 
@@ -33,34 +33,26 @@ rolling_rank(source, window=2)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 3.0 |
-| 2024-01-04 | a | 4.0 |
-| 2024-01-04 | b | 5.0 |
-| 2024-01-05 | a | 7.0 |
-| 2024-01-05 | b | 8.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 2 |
+| 2024-01-03 | 2 | 3 |
+| 2024-01-04 | 4 | 5 |
+| 2024-01-05 | 7 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | missing |
-| 2024-01-02 | b | missing |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 2.0 |
-| 2024-01-04 | a | 2.0 |
-| 2024-01-04 | b | 2.0 |
-| 2024-01-05 | a | 2.0 |
-| 2024-01-05 | b | 2.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | missing | missing |
+| 2024-01-03 | 2 | 2 |
+| 2024-01-04 | 2 | 2 |
+| 2024-01-05 | 2 | 2 |
 
 ## Panel and temporal semantics
 

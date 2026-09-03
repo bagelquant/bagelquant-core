@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -94,7 +95,7 @@ EXAMPLE_CONFIG = {
     "pct_change": "periods=1",
     "power": "exponent=2",
     "replace_non_nan": "value=1",
-    "rolling_ewm_fw": "halflife=2",
+    "rolling_ewm_fw": "window=2, halflife=2",
     "signed_power": "exponent=0.5",
     "trim": "lower=-1, upper=1",
     "trim_quantile": "lower=0.1, upper=0.9",
@@ -489,8 +490,8 @@ def _page(name: str, item: Any, *, kind: str) -> str:
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 {chr(10).join(input_sections)}
 
@@ -505,15 +506,36 @@ output.
 
 
 def _markdown_table(frame: Any) -> str:
-    rows = frame.select("time", "asset_id", "value").sort(
+    data = frame.select("time", "asset_id", "value").sort(
         "time", "asset_id"
-    ).to_dicts()
-    lines = ["| time | asset_id | value |", "|---|---|---:|"]
-    for row in rows:
-        value = row["value"]
-        rendered = "missing" if value is None else str(value)
-        lines.append(f"| {row['time']} | {row['asset_id']} | {rendered} |")
+    )
+    assets = sorted(str(value) for value in data.get_column("asset_id").unique())
+    values = {
+        (str(row["time"]), str(row["asset_id"])): row["value"]
+        for row in data.to_dicts()
+    }
+    times = sorted({str(value) for value in data.get_column("time")})
+    lines = [
+        f"| time | {' | '.join(assets)} |",
+        f"|---|{'|'.join('---:' for _ in assets)}|",
+    ]
+    for time in times:
+        rendered = [
+            _markdown_value(values.get((time, asset)))
+            for asset in assets
+        ]
+        lines.append(f"| {time} | {' | '.join(rendered)} |")
     return "\n".join(lines)
+
+
+def _markdown_value(value: object) -> str:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return "missing"
+    if isinstance(value, float):
+        if math.isinf(value):
+            return "-inf" if value < 0 else "inf"
+        return f"{value:.6g}"
+    return str(value).replace("|", "\\|")
 
 
 def _generate_kind(module: Any, *, kind: str, check: bool) -> list[str]:

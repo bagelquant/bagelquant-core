@@ -45,34 +45,26 @@ ewm_var(source, span=2.0)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 2.0 |
-| 2024-01-03 | a | 2.0 |
-| 2024-01-03 | b | 3.0 |
-| 2024-01-04 | a | 4.0 |
-| 2024-01-04 | b | 5.0 |
-| 2024-01-05 | a | 7.0 |
-| 2024-01-05 | b | 8.0 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 1 | 2 |
+| 2024-01-03 | 2 | 3 |
+| 2024-01-04 | 4 | 5 |
+| 2024-01-05 | 7 | 8 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 0.0 |
-| 2024-01-02 | b | 0.0 |
-| 2024-01-03 | a | 0.49999999999999983 |
-| 2024-01-03 | b | 0.49999999999999983 |
-| 2024-01-04 | a | 2.4615384615384612 |
-| 2024-01-04 | b | 2.4615384615384612 |
-| 2024-01-05 | a | 6.892307692307694 |
-| 2024-01-05 | b | 6.892307692307694 |
+| time | a | b |
+|---|---:|---:|
+| 2024-01-02 | 0 | 0 |
+| 2024-01-03 | 0.5 | 0.5 |
+| 2024-01-04 | 2.46154 | 2.46154 |
+| 2024-01-05 | 6.89231 | 6.89231 |
 
 ## Panel and temporal semantics
 

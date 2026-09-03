@@ -33,34 +33,25 @@ orthogonalize(source, factors=(factors,))
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 3.0 |
-| 2024-01-02 | c | 6.0 |
-| 2024-01-02 | d | 10.0 |
+| time | a | b | c | d |
+|---|---:|---:|---:|---:|
+| 2024-01-02 | 1 | 3 | 6 | 10 |
 ### Panel parameter: factors
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | 1.0 |
-| 2024-01-02 | c | 2.0 |
-| 2024-01-02 | d | 3.0 |
+| time | a | b | c | d |
+|---|---:|---:|---:|---:|
+| 2024-01-02 | 1 | 1 | 2 | 3 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | -2.066666666666667 |
-| 2024-01-02 | b | -0.06666666666666687 |
-| 2024-01-02 | c | -0.13333333333333375 |
-| 2024-01-02 | d | 0.7999999999999989 |
+| time | a | b | c | d |
+|---|---:|---:|---:|---:|
+| 2024-01-02 | -2.06667 | -0.0666667 | -0.133333 | 0.8 |
 
 ## Panel and temporal semantics
 

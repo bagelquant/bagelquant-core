@@ -29,30 +29,22 @@ not_(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
-`missing` is the canonical rendered form of null or mathematically invalid
-output.
+Tables are pivoted wide only for readability; runtime Panels remain long-form.
+`missing` is the canonical rendered form of null or mathematically invalid output.
 
 ### source
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 0.0 |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | 0.0 |
-| 2024-01-03 | a | 1.0 |
-| 2024-01-03 | b | 1.0 |
-| 2024-01-03 | c | 2.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 0 | missing | 0 |
+| 2024-01-03 | 1 | 1 | 2 |
 
 ### Output
 
-| time | asset_id | value |
-|---|---|---:|
-| 2024-01-02 | a | 1.0 |
-| 2024-01-02 | b | missing |
-| 2024-01-02 | c | 1.0 |
-| 2024-01-03 | a | 0.0 |
-| 2024-01-03 | b | 0.0 |
-| 2024-01-03 | c | 0.0 |
+| time | a | b | c |
+|---|---:|---:|---:|
+| 2024-01-02 | 1 | missing | 1 |
+| 2024-01-03 | 0 | 0 | 0 |
 
 ## Panel and temporal semantics
 

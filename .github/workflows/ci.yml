@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      POLARS_MAX_THREADS: '4'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: bagelquant-core
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v7
+      - name: Validate package
+        working-directory: bagelquant-core
+        run: |
+          uv sync --locked
+          uv run --no-sync ruff check .
+          uv run --no-sync python -m pytest --basetemp=.test-tmp/ci -o cache_dir=.test-tmp/cache

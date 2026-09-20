@@ -10,12 +10,16 @@ from bagelquant_core import (
     ElasticNetModel,
     ElasticNetPredictionComposer,
     LabelBoundary,
+    WeightedRegressionMoments,
     WalkForwardConfig,
     ZeroPreservingRmsScaler,
     build_expanding_walk_forward,
     elastic_net_candidates,
+    elastic_net_candidates_from_moments,
     equal_period_sample_weights,
     fit_elastic_net,
+    fit_elastic_net_from_moments,
+    zero_preserving_rms_scaler_from_moments,
 )
 
 
@@ -157,6 +161,63 @@ def test_elastic_net_uses_unpenalized_intercept_without_centering_features() -> 
     restored = ElasticNetModel.from_dict(model.to_dict())
     assert restored == model
     assert np.array_equal(restored.predict(values), model.predict(values))
+
+
+def test_weighted_moment_elastic_net_matches_row_matrix_fit_across_batches() -> None:
+    values = np.array(
+        [
+            [0.0, 1.0, 0.0],
+            [1.0, 2.0, 1.0],
+            [2.0, 0.5, 0.0],
+            [3.0, 4.0, 1.0],
+            [4.0, 2.5, 0.0],
+            [5.0, 6.0, 1.0],
+        ]
+    )
+    target = 3.0 + values @ np.array([0.8, -0.3, 0.5])
+    weights = np.array([0.5, 0.5, 1.0, 0.25, 0.25, 1.0])
+    names = ("first", "second", "missing::first")
+    scaler = ZeroPreservingRmsScaler.fit(
+        values, feature_names=names, sample_weight=weights
+    )
+    scaled = scaler.transform(values)
+    config = ElasticNetConfig(alpha_ratios=(0.1,), l1_ratio_values=(0.5,))
+    candidate = elastic_net_candidates(
+        config, scaled, target, sample_weight=weights
+    )[0]
+    expected = fit_elastic_net(
+        scaled,
+        target,
+        alpha=candidate.alpha,
+        l1_ratio=candidate.l1_ratio,
+        sample_weight=weights,
+        tolerance=1e-10,
+    )
+
+    moments = WeightedRegressionMoments.empty(values.shape[1])
+    moments.update(values[:2], target[:2], sample_weight=weights[:2])
+    moments.update(values[2:], target[2:], sample_weight=weights[2:])
+    moment_scaler = zero_preserving_rms_scaler_from_moments(
+        moments, feature_names=names
+    )
+    moment_candidate = elastic_net_candidates_from_moments(
+        config, moments, moment_scaler
+    )[0]
+    actual = fit_elastic_net_from_moments(
+        moments,
+        moment_scaler,
+        alpha=moment_candidate.alpha,
+        l1_ratio=moment_candidate.l1_ratio,
+        tolerance=1e-10,
+    )
+
+    assert moment_scaler.scales == pytest.approx(scaler.scales)
+    assert moment_candidate.alpha == pytest.approx(candidate.alpha)
+    assert actual.intercept == pytest.approx(expected.intercept, abs=1e-8)
+    assert actual.coefficients == pytest.approx(expected.coefficients, abs=1e-8)
+    assert actual.predict(moment_scaler.transform(values)) == pytest.approx(
+        expected.predict(scaled), abs=1e-8
+    )
 
 
 def test_elastic_net_composer_round_trips_complete_configuration() -> None:

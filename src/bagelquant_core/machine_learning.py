@@ -440,6 +440,255 @@ class ElasticNetModel:
         )
 
 
+@dataclass(slots=True)
+class WeightedRegressionMoments:
+    """Mergeable weighted moments for bounded-memory linear-model fitting."""
+
+    observation_count: int
+    weight_sum: float
+    feature_sum: np.ndarray
+    target_sum: float
+    feature_cross: np.ndarray
+    feature_target: np.ndarray
+
+    @classmethod
+    def empty(cls, feature_count: int) -> WeightedRegressionMoments:
+        """Return an empty accumulator for ``feature_count`` columns."""
+
+        if (
+            not isinstance(feature_count, int)
+            or isinstance(feature_count, bool)
+            or feature_count <= 0
+        ):
+            raise ValueError("feature_count must be a positive integer")
+        return cls(
+            observation_count=0,
+            weight_sum=0.0,
+            feature_sum=np.zeros(feature_count, dtype=float),
+            target_sum=0.0,
+            feature_cross=np.zeros((feature_count, feature_count), dtype=float),
+            feature_target=np.zeros(feature_count, dtype=float),
+        )
+
+    @property
+    def feature_count(self) -> int:
+        """Return the fixed number of input columns."""
+
+        return int(self.feature_sum.size)
+
+    def update(
+        self,
+        values: np.ndarray,
+        target: np.ndarray,
+        *,
+        sample_weight: np.ndarray | None = None,
+    ) -> None:
+        """Accumulate one finite row batch without retaining it."""
+
+        matrix, response, weights = _validated_training_data(
+            values, target, sample_weight
+        )
+        if matrix.shape[1] != self.feature_count:
+            raise ValueError("feature batch columns do not match moment accumulator")
+        weighted_values = matrix * weights[:, None]
+        self.observation_count += matrix.shape[0]
+        self.weight_sum += float(weights.sum())
+        self.feature_sum += matrix.T @ weights
+        self.target_sum += float(np.dot(weights, response))
+        self.feature_cross += matrix.T @ weighted_values
+        self.feature_target += matrix.T @ (weights * response)
+
+    def copy(self) -> WeightedRegressionMoments:
+        """Return an independent snapshot suitable for a fold boundary."""
+
+        return WeightedRegressionMoments(
+            observation_count=self.observation_count,
+            weight_sum=self.weight_sum,
+            feature_sum=self.feature_sum.copy(),
+            target_sum=self.target_sum,
+            feature_cross=self.feature_cross.copy(),
+            feature_target=self.feature_target.copy(),
+        )
+
+    def validate(self) -> None:
+        """Raise when the accumulator cannot define a regression sample."""
+
+        count = self.feature_count
+        if self.observation_count <= 0 or self.weight_sum <= 0:
+            raise ValueError("weighted regression moments are empty")
+        if self.feature_cross.shape != (count, count):
+            raise ValueError("feature_cross shape does not match feature count")
+        if self.feature_target.shape != (count,):
+            raise ValueError("feature_target shape does not match feature count")
+        if not (
+            np.isfinite(self.weight_sum)
+            and np.isfinite(self.target_sum)
+            and np.isfinite(self.feature_sum).all()
+            and np.isfinite(self.feature_cross).all()
+            and np.isfinite(self.feature_target).all()
+        ):
+            raise ValueError("weighted regression moments must be finite")
+
+
+def zero_preserving_rms_scaler_from_moments(
+    moments: WeightedRegressionMoments,
+    *,
+    feature_names: Sequence[str],
+) -> ZeroPreservingRmsScaler:
+    """Fit the ordinary RMS scaler from mergeable weighted moments."""
+
+    moments.validate()
+    names = tuple(feature_names)
+    if len(names) != moments.feature_count:
+        raise ValueError("feature_names length must match moment columns")
+    raw_scales = np.sqrt(
+        np.maximum(np.diag(moments.feature_cross) / moments.weight_sum, 0.0)
+    )
+    active: list[int] = []
+    scales: list[float] = []
+    dropped: dict[str, str] = {}
+    for index, (name, scale) in enumerate(zip(names, raw_scales, strict=True)):
+        if not np.isfinite(scale):
+            dropped[name] = "non_finite_rms"
+        elif scale <= 0:
+            dropped[name] = "zero_rms"
+        else:
+            active.append(index)
+            scales.append(float(scale))
+    return ZeroPreservingRmsScaler(names, tuple(scales), tuple(active), dropped)
+
+
+def elastic_net_alpha_max_from_moments(
+    moments: WeightedRegressionMoments,
+    scaler: ZeroPreservingRmsScaler,
+    *,
+    l1_ratio: float,
+) -> float:
+    """Compute the relative-path alpha maximum without a sample matrix."""
+
+    _, centered_target, _, _ = _scaled_centered_moments(moments, scaler)
+    if not 0 < l1_ratio <= 1:
+        raise ValueError("l1_ratio must be in (0, 1]")
+    result = float(np.abs(centered_target).max(initial=0.0) / l1_ratio)
+    if not np.isfinite(result):
+        raise ValueError("alpha_max is non-finite")
+    return result
+
+
+def elastic_net_candidates_from_moments(
+    config: ElasticNetConfig,
+    moments: WeightedRegressionMoments,
+    scaler: ZeroPreservingRmsScaler,
+) -> tuple[ElasticNetCandidate, ...]:
+    """Materialize the deterministic candidate grid from moments."""
+
+    candidates: list[ElasticNetCandidate] = []
+    for l1_ratio in config.l1_ratio_values:
+        if config.search_mode == ElasticNetSearchMode.RELATIVE_ALPHA_PATH:
+            maximum = elastic_net_alpha_max_from_moments(
+                moments, scaler, l1_ratio=l1_ratio
+            )
+            candidates.extend(
+                ElasticNetCandidate(maximum * ratio, l1_ratio, ratio)
+                for ratio in config.alpha_ratios
+            )
+        else:
+            candidates.extend(
+                ElasticNetCandidate(alpha, l1_ratio, None)
+                for alpha in config.alpha_values
+            )
+    return tuple(candidates)
+
+
+def fit_elastic_net_from_moments(
+    moments: WeightedRegressionMoments,
+    scaler: ZeroPreservingRmsScaler,
+    *,
+    alpha: float,
+    l1_ratio: float,
+    max_iter: int = 10_000,
+    tolerance: float = 1e-6,
+) -> ElasticNetModel:
+    """Fit weighted Elastic Net from bounded-size sufficient statistics."""
+
+    centered_gram, centered_target, feature_mean, target_mean = (
+        _scaled_centered_moments(moments, scaler)
+    )
+    if centered_gram.shape[0] == 0:
+        raise ValueError("Elastic Net requires at least one active feature")
+    if not np.isfinite(alpha) or alpha < 0:
+        raise ValueError("alpha must be non-negative and finite")
+    if not np.isfinite(l1_ratio) or not 0 < l1_ratio <= 1:
+        raise ValueError("l1_ratio must be in (0, 1]")
+    if not isinstance(max_iter, int) or max_iter <= 0:
+        raise ValueError("max_iter must be a positive integer")
+    if not np.isfinite(tolerance) or tolerance <= 0:
+        raise ValueError("tolerance must be positive and finite")
+
+    coefficients = np.zeros(centered_gram.shape[0], dtype=float)
+    intercept = target_mean
+    converged = False
+    iteration = 0
+    for iteration in range(1, max_iter + 1):
+        previous = coefficients.copy()
+        previous_intercept = intercept
+        for column_index in range(coefficients.size):
+            correlation = float(
+                centered_target[column_index]
+                - np.dot(centered_gram[column_index], coefficients)
+                + centered_gram[column_index, column_index]
+                * coefficients[column_index]
+            )
+            denominator = float(
+                centered_gram[column_index, column_index]
+                + alpha * (1.0 - l1_ratio)
+            )
+            coefficients[column_index] = (
+                _soft_threshold(correlation, alpha * l1_ratio) / denominator
+                if denominator > 0
+                else 0.0
+            )
+        intercept = float(target_mean - np.dot(feature_mean, coefficients))
+        maximum_change = max(
+            float(np.max(np.abs(coefficients - previous), initial=0.0)),
+            abs(intercept - previous_intercept),
+        )
+        if maximum_change <= tolerance:
+            converged = True
+            break
+    return ElasticNetModel(
+        intercept=intercept,
+        coefficients=tuple(float(value) for value in coefficients),
+        alpha=float(alpha),
+        l1_ratio=float(l1_ratio),
+        iterations=iteration,
+        converged=converged,
+    )
+
+
+def _scaled_centered_moments(
+    moments: WeightedRegressionMoments,
+    scaler: ZeroPreservingRmsScaler,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    moments.validate()
+    if len(scaler.feature_names) != moments.feature_count:
+        raise ValueError("scaler columns do not match moment accumulator")
+    active = np.asarray(scaler.active_indices, dtype=int)
+    scales = np.asarray(scaler.scales, dtype=float)
+    raw_mean = moments.feature_sum / moments.weight_sum
+    feature_mean = raw_mean[active] / scales
+    target_mean = float(moments.target_sum / moments.weight_sum)
+    raw_gram = moments.feature_cross[np.ix_(active, active)] / moments.weight_sum
+    scaled_gram = raw_gram / scales[:, None] / scales[None, :]
+    scaled_target = moments.feature_target[active] / moments.weight_sum / scales
+    centered_gram = scaled_gram - np.outer(feature_mean, feature_mean)
+    centered_target = scaled_target - feature_mean * target_mean
+    centered_gram = (centered_gram + centered_gram.T) * 0.5
+    diagonal = np.diag_indices_from(centered_gram)
+    centered_gram[diagonal] = np.maximum(centered_gram[diagonal], 0.0)
+    return centered_gram, centered_target, feature_mean, target_mean
+
+
 @dataclass(frozen=True, slots=True)
 class ElasticNetPredictionComposer:
     """Serializable Core facade for an application-owned ML state machine.
@@ -759,10 +1008,15 @@ __all__ = [
     "LabelBoundary",
     "WalkForwardConfig",
     "WalkForwardFold",
+    "WeightedRegressionMoments",
     "ZeroPreservingRmsScaler",
     "build_expanding_walk_forward",
     "elastic_net_alpha_max",
+    "elastic_net_alpha_max_from_moments",
     "elastic_net_candidates",
+    "elastic_net_candidates_from_moments",
     "equal_period_sample_weights",
     "fit_elastic_net",
+    "fit_elastic_net_from_moments",
+    "zero_preserving_rms_scaler_from_moments",
 ]

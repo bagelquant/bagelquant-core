@@ -92,6 +92,23 @@ def average(*frames: pl.DataFrame) -> pl.DataFrame:
     )
 ```
 
+## 因果 Prediction Processing
+
+`smooth_prediction(prediction, config, evaluation_calendar=..., state=None)`
+只接受 `PredictionPanel`，返回包含 `.prediction` 与 `.state` 的
+`PredictionSmoothingResult`。配置分别为 `PredictionSmoothingConfig(method="none")`、
+`PredictionSmoothingConfig(method="sma", window=3)`、
+`PredictionSmoothingConfig(method="ewma", half_life=2)`。
+
+日历必须严格递增且唯一，窗口单位为评估期（日频交易日、月频评估点），不是自然日。
+SMA 要求完整连续有限值窗口；EWMA 从首个有限值初始化，递推系数为
+`1 - 2**(-1/half_life)`。缺失、非有限值与退出 Universe 均逐资产清空历史，不补零也不延用。
+
+输入 Domain 必须覆盖完整连续日历区间。首次计算需从日历首日开始；断点续算必须传入
+紧邻区间前一评估点的匹配 checkpoint。通过 `state.to_dict()` 与
+`PredictionSmoothingState.from_dict(...)` 显式持久化；配置或历史日历改变会拒绝恢复。
+UI 日期筛选不能重启平滑。该数值函数不是新增的无限制图/DSL 操作。
+
 ## 边界
 
 公开 API 面向 Polars、`Panel` 和 `Graph`。`bagelquant-core` 不负责数据获取、凭证管理、持久化、组合模拟或应用 UI。

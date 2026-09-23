@@ -81,6 +81,13 @@ Universes can be static lists/Series or sparse dynamic membership frames with
 `time`, `asset_id`, and boolean `active`; missing dynamic rows are inactive and
 are not forward-filled.
 
+`smooth_prediction` is an explicit eager numerical boundary for resumable
+Prediction Processing. It preserves `PredictionPanel`, accepts an ordered
+evaluation calendar and `PredictionSmoothingConfig` (`none`, `sma`, `ewma`),
+and returns a typed prediction plus an immutable serializable checkpoint.
+Missing/nonfinite observations and Universe exits reset history; SMA requires
+the full contiguous window. Callers, not Core, own storage and orchestration.
+
 ## Development
 
 ```bash

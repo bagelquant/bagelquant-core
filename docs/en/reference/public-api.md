@@ -100,6 +100,28 @@ def average(*frames: pl.DataFrame) -> pl.DataFrame:
     )
 ```
 
+## Causal Prediction Processing
+
+`smooth_prediction(prediction, config, evaluation_calendar=..., state=None)`
+accepts only `PredictionPanel` and returns `PredictionSmoothingResult` with
+`.prediction` and `.state`. Configure `PredictionSmoothingConfig(method="none")`,
+`PredictionSmoothingConfig(method="sma", window=3)`, or
+`PredictionSmoothingConfig(method="ewma", half_life=2)`.
+
+The calendar is strictly ordered and unique. Windows count evaluation periods
+(daily sessions or monthly evaluations), not elapsed days. SMA requires a full
+continuous finite window; EWMA initializes at the first finite observation and
+uses `alpha = 1 - 2**(-1/half_life)`. Missing values, infinity and Universe exits
+reset each asset independently. No value is filled or carried forward.
+
+The input Domain must contain a contiguous block of the supplied calendar.
+Fresh calls require the complete history from the calendar's first date;
+resumes require a matching checkpoint immediately before the block. Persist
+checkpoints with `state.to_dict()` and `PredictionSmoothingState.from_dict(...)`.
+Calendar-prefix and configuration validation rejects invalid resume boundaries.
+Changing a visible research window must not restart smoothing. This public
+numerical helper is not a registered unrestricted graph/DSL operation.
+
 ## Compatibility Boundary
 
 Public APIs are Polars DataFrame and `Panel` oriented. `bagelquant-core` does

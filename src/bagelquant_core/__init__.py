@@ -50,6 +50,12 @@ from .prediction import (
     quantile_rank_information_coefficient,
 )
 from .transformer import pct_change_frame
+from .prediction_processing import (
+    PredictionSmoothingConfig,
+    PredictionSmoothingResult,
+    PredictionSmoothingState,
+    smooth_prediction,
+)
 
 __all__ = [
     "CategoryPanel",
@@ -72,6 +78,9 @@ __all__ = [
     "Panel",
     "PredictionComposer",
     "PredictionPanel",
+    "PredictionSmoothingConfig",
+    "PredictionSmoothingResult",
+    "PredictionSmoothingState",
     "PredictionTrainingContext",
     "QuantileICWeightedPredictionComposer",
     "WalkForwardConfig",
@@ -96,5 +105,6 @@ __all__ = [
     "TraceRule",
     "pct_change_frame",
     "quantile_rank_information_coefficient",
+    "smooth_prediction",
     "zero_preserving_rms_scaler_from_moments",
 ]

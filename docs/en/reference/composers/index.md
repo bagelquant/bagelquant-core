@@ -42,3 +42,5 @@ parameter contract, executable Panel example, and temporal semantics.
 
 - [`rolling_corr`](./rolling_corr.md)
 - [`rolling_cov`](./rolling_cov.md)
+- [`rolling_elastic_net_prediction`](./rolling_elastic_net_prediction.md)
+- [`rolling_lightgbm_prediction`](./rolling_lightgbm_prediction.md)

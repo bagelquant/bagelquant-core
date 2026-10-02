@@ -29,7 +29,7 @@ from ..composer.xsectional import (
     group_zscore,
     orthogonalize,
 )
-from .core import TRANSFORMER_REGISTRY, TransformerFunction, transformer
+from .core import TRANSFORMER_REGISTRY, transformer
 from .general import (
     constant,
     date_age_constraint,
@@ -86,7 +86,6 @@ from .trigonometric import arccos, arcsin, arctan, arctanh, cos, sin, trig
 
 __all__ = [
     "TRANSFORMER_REGISTRY",
-    "TransformerFunction",
     "abs",
     "anscombe",
     "arccos",

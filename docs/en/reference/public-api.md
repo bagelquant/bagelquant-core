@@ -124,6 +124,13 @@ numerical helper is not a registered unrestricted graph/DSL operation.
 
 ## Compatibility Boundary
 
+`WeightedRegressionMoments.scale_weights(factor)` rescales every accumulated
+weighted sum by a positive finite scalar while preserving `observation_count`.
+It mutates only that accumulator; earlier `copy()` snapshots stay independent.
+Streaming decay consumers can rescale prior moments before adding the next
+batch, keeping the reference at the latest observed batch without reading a
+future endpoint. Workbench owns the decay policy and training-period selection.
+
 Public APIs are Polars DataFrame and `Panel` oriented. `bagelquant-core` does
 not own data retrieval, provider credentials, persistence, portfolio
 simulation, or application UI.

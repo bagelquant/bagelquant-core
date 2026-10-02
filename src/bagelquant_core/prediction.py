@@ -21,14 +21,14 @@ import polars as pl
 
 from ._operation import as_node
 from .frame import ASSET_ID, TIME, VALUE
-from .node import Node
+from .operator import OperationNode
 from .operation_contract import (
     ExecutionMode,
     InputDensity,
     OperationContract,
     TraceRule,
 )
-from .registry import Registry
+from .operator import Operator, OPERATOR_REGISTRY
 
 if TYPE_CHECKING:
     from .graph import Graph
@@ -59,9 +59,24 @@ class FamaMacBethOLSResult:
     period_diagnostics: pl.DataFrame
 
 
-PREDICTION_COMPOSER_REGISTRY: Registry[type["PredictionComposer"]] = Registry(
-    "prediction composer"
-)
+class _ModelCatalog:
+    """Model factory view of the common operator registry."""
+    def add(self, name: str, factory: type) -> None:
+        OPERATOR_REGISTRY.add(f"prediction:{name}", Operator(
+            factory._compute_frames, registry_name=f"prediction:{name}",
+            contract=_PREDICTION_CONTRACT, input_mode="prediction_composer",
+            minimum_inputs=1, maximum_inputs=None, output_type="prediction",
+            factory=factory))
+
+    def get(self, name: str):
+        return OPERATOR_REGISTRY.get(f"prediction:{name}").factory
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(name.removeprefix("prediction:") for name in OPERATOR_REGISTRY.names()
+                     if name.startswith("prediction:"))
+
+PREDICTION_COMPOSER_REGISTRY = _ModelCatalog()
+
 
 _PREDICTION_CONTRACT = OperationContract(
     execution=ExecutionMode.EAGER_BARRIER,
@@ -125,14 +140,14 @@ class PredictionComposer(ABC):
             sources.extend((training.targets, training.availability))
         return Graph._from_nodes(
             (
-                _PredictionComposerNode(
-                    parents=tuple(
-                        as_node(source, kind="PredictionComposer") for source in sources
-                    ),
-                    composer=self,
-                    alpha_count=len(alpha_values),
-                    name=name or self.kind,
-                    metadata=metadata,
+                OperationNode(
+                    inputs=tuple(as_node(source, kind="Operator") for source in sources),
+                    panel_parameters={}, operation=self,
+                    config={"alpha_count": len(alpha_values), **{
+                        key: value for key, value in (("window", self.window),
+                        ("quantiles", self.quantiles), ("half_life", self.half_life))
+                        if value is not None}}, input_mode="prediction_composer",
+                    name=name or self.kind, metadata=metadata,
                 ),
             )
         )
@@ -167,55 +182,6 @@ class PredictionComposer(ABC):
         availability: pl.DataFrame,
     ) -> pl.DataFrame:
         raise NotImplementedError
-
-
-class _PredictionComposerNode(Node):
-    node_type = "prediction_composer"
-
-    def __init__(
-        self,
-        *,
-        parents: tuple[Node, ...],
-        composer: PredictionComposer,
-        alpha_count: int,
-        name: str,
-        metadata: Mapping[str, Any] | None,
-    ) -> None:
-        super().__init__(name=name, metadata=metadata)
-        self._parents = parents
-        self._composer = composer
-        self._alpha_count = alpha_count
-
-    @property
-    def parents(self) -> tuple[Node, ...]:
-        return self._parents
-
-    @property
-    def operation(self) -> PredictionComposer:
-        return self._composer
-
-    @property
-    def contract(self) -> OperationContract:
-        return self._composer.contract
-
-    def compute(self, *frames: pl.DataFrame) -> pl.DataFrame:
-        return self._composer._compute_frames(
-            *frames,
-            alpha_count=self._alpha_count,
-        )
-
-    def config(self) -> Mapping[str, Any]:
-        result: dict[str, Any] = {
-            "prediction_composer": self._composer.kind,
-            "alpha_count": self._alpha_count,
-        }
-        if self._composer.window is not None:
-            result["window"] = self._composer.window
-        if self._composer.quantiles is not None:
-            result["quantiles"] = self._composer.quantiles
-        if self._composer.half_life is not None:
-            result["half_life"] = self._composer.half_life
-        return result
 
 
 class IdentityPredictionComposer(PredictionComposer):

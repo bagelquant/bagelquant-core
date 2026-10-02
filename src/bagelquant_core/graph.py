@@ -49,6 +49,26 @@ class GraphSpec:
             ],
         }
 
+    def mermaid(self) -> str:
+        """Render the frozen DAG with labelled auxiliary edges."""
+        import html
+        identifiers = {node.name: f"n{index}" for index, node in enumerate(self.nodes)}
+        lines = ["flowchart TD"]
+        for node in self.nodes:
+            label = html.escape(node.name, quote=True).replace("\n", " ")
+            lines.append(f'  {identifiers[node.name]}["{label}"]')
+            for parent in node.inputs:
+                lines.append(f"  {identifiers[parent]} --> {identifiers[node.name]}")
+            for parameter, parents in node.panel_parameters.items():
+                for parent in parents:
+                    label = html.escape(parameter, quote=True)
+                    lines.append(f'  {identifiers[parent]} -->|"{label}"| {identifiers[node.name]}')
+            for role, parents in node.metadata.get("context_dependencies", {}).items():
+                for parent in parents:
+                    label = html.escape(role, quote=True)
+                    lines.append(f'  {identifiers[parent]} -.->|"{label}"| {identifiers[node.name]}')
+        return "\n".join(lines)
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "GraphSpec":
         """Validate and construct a graph specification from JSON data."""
@@ -80,14 +100,14 @@ class GraphSpec:
             metadata = raw.get("metadata", {})
             inputs = raw.get("inputs", [])
             panel_parameters = raw.get("panel_parameters", {})
+            context = metadata.get("context_dependencies", {}) if isinstance(metadata, Mapping) else {}
+            if not isinstance(context, Mapping) or any(not isinstance(role, str) or not isinstance(parents, list)
+                    or not parents or any(not isinstance(parent, str) or not parent for parent in parents)
+                    for role, parents in context.items()):
+                raise GraphValidationError("context_dependencies must map roles to non-empty node name lists")
             if not isinstance(name, str) or not name:
                 raise GraphValidationError("graph node name must be a non-empty string")
-            if node_type not in {
-                "panel",
-                "transformer",
-                "composer",
-                "prediction_composer",
-            }:
+            if node_type not in {"panel", "operator"}:
                 raise GraphValidationError(
                     f"unsupported graph node type: {node_type!r}"
                 )
@@ -201,95 +221,28 @@ class Graph(Generic[OutputT]):
     ) -> "Graph[Panel]":
         """Bind inputs without repeating topology and signature validation."""
 
-        from .composer import COMPOSER_REGISTRY
-        from .prediction import PREDICTION_COMPOSER_REGISTRY, PredictionTrainingContext
-        from .transformer import TRANSFORMER_REGISTRY
+        from .operator import OPERATOR_REGISTRY, OperationNode
 
         by_name: dict[str, Node] = {}
-
         for node in spec.nodes:
             if node.node_type == "panel":
-                try:
-                    panel = inputs[node.name]
-                except KeyError as error:
-                    raise GraphValidationError(
-                        f"missing symbolic panel input: {node.name}"
-                    ) from error
-                by_name[node.name] = panel
+                if node.name not in inputs:
+                    raise GraphValidationError(f"missing symbolic panel input: {node.name}")
+                by_name[node.name] = inputs[node.name]
                 continue
-
             config = dict(node.config)
-            operation_key = node.node_type
-            operation_name = cast(str, config.pop(operation_key))
-            input_nodes = tuple(by_name[parent] for parent in node.inputs)
-            try:
-                if node.node_type == "transformer":
-                    transformer = TRANSFORMER_REGISTRY.get(operation_name)
-                    panel_parameters = {
-                        parameter: (
-                            tuple(
-                                Graph._from_nodes((by_name[value],))
-                                for value in values
-                            )
-                            if transformer.panel_parameter_kinds.get(parameter)
-                            else Graph._from_nodes((by_name[values[0]],))
-                        )
-                        for parameter, values in node.panel_parameters.items()
-                    }
-                    built = transformer(
-                        Graph._from_nodes((input_nodes[0],)),
-                        name=node.name,
-                        metadata=node.metadata,
-                        **panel_parameters,
-                        **config,
-                    )
-                elif node.node_type == "composer":
-                    built = COMPOSER_REGISTRY.get(operation_name)(
-                        *(Graph._from_nodes((parent,)) for parent in input_nodes),
-                        name=node.name,
-                        metadata=node.metadata,
-                        **config,
-                    )
-                else:
-                    alpha_count = int(config.pop("alpha_count"))
-                    composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
-                    composer_parameters = {}
-                    if "window" in config:
-                        composer_parameters["window"] = int(config.pop("window"))
-                    if "quantiles" in config:
-                        composer_parameters["quantiles"] = int(
-                            config.pop("quantiles")
-                        )
-                    if "half_life" in config:
-                        composer_parameters["half_life"] = int(
-                            config.pop("half_life")
-                        )
-                    composer = composer_type(**composer_parameters)
-                    if config:
-                        raise GraphValidationError(
-                            f"unknown prediction composer parameters: {sorted(config)}"
-                        )
-                    training = (
-                        PredictionTrainingContext(
-                            Graph._from_nodes((input_nodes[-2],)),
-                            Graph._from_nodes((input_nodes[-1],)),
-                        )
-                        if composer.supervised
-                        else None
-                    )
-                    built = composer.compose(
-                        *(
-                            Graph._from_nodes((parent,))
-                            for parent in input_nodes[:alpha_count]
-                        ),
-                        training=training,
-                        name=node.name,
-                        metadata=node.metadata,
-                    )
-            except KeyError as error:
-                raise GraphValidationError(str(error)) from error
-            by_name[node.name] = built._single_output()
-
+            registered = OPERATOR_REGISTRY.get(config.pop("operator"))
+            operation = registered
+            if registered.factory is not None:
+                parameters = {key: value for key, value in config.items() if key != "alpha_count"}
+                operation = registered.factory(**parameters)
+            by_name[node.name] = OperationNode(
+                inputs=tuple(by_name[parent] for parent in node.inputs),
+                panel_parameters={key: tuple(by_name[parent] for parent in values)
+                                  for key, values in node.panel_parameters.items()},
+                operation=operation, config=config, input_mode=registered.input_mode,
+                name=node.name, metadata=node.metadata,
+            )
         return Graph(_nodes=tuple(by_name[name] for name in spec.outputs))
 
     @classmethod
@@ -298,125 +251,61 @@ class Graph(Generic[OutputT]):
     ) -> GraphSpec:
         """Validate topology, registered operators, and operator parameters."""
 
-        from .composer import COMPOSER_REGISTRY
-        from .prediction import PREDICTION_COMPOSER_REGISTRY
-        from .transformer import TRANSFORMER_REGISTRY
+        from .operator import OPERATOR_REGISTRY
 
-        spec = (
-            specification
-            if isinstance(specification, GraphSpec)
-            else GraphSpec.from_dict(specification)
-        )
+        spec = specification if isinstance(specification, GraphSpec) else GraphSpec.from_dict(specification)
         declared_names = [node.name for node in spec.nodes]
         if len(declared_names) != len(set(declared_names)):
             raise GraphValidationError("graph specification has duplicate node names")
         seen: set[str] = set()
         for node in spec.nodes:
-            dependencies = (
-                *node.inputs,
-                *(
-                    value
-                    for values in node.panel_parameters.values()
-                    for value in values
-                ),
-            )
-            missing = [parent for parent in dependencies if parent not in seen]
+            if node.node_type not in {"panel", "operator"}:
+                raise GraphValidationError(f"unsupported graph node type: {node.node_type!r}")
+            dependencies = (*node.inputs, *(value for values in node.panel_parameters.values() for value in values))
+            context = tuple(parent for parents in node.metadata.get("context_dependencies", {}).values() for parent in parents)
+            missing = [parent for parent in (*dependencies, *context) if parent not in seen]
             if missing:
-                raise GraphValidationError(
-                    f"graph node {node.name!r} has unresolved or forward dependencies: "
-                    f"{missing}"
-                )
+                raise GraphValidationError(f"graph node {node.name!r} has unresolved or forward dependencies: {missing}")
             if node.node_type == "panel":
-                if node.inputs or node.panel_parameters:
-                    raise GraphValidationError(
-                        f"panel node {node.name!r} cannot have dependencies"
-                    )
+                if dependencies:
+                    raise GraphValidationError(f"panel node {node.name!r} cannot have dependencies")
                 seen.add(node.name)
                 continue
             config = dict(node.config)
-            operation_name = config.pop(node.node_type, None)
+            operation_name = config.pop("operator", None)
             if not isinstance(operation_name, str) or not operation_name:
-                raise GraphValidationError(
-                    f"graph node {node.name!r} is missing {node.node_type!r}"
-                )
-            if node.node_type == "transformer" and len(node.inputs) != 1:
-                raise GraphValidationError(
-                    f"transformer {node.name!r} must have one input"
-                )
-            if node.node_type == "composer" and len(node.inputs) < 2:
-                raise GraphValidationError(
-                    f"composer {node.name!r} requires at least two inputs"
-                )
-            if node.node_type == "prediction_composer" and not node.inputs:
-                raise GraphValidationError(
-                    f"prediction_composer {node.name!r} requires at least one input"
-                )
-            if node.node_type != "transformer" and node.panel_parameters:
-                raise GraphValidationError(
-                    f"{node.node_type} {node.name!r} cannot declare panel_parameters"
-                )
+                raise GraphValidationError(f"graph node {node.name!r} is missing 'operator'")
             try:
-                if node.node_type == "transformer":
-                    operation = TRANSFORMER_REGISTRY.get(operation_name)
-                elif node.node_type == "composer":
-                    operation = COMPOSER_REGISTRY.get(operation_name)
-                else:
-                    composer_type = PREDICTION_COMPOSER_REGISTRY.get(operation_name)
-                    window = config.get("window")
-                    quantiles = config.get("quantiles")
-                    half_life = config.get("half_life")
-                    parameters = {}
-                    if window is not None:
-                        parameters["window"] = int(window)
-                    if quantiles is not None:
-                        parameters["quantiles"] = int(quantiles)
-                    if half_life is not None:
-                        parameters["half_life"] = int(half_life)
-                    operation = composer_type(**parameters)
-            except KeyError as error:
-                raise GraphValidationError(str(error)) from error
-            try:
-                if node.node_type != "prediction_composer":
-                    if node.node_type == "transformer":
-                        panel_arguments = {
-                            parameter: (
-                                tuple(object() for _ in values)
-                                if operation.panel_parameter_kinds.get(parameter)
-                                else object()
-                            )
-                            for parameter, values in node.panel_parameters.items()
-                        }
-                        signature(operation.operation).bind(
-                            object(), **panel_arguments, **config
-                        )
-                    else:
-                        signature(operation.operation).bind(
-                            *(object() for _ in node.inputs), **config
-                        )
-                else:
-                    alpha_count = config.get("alpha_count")
-                    if (
-                        not isinstance(alpha_count, int)
-                        or isinstance(alpha_count, bool)
-                        or alpha_count <= 0
-                    ):
-                        raise TypeError("alpha_count must be a positive integer")
-                    operation._validate_alpha_count(alpha_count)
-                    expected = alpha_count + (2 if operation.supervised else 0)
+                operation = OPERATOR_REGISTRY.get(operation_name)
+                operation.validate_input_count(len(node.inputs))
+                if operation.factory is not None:
+                    if node.panel_parameters:
+                        raise ValueError("model label inputs must be positional dependencies")
+                    alpha_count = config.pop("alpha_count", None)
+                    if not isinstance(alpha_count, int) or isinstance(alpha_count, bool) or alpha_count <= 0:
+                        raise ValueError("alpha_count must be a positive integer")
+                    model = operation.factory(**config)
+                    model._validate_alpha_count(alpha_count)
+                    expected = alpha_count + (2 if model.supervised else 0)
                     if len(node.inputs) != expected:
-                        raise TypeError(
-                            f"expected {expected} inputs, got {len(node.inputs)}"
-                        )
-            except TypeError as error:
-                raise GraphValidationError(
-                    f"invalid parameters for graph node {node.name!r}: {error}"
-                ) from error
+                        raise ValueError(f"expected {expected} inputs, got {len(node.inputs)}")
+                else:
+                    unknown = set(node.panel_parameters) - set(operation.panel_parameter_kinds)
+                    if unknown:
+                        raise ValueError(f"unknown auxiliary inputs: {sorted(unknown)}")
+                    for key, values in node.panel_parameters.items():
+                        if not operation.panel_parameter_kinds[key] and len(values) != 1:
+                            raise ValueError(f"auxiliary input {key!r} requires one panel")
+                    panel_arguments = {key: tuple(object() for _ in values)
+                        if operation.panel_parameter_kinds[key] else object()
+                        for key, values in node.panel_parameters.items()}
+                    signature(operation.operation).bind(*(object() for _ in node.inputs), **panel_arguments, **config)
+            except (KeyError, TypeError, ValueError) as error:
+                raise GraphValidationError(f"invalid operator {node.name!r}: {error}") from error
             seen.add(node.name)
         missing_outputs = [name for name in spec.outputs if name not in seen]
         if missing_outputs:
-            raise GraphValidationError(
-                f"graph outputs reference unknown nodes: {missing_outputs}"
-            )
+            raise GraphValidationError(f"graph outputs reference unknown nodes: {missing_outputs}")
         return spec
 
     @property
@@ -505,52 +394,19 @@ class Graph(Generic[OutputT]):
             dfs(node)
 
     def _validate_parents(self) -> None:
-        prediction_nodes: set[int] = set()
         for node in self._nodes:
             for parent in node.parents:
                 if not isinstance(parent, Node):
-                    raise GraphValidationError(
-                        f"Invalid parent type on {node.name}: {type(parent)}"
-                    )
-
-            if node.node_type == "transformer" and len(node.spec_inputs()) != 1:
-                raise GraphValidationError(
-                    f"Transformer '{node.name}' must have exactly one input"
-                )
-
-            if node.node_type == "composer" and len(node.spec_inputs()) < 2:
-                raise GraphValidationError(
-                    f"Composer '{node.name}' must have at least two inputs"
-                )
-
-            if node.node_type == "prediction_composer" and len(node.parents) < 1:
-                raise GraphValidationError(
-                    f"PredictionComposer '{node.name}' must have at least one parent"
-                )
-
-            if (
-                node.node_type == "prediction_composer"
-                or node.__class__.__name__ == "PredictionPanel"
-            ):
-                prediction_nodes.add(id(node))
-                continue
-
-            prediction_parents = tuple(
-                parent for parent in node.parents if id(parent) in prediction_nodes
-            )
-            if not prediction_parents:
-                continue
-            semantic_inputs = node.spec_inputs()
-            if (
-                node.node_type != "transformer"
-                or len(semantic_inputs) != 1
-                or id(semantic_inputs[0]) not in prediction_nodes
-                or len(prediction_parents) != 1
-            ):
-                raise GraphValidationError(
-                    "PredictionPanel values may only feed a Transformer's semantic input"
-                )
-            prediction_nodes.add(id(node))
+                    raise GraphValidationError(f"invalid parent on {node.name}: {type(parent)}")
+            if node.node_type == "operator":
+                if node.execution_kind == "prediction_composer":
+                    alpha_count = node.config()["alpha_count"]
+                    node.operation._validate_alpha_count(alpha_count)
+                    expected = alpha_count + (2 if node.operation.supervised else 0)
+                    if len(node.spec_inputs()) != expected:
+                        raise GraphValidationError(f"{node.name} requires {expected} inputs")
+                else:
+                    node.operation.validate_input_count(len(node.spec_inputs()))
 
     def topological_sort(self) -> tuple[Node, ...]:
         return self._nodes

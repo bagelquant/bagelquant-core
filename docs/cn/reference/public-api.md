@@ -111,5 +111,10 @@ UI 日期筛选不能重启平滑。该数值函数不是新增的无限制图/D
 
 ## 边界
 
+`WeightedRegressionMoments.scale_weights(factor)` 用正的有限标量缩放所有已累计的
+加权统计量，并保留 `observation_count`。它只修改当前累积器，先前 `copy()` 的快照
+保持独立。流式衰减可以先缩放旧统计量再加入下一批，以最新已观测批次作为参考，
+不依赖未来数据终点。衰减政策与训练日期选择仍由 Workbench 管理。
+
 公开 API 面向 Polars、`Panel` 和 `Graph`。`bagelquant-core` 不负责数据获取、凭证管理、持久化、组合模拟或应用 UI。
 

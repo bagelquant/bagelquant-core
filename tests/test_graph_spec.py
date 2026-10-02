@@ -84,14 +84,14 @@ def test_graph_spec_rejects_unknown_operations() -> None:
             {"name": "book", "node_type": "panel", "inputs": []},
             {
                 "name": "bad",
-                "node_type": "transformer",
+                "node_type": "operator",
                 "inputs": ["book"],
-                "config": {"transformer": "unknown.operator"},
+                "config": {"operator": "unknown.operator"},
             },
         ],
     }
 
-    with pytest.raises(GraphValidationError, match="Unknown transformer"):
+    with pytest.raises(GraphValidationError, match="Unknown operator"):
         Graph.from_spec(specification, inputs=_inputs())
 
 
@@ -101,10 +101,10 @@ def test_graph_spec_rejects_forward_references() -> None:
         "nodes": [
             {
                 "name": "ranked",
-                "node_type": "transformer",
+                "node_type": "operator",
                 "inputs": ["book"],
                 "config": {
-                    "transformer": "bagelquant_core.transformer.ranking.rank"
+                    "operator": "bagelquant_core.transformer.ranking.rank"
                 },
             },
             {"name": "book", "node_type": "panel", "inputs": []},
@@ -121,5 +121,5 @@ def test_graph_spec_rejects_invalid_operator_parameters() -> None:
     ).spec().to_dict()
     specification["nodes"][-1]["config"]["unknown_parameter"] = True
 
-    with pytest.raises(GraphValidationError, match="invalid parameters"):
+    with pytest.raises(GraphValidationError, match="invalid operator"):
         Graph.validate_spec(specification)

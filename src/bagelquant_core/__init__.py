@@ -5,6 +5,9 @@ Import from this module for the stable surface used by factor workflow code:
 operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 """
 
+from .node import Node
+from .operator import Operator, OperationNode, OPERATOR_REGISTRY
+from .portfolio_values import PortfolioValue, rebalance, rebalance_value, top_n, equal_weight, regularized_weights, exposure_constrained_weights
 from .execution import ExecutionRuntime
 from .graph import CompiledGraph, Graph, GraphSpec, GraphValidationError
 from .machine_learning import (
@@ -57,7 +60,12 @@ from .prediction_processing import (
     smooth_prediction,
 )
 
+from .operator_state import capture_operator_checkpoints
+from .training_operators import rolling_elastic_net_prediction, rolling_lightgbm_prediction, capture_training_audits, date_balanced_training_keys
+
 __all__ = [
+    "PortfolioValue", "rebalance", "rebalance_value", "top_n", "equal_weight", "regularized_weights",
+    "Node", "Operator", "OperationNode", "OPERATOR_REGISTRY",
     "CategoryPanel",
     "CompiledGraph",
     "Domain",
@@ -108,3 +116,7 @@ __all__ = [
     "smooth_prediction",
     "zero_preserving_rms_scaler_from_moments",
 ]
+
+__all__ += ['rolling_elastic_net_prediction', 'rolling_lightgbm_prediction', 'capture_training_audits', 'date_balanced_training_keys']
+__all__ += ['exposure_constrained_weights']
+__all__ += ['capture_operator_checkpoints']

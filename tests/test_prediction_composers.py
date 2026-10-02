@@ -24,7 +24,7 @@ from bagelquant_core import (
     quantile_rank_information_coefficient,
 )
 from bagelquant_core.composer import add
-from bagelquant_core.transformer import group_demean, winsorize, zscore
+from bagelquant_core.transformer import winsorize, zscore
 
 
 def _panel(
@@ -73,17 +73,20 @@ def test_identity_prediction_is_typed_and_round_trips_spec() -> None:
     assert isinstance(rebound, PredictionPanel)
 
 
-def test_prediction_may_only_feed_transformer_semantic_inputs() -> None:
+def test_predictions_can_share_multi_input_operators() -> None:
     day = date(2024, 1, 31)
     domain = Domain(calendar=[day], universe=["A", "B"])
     alpha = _panel(domain, "alpha", [(day, "A", 1.0), (day, "B", 3.0)])
-    groups = _panel(domain, "groups", [(day, "A", 1.0), (day, "B", 2.0)])
-    prediction = IdentityPredictionComposer().compose(alpha)
-
-    with pytest.raises(ValueError, match="semantic input"):
-        add(prediction, alpha)
-    with pytest.raises(ValueError, match="semantic input"):
-        group_demean(groups, group=prediction)
+    first = IdentityPredictionComposer().compose(alpha, name="first")
+    second = IdentityPredictionComposer().compose(alpha, name="second")
+    graph = add(first, second)
+    result = graph.compute(dense_output=False)
+    assert isinstance(result, PredictionPanel)
+    assert result.collect(dense=False).get_column("value").to_list() == [2.0, 6.0]
+    assert len([node for node in graph.nodes if node is alpha]) == 1
+    restored = Graph.compile(graph.spec()).compute({"alpha": alpha}, dense_output=False)
+    assert isinstance(restored, PredictionPanel)
+    assert restored.collect(dense=False).equals(result.collect(dense=False))
 
 
 def test_equal_weight_renormalizes_available_alpha_values() -> None:
@@ -253,7 +256,7 @@ def test_ic_weighted_decay_prefers_recent_ic_and_serializes_half_life() -> None:
     composer_node = next(
         node
         for node in graph.spec().to_dict()["nodes"]
-        if node["node_type"] == "prediction_composer"
+        if node["config"].get("operator", "").startswith("prediction:")
     )
 
     # recent has IC [-1, +1], so its half-life-one score is 1/3; steady is 1.
@@ -261,7 +264,7 @@ def test_ic_weighted_decay_prefers_recent_ic_and_serializes_half_life() -> None:
     assert result.get_column("time").unique().to_list() == [times[2]]
     assert result.get_column("value").to_list() == pytest.approx([0.75, 2.0, 3.0])
     assert composer_node["config"] == {
-        "prediction_composer": "ic_weighted_decay",
+        "operator": "prediction:ic_weighted_decay",
         "alpha_count": 4,
         "window": 2,
         "half_life": 1,
@@ -359,7 +362,7 @@ def test_quantile_ic_weighted_uses_positive_full_window_and_serializes() -> None
     composer_node = next(
         node
         for node in graph.spec().to_dict()["nodes"]
-        if node["node_type"] == "prediction_composer"
+        if node["config"].get("operator", "").startswith("prediction:")
     )
 
     assert result.get_column("time").unique().to_list() == [times[12]]
@@ -367,7 +370,7 @@ def test_quantile_ic_weighted_uses_positive_full_window_and_serializes() -> None
         [float(10 - index) for index in range(10)]
     )
     assert composer_node["config"] == {
-        "prediction_composer": "quantile_ic_weighted",
+        "operator": "prediction:quantile_ic_weighted",
         "alpha_count": 2,
         "window": 12,
         "quantiles": 10,

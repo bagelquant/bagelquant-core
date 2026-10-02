@@ -15,7 +15,7 @@ from .aggregation import (
     weighted_sum,
 )
 from .arithmetic import add, div, mul, sub
-from .core import COMPOSER_REGISTRY, ComposerFunction, composer
+from .core import COMPOSER_REGISTRY, composer
 from .general import broadcast_by_time, coalesce
 from .math import (
     and_,
@@ -37,7 +37,6 @@ from .rolling import (
 
 __all__ = [
     "COMPOSER_REGISTRY",
-    "ComposerFunction",
     "add",
     "and_",
     "broadcast_by_time",

@@ -1,111 +1,51 @@
 # BagelQuant Core Architecture
 
-## Overview
+## Unified Node and Operator
 
-BagelQuant separates concrete panel data from lazy graph logic.
-
-```text
-Panel inputs
-    |
-    v
-Transformer and Composer functions
-    |
-    v
-Graph logic chains
-    |
-    v
-Sparse PlanValue / Polars LazyFrame
-    |
-    v
-Cached Panel outputs
-```
-
-## Panel
-
-A `Panel` is an immutable numeric plan indexed by time and asset. Every input
-is normalized through a `Domain`, which owns its trading sessions and compact
-asset membership. Inputs remain sparse; `Panel.collect(dense=True)` is the explicit dense
-dense, defensive-copy boundary.
-
-```python
-price = Panel.from_domain(price_df, domain, name="price")
-```
-
-Panels are DAG leaves and execution outputs.
-
-## Graph
-
-A `Graph` represents lazy derived logic:
-
-```python
-bm_ratio = div(book, price, name="bm_ratio")
-bm_factor = rank(zscore(bm_ratio), name="bm_factor")
-```
-
-Graph responsibilities:
-
-- Collect dependencies
-- Validate DAG structure
-- Expose reproducible specs
-- Delegate execution
-- Expose the materialized `output` panel after execution
-
-Graph does not own domain operations or raw input data.
-
-## Transformer Functions
-
-A transformer is unary:
+Core has two calculation abstractions: nodes and operators. Panel, CategoryPanel,
+PredictionPanel, Domain, graph specs, types and runners are infrastructure.
+OPERATOR_REGISTRY provides one registry; Transformer, Composer and Prediction
+Composer share OperationNode, dependency handling and execution.
 
 ```text
-Panel | Graph -> Graph
+Domain / Panel inputs → Operator / OperationNode DAG → runner → Panel / weight values
 ```
 
-```python
-signal = rank(raw_factor, name="signal")
-```
+Node.dag() exports a complete JSON-safe graph before execution; Node.mermaid()
+exports dependencies. Primary inputs, named auxiliary Panels and state edges
+participate in serialization, validation and topology. Operators have explicit
+versions, parameters, types, causality, density and documentation contracts.
+Transformer / Composer retain their names and mathematics as catalog categories.
 
-Custom transformers use `@transformer`.
+## Panel and Domain
 
-## Composer Functions
+Immutable Panels use time/asset_id keys. Domain defines trading sessions and
+dynamic membership. Inputs remain sparse until an explicit dense boundary.
+Outputs are defensive copies; temporal/cross-sectional operations retain
+missingness and causality.
 
-A composer accepts one or more inputs:
+## Graph and execution
 
-```text
-(Panel | Graph, ...) -> Graph
-```
+Graph collects dependencies, validates cycles, exports specs and delegates
+execution. Graph.compile(spec) validates once and binds successive batches.
+Shared nodes execute once. Pure Polars operations fuse; NumPy, regression and
+optimization create explicit eager barriers. Cache keys include input, Domain
+and node configuration.
 
-```python
-bm_ratio = div(book, price, name="bm_ratio")
-```
+## Weight and training operators
 
-Custom composers use `@composer`.
+top_n, equal_weight, regularized_weights, exposure_constrained_weights and
+rebalance belong to Core. Optimizers reference historical calculated targets,
+never accounts. Rebalance stores full targets and hold/unavailable/rebalance
+states anchored at the first Data Start trading session; zero means exit.
+Rolling ElasticNet/LightGBM, mature-label windows, deterministic sampling and
+fit audits are generic implementations. Callers provide labels, Universe,
+market rules, training lifecycle and persistence explicitly.
 
-## Internal Nodes
+## Resources and package boundaries
 
-Calling an operation creates an internal node that stores:
-
-- Parent nodes
-- Qualified operation name
-- Serializable configuration
-- Node name and metadata
-- Cached output panel after execution
-
-Users do not construct internal nodes directly.
-
-## Execution
-
-Calling `Graph.compute()` compiles the DAG into lazy `PlanValue` objects.
-Lazy nodes fuse into one Polars plan. Dense alignment is inserted
-only for operations whose contracts require it, and NumPy/regression
-operations create explicit eager barriers. Shared nodes execute once and
-multi-output graphs use one final collection boundary.
-
-```python
-signal.compute()
-panel = signal.output
-```
-
-`Graph.compile(spec)` validates a declarative graph once. Its
-`CompiledGraph.compute(inputs, runtime=...)` method can be rebound to successive
-input batches. Cache keys use input and Domain identities plus node
-configuration; Core does not hash full payloads during graph execution.
+ResourceLimits controls native threads, concurrency, batches, caches and
+memory pressure. Hardware settings are identity-neutral; sampling, model and
+solver tolerance are numerical operator parameters. Core imports no Data,
+BT or Workbench and owns no Provider, account, market rule or evaluation
+persistence. BT owns account simulation, return diagnostics, metrics and charts.

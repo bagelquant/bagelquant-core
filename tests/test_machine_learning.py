@@ -220,6 +220,33 @@ def test_weighted_moment_elastic_net_matches_row_matrix_fit_across_batches() -> 
     )
 
 
+def test_moment_weight_rescaling_matches_direct_weights_and_preserves_snapshot() -> None:
+    values = np.array([[1., 2.], [3., 1.], [2., 4.], [5., 3.]])
+    target = np.array([0.1, 0.3, -0.2, 0.5])
+    actual = WeightedRegressionMoments.empty(2)
+    actual.update(values[:2], target[:2], sample_weight=np.array([0.5, 1.]))
+    saved = actual.copy()
+    actual.scale_weights(0.25)
+    actual.update(values[2:], target[2:], sample_weight=np.array([0.5, 1.]))
+    expected = WeightedRegressionMoments.empty(2)
+    expected.update(values, target, sample_weight=np.array([0.125, 0.25, 0.5, 1.]))
+    assert actual.observation_count == expected.observation_count == 4
+    assert actual.weight_sum == pytest.approx(expected.weight_sum)
+    assert actual.target_sum == pytest.approx(expected.target_sum)
+    np.testing.assert_allclose(actual.feature_sum, expected.feature_sum)
+    np.testing.assert_allclose(actual.feature_cross, expected.feature_cross)
+    np.testing.assert_allclose(actual.feature_target, expected.feature_target)
+    assert saved.observation_count == 2
+    assert saved.weight_sum == 1.5
+
+
+@pytest.mark.parametrize("factor", [0., -1., float("nan"), float("inf")])
+def test_moment_weight_rescaling_rejects_invalid_scale(factor: float) -> None:
+    moments = WeightedRegressionMoments.empty(1)
+    with pytest.raises(ValueError, match="positive and finite"):
+        moments.scale_weights(factor)
+
+
 def test_elastic_net_composer_round_trips_complete_configuration() -> None:
     composer = ElasticNetPredictionComposer(
         walk_forward=WalkForwardConfig(),

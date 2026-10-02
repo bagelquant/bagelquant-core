@@ -35,7 +35,19 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
     operation = _registry_item(name, kind=kind)
     source, auxiliary, binary, group = _panels(name)
     config = _config(name)
+    if name == "equal_weight":
+        source = binary
+
     if kind == "composer":
+        if name in {"rolling_elastic_net_prediction", "rolling_lightgbm_prediction"}:
+            config.update(window=3, fit_every=1, min_samples=2, max_samples=100, label_maturity=1)
+            if name == "rolling_lightgbm_prediction":
+                config.update(num_boost_round=2, min_data_in_leaf=1)
+            graph = operation(source, labels=auxiliary, **config)
+            return OperationExample(name, kind, f"{name}(source, labels=labels{_config_call(config)})",
+                (ExamplePanel("source", source.collect(dense=True)),),
+                {"labels": (ExamplePanel("labels", auxiliary.collect(dense=True)),)},
+                ExamplePanel("output", graph.compute().collect(dense=True)))
         if name == "broadcast_by_time":
             source = Panel.from_domain(
                 auxiliary.collect(dense=False)
@@ -58,6 +70,8 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
         panel_arguments: dict[str, Any] = {}
         parameter_examples: dict[str, tuple[ExamplePanel, ...]] = {}
         for parameter, multiple in operation.panel_parameter_kinds.items():
+            if parameter == "reference":
+                continue
             panel = (
                 group
                 if parameter == "group"
@@ -75,7 +89,7 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
         panel_call = "".join(
             f", {parameter}="
             + (f"({parameter},)" if multiple else parameter)
-            for parameter, multiple in operation.panel_parameter_kinds.items()
+            for parameter, multiple in operation.panel_parameter_kinds.items() if parameter != "reference"
         )
         call = f"{name}(source{panel_call}{_config_call(config)})"
     return OperationExample(
@@ -261,6 +275,15 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
 
 
 def _config(name: str) -> dict[str, Any]:
+    if name == "exposure_constrained_weights":
+        return {"max_weight": 1.0, "lower_bounds": [-100.0], "upper_bounds": [100.0]}
+    if name == "top_n":
+        return {"count": 2}
+    if name == "rebalance":
+        return {"every": 1, "data_start": "2024-01-02"}
+    if name == "regularized_weights":
+        return {"max_weight": 0.5}
+
     if name in {"trim", "truncate"}:
         return {"lower": 0.0, "upper": 5.0}
     if name in {"power", "signed_power"}:

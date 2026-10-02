@@ -34,6 +34,7 @@ class NodeSpec:
 
 class Node(ABC):
     node_type: ClassVar[str] = "node"
+    execution_kind: str = "panel"
 
     def __init__(
         self,
@@ -94,3 +95,15 @@ class Node(ABC):
                 for name, parents in self.spec_panel_parameters().items()
             },
         )
+
+    def dag(self) -> dict[str, Any]:
+        """Export this node's full dependency closure before execution."""
+        from .graph import Graph
+
+        return Graph._from_nodes((self,)).spec().to_dict()
+
+    def mermaid(self) -> str:
+        """Render all primary and named auxiliary dependency edges."""
+        from .graph import Graph
+
+        return Graph._from_nodes((self,)).spec().mermaid()

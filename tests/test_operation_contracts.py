@@ -382,9 +382,9 @@ def test_rolling_rank_ties_and_higher_moments_match_reference_formulas() -> None
 def test_public_boundaries_reject_ambiguous_inputs() -> None:
     source = _single_time([1.0])
 
-    with pytest.raises(ValueError, match="requires at least one Panel"):
+    with pytest.raises(ValueError, match="must not be empty"):
         orthogonalize(source, factors=()).compute()
-    with pytest.raises(ValueError, match="at least two"):
+    with pytest.raises(ValueError, match="requires 2"):
         weighted_sum(weights=[])
     with pytest.raises(TypeError, match="real numbers"):
         weighted_sum(source, source, weights=[True, 1.0]).compute()

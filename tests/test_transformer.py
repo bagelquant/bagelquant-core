@@ -153,7 +153,7 @@ def test_smooth_is_the_fixed_daily_rolling_ewm_preset() -> None:
 
     node = smooth(source).spec().to_dict()["nodes"][-1]
     assert node["config"] == {
-        "transformer": "bagelquant_core.transformer.rolling.smooth"
+        "operator": "bagelquant_core.transformer.rolling.smooth"
     }
 
 

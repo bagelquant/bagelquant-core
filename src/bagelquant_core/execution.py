@@ -94,6 +94,23 @@ class ExecutionRuntime:
             "active_window_iterations": 0,
         }
 
+    def _remember_output(self, identity: str, panel: Panel) -> None:
+        """Bound retained numerical output caches without changing graph identity."""
+        from .resources import active_resource_limits
+        limit = active_resource_limits().cache_mib * 1024 * 1024
+        def size(value):
+            frame = value._cached_dense
+            return 0 if frame is None else frame.estimated_size()
+        required = size(panel)
+        if required > limit or limit == 0:
+            self.cache.clear()
+            return
+        self.cache.pop(identity, None)
+        resident = sum(size(value) for value in self.cache.values())
+        while self.cache and resident + required > limit:
+            resident -= size(self.cache.pop(next(iter(self.cache))))
+        self.cache[identity] = panel
+
     def run(
         self,
         graph: Graph,
@@ -273,7 +290,7 @@ class ExecutionRuntime:
                 else:
                     panel._cached_dense = panel._validate_collected(frame)
                 if plan.cacheable:
-                    self.cache[plan.identity] = panel
+                    self._remember_output(plan.identity, panel)
                 node.set_output(panel)
                 results[node.name] = panel
         return {
@@ -450,7 +467,7 @@ class ExecutionRuntime:
             )
             if (
                 plan_operation is not None
-                and node.node_type == "transformer"
+                and node.execution_kind == "transformer"
             ):
                 if prepared[0].asset_time_ordered:
                     self._diagnostics["sorts_elided"] += 1
@@ -462,7 +479,7 @@ class ExecutionRuntime:
                 )
             elif (
                 plan_operation is not None
-                and node.node_type == "composer"
+                and node.execution_kind == "composer"
                 and self._positionally_aligned(prepared)
             ):
                 self._diagnostics["positional_composer_hits"] += 1
@@ -557,15 +574,15 @@ class ExecutionRuntime:
             ),
             categorical=(
                 prepared[0].categorical
-                if node.node_type == "transformer"
+                if node.execution_kind == "transformer"
                 else False
             ),
             prediction=(
-                node.node_type == "prediction_composer"
+                node.execution_kind == "prediction_composer"
                 or (
-                    node.node_type == "transformer"
-                    and bool(prepared)
-                    and prepared[0].prediction
+                    bool(node.spec_inputs())
+                    and all(parent.prediction for parent in prepared[:len(node.spec_inputs())])
+                    and getattr(node.operation, "output_type", None) != "weights"
                 )
             ),
             cacheable=cacheable,
@@ -920,7 +937,7 @@ class ExecutionRuntime:
         if dense_output:
             self.materializations += 1
             if plan.cacheable:
-                self.cache[plan.identity] = output
+                self._remember_output(plan.identity, output)
         return output
 
     def _lower_scalar_arithmetic(
@@ -930,7 +947,7 @@ class ExecutionRuntime:
     ) -> PlanValue | None:
         """Fuse ``constant(panel)`` into a binary arithmetic expression."""
 
-        if node.node_type != "composer" or len(node.parents) != 2:
+        if node.execution_kind != "composer" or len(node.parents) != 2:
             return None
         operation = getattr(getattr(node, "operation", None), "display_name", "")
         expressions = {
@@ -949,7 +966,7 @@ class ExecutionRuntime:
             (
                 index
                 for index, parent in enumerate(node.parents)
-                if parent.node_type == "transformer"
+                if parent.execution_kind == "transformer"
                 and getattr(
                     getattr(parent, "operation", None), "display_name", ""
                 )
@@ -1047,7 +1064,7 @@ class ExecutionRuntime:
 
         operation = getattr(getattr(node, "operation", None), "display_name", "")
         contract = self._contract(node)
-        if node.node_type == "transformer" and operation in {
+        if node.execution_kind == "transformer" and operation in {
             "constant",
             "fillna",
             "fillna_zero",
@@ -1130,7 +1147,7 @@ class ExecutionRuntime:
             ),
         }
         if (
-            node.node_type != "composer"
+            node.execution_kind != "composer"
             or operation not in reducers
             or not any(parent.default_value is not None for parent in parents)
         ):
@@ -1227,7 +1244,7 @@ class ExecutionRuntime:
         """Lower lag to a sparse calendar-key shift instead of a dense grid."""
 
         operation = getattr(getattr(node, "operation", None), "display_name", "")
-        if node.node_type != "transformer" or operation != "lag":
+        if node.execution_kind != "transformer" or operation != "lag":
             return None
         parent = parents[0]
         periods = self._node_parameters(node).get("periods", 1)
@@ -1686,7 +1703,7 @@ class ExecutionRuntime:
         node_identity: str,
     ) -> str | None:
         if (
-            node.node_type == "transformer"
+            node.execution_kind == "transformer"
             and self._is_builtin_operation(node)
         ):
             return parents[0].key_identity
@@ -1724,10 +1741,10 @@ class ExecutionRuntime:
         if (
             not parents
             or not self._is_builtin_operation(node)
-            or node.node_type == "prediction_composer"
+            or node.execution_kind == "prediction_composer"
         ):
             return False
-        if node.node_type == "transformer":
+        if node.execution_kind == "transformer":
             return parents[0].exact_domain
         key_identity = parents[0].key_identity
         return (
@@ -1821,7 +1838,7 @@ class ExecutionRuntime:
     @staticmethod
     def _node_parameters(node: Node) -> dict[str, Any]:
         config = dict(node.config())
-        config.pop(node.node_type, None)
+        config.pop("operator", None)
         return config
 
 

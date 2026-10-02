@@ -510,6 +510,21 @@ class WeightedRegressionMoments:
             feature_target=self.feature_target.copy(),
         )
 
+    def scale_weights(self, factor: float) -> None:
+        """Rescale accumulated weight without changing the observed row count.
+
+        Streaming consumers can move a decay reference forward before adding
+        their next batch, without anchoring early samples to a future endpoint.
+        """
+
+        if not np.isfinite(factor) or factor <= 0:
+            raise ValueError("weight scale must be positive and finite")
+        self.weight_sum *= factor
+        self.feature_sum *= factor
+        self.target_sum *= factor
+        self.feature_cross *= factor
+        self.feature_target *= factor
+
     def validate(self) -> None:
         """Raise when the accumulator cannot define a regression sample."""
 

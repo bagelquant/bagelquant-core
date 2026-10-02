@@ -7,7 +7,8 @@ import polars as pl
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ..frame import ASSET_ID, TIME, VALUE, panel_like
-from ..operation_contract import InputDensity, OperationContract, TraceRule
+from ..operation_contract import ExecutionMode, InputDensity, OperationContract, TraceRule
+from ..exponential_state import checkpoint_ewm
 from .core import transformer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
@@ -237,7 +238,7 @@ def _alpha(
     return 1.0 - float(np.exp(np.log(0.5) / float(halflife)))
 
 
-@transformer
+@transformer(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX))
 def ewm_mean(
     frame: pl.DataFrame,
     *,
@@ -249,7 +250,11 @@ def ewm_mean(
     adjust: bool = True,
     ignore_na: bool = False,
 ) -> pl.DataFrame:
-    _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    resolved = _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    resumed = checkpoint_ewm(frame, alpha=resolved, min_periods=min_periods,
+        adjust=adjust, ignore_na=ignore_na, moment="mean")
+    if resumed is not None:
+        return resumed
     return _rolling_expr(
         frame,
         pl.col(VALUE)
@@ -266,7 +271,7 @@ def ewm_mean(
     )
 
 
-@transformer
+@transformer(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX))
 def ewm_var(
     frame: pl.DataFrame,
     *,
@@ -279,7 +284,11 @@ def ewm_var(
     ignore_na: bool = False,
     bias: bool = False,
 ) -> pl.DataFrame:
-    _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    resolved = _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    resumed = checkpoint_ewm(frame, alpha=resolved, min_periods=min_periods,
+        adjust=adjust, ignore_na=ignore_na, moment="var", bias=bias)
+    if resumed is not None:
+        return resumed
     return _rolling_expr(
         frame,
         pl.col(VALUE)
@@ -297,7 +306,7 @@ def ewm_var(
     )
 
 
-@transformer
+@transformer(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX))
 def ewm_std(
     frame: pl.DataFrame,
     *,
@@ -310,7 +319,11 @@ def ewm_std(
     ignore_na: bool = False,
     bias: bool = False,
 ) -> pl.DataFrame:
-    _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    resolved = _alpha(com=com, span=span, halflife=halflife, alpha=alpha)
+    resumed = checkpoint_ewm(frame, alpha=resolved, min_periods=min_periods,
+        adjust=adjust, ignore_na=ignore_na, moment="std", bias=bias)
+    if resumed is not None:
+        return resumed
     return _rolling_expr(
         frame,
         pl.col(VALUE)

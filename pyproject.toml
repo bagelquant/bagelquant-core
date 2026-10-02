@@ -1,6 +1,6 @@
 [project]
 name = "bagelquant-core"
-version = "0.8.0"
+version = "0.9.1"
 description = "Composable panel data and graph logic for quantitative research"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -15,6 +15,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.optional-dependencies]
+optimizer = ["cvxpy>=1.6,<2", "clarabel>=0.10,<1"]
+ml = ["lightgbm>=4.6,<5"]
 
 [dependency-groups]
 dev = [

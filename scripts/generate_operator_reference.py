@@ -34,6 +34,40 @@ EXCLUDED = {
 }
 
 PARAMETER_DESCRIPTIONS = {
+    "exposures": "Explicit auxiliary risk Panels, ordered like the bounds; missing required exposure fails.",
+    "lower_bounds": "One lower portfolio exposure bound per auxiliary risk Panel.",
+    "upper_bounds": "One upper portfolio exposure bound per auxiliary risk Panel.",
+    "concentration_penalty": "Non-negative quadratic penalty on target-weight concentration.",
+    "turnover_penalty": "Non-negative penalty against the previous computed target weights.",
+    "max_weight": "Maximum target weight per asset; insufficient capacity is unavailable.",
+    "max_turnover": "Optional total absolute target-weight change limit.",
+    "constraint_tolerance": "Numerical solver feasibility tolerance; part of research identity.",
+    "reference": "Optional historical computed target Panel; never account holdings.",
+    "every": "Positive number of trading sessions between decisions.",
+    "anchor": "Decision anchor: data_start.",
+    "calendar": "Explicit auxiliary trading calendar supplied by the application.",
+    "data_start": "Global Data Start; the first following trading session anchors decisions.",
+    "count": "Exact number of selected assets, with ties ordered by asset_id.",
+    "features": "One or more numeric feature Panels in fixed positional order.",
+    "labels": "Explicit auxiliary training-label Panel; only matured labels may be used.",
+    "label_end": "Optional auxiliary Panel of Gregorian date ordinals; each selected label must end by the fit date.",
+    "label_available": "Optional auxiliary Panel of Gregorian date ordinals; missing or future availability makes a row ineligible.",
+    "fit_every": "Trading sessions between model fits, anchored to Data Start.",
+    "min_samples": "Minimum number of complete mature training samples.",
+    "max_samples": "Maximum complete mature samples, allocated by date-balanced stable seeded keys before gathering features; part of DSL identity.",
+    "label_maturity": "Sessions before a label is fully known; supplied from its auxiliary contract.",
+    "anchor_offset": "Application supplied position of the first input session in the global calendar.",
+    "num_leaves": "Maximum LightGBM leaves per tree.",
+    "learning_rate": "LightGBM boosting learning rate.",
+    "min_data_in_leaf": "Minimum training observations per leaf.",
+    "lambda_l1": "LightGBM L1 leaf penalty.",
+    "lambda_l2": "LightGBM L2 leaf penalty.",
+    "feature_fraction": "Fraction of model features sampled per tree.",
+    "num_boost_round": "Number of boosting rounds.",
+    "max_bin": "Maximum histogram bins per feature.",
+    "max_depth": "Maximum tree depth; -1 is unlimited.",
+    "min_gain_to_split": "Minimum improvement needed for a tree split.",
+    "seed": "Deterministic numerical sampling seed.",
     "source": "Input numeric `Panel` or single-output `Graph`.",
     "like": "Stock-domain `Panel` or single-output `Graph` whose dated keys define the broadcast output.",
     "lhs": "Left-hand numeric `Panel` or single-output `Graph`.",
@@ -601,7 +635,9 @@ def main() -> None:
     index = f"""# Operation reference
 
 BagelQuant operations build deterministic lazy graphs from sparse long-form
-`Panel` inputs.
+`Panel` inputs. All operations use the single `Operator` registry and
+`OperationNode` execution contract. Transformer/composer headings describe
+input arity; they do not create separate execution systems.
 
 - [Transformer reference](./transformers/index.md): {len(transformers)} public operations
 - [Composer reference](./composers/index.md): {len(composers)} public operations

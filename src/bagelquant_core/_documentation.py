@@ -7,6 +7,13 @@ from typing import Any
 
 
 OPERATION_DESCRIPTIONS = {
+    "exposure_constrained_weights": "Optimize target weights within explicit exposure bounds using historical target state.",
+    "rolling_elastic_net_prediction": "Fit and predict RMS-scaled Elastic Net using only matured historical labels.",
+    "rolling_lightgbm_prediction": "Fit deterministic CPU LightGBM using explicit matured labels and resource budgets.",
+    "top_n": "Select exactly N finite scores, breaking ties by asset ID; incomplete cross-sections remain unavailable.",
+    "equal_weight": "Convert a complete binary selection to equal positive target weights.",
+    "regularized_weights": "Optimize capped long-only targets using preceding target weights as causal state.",
+    "rebalance": "Select complete target snapshots on an explicit calendar anchored at Data Start.",
     "abs": "Return the absolute value of each element.",
     "add": "Add two key-aligned panel values element-wise.",
     "and_": "Return one where both corresponding elements are truthy and zero elsewhere.",

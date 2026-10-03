@@ -136,9 +136,9 @@ def test_model_checkpoint_continuation_matches_full_and_does_not_refit_prefix():
         selected_domain = Domain(
             calendar=selected["time"].unique().sort(), universe=list("ABCD")
         )
-        source = Panel.from_domain(selected, selected_domain)
+        source = Panel.from_domain(selected, selected_domain, source_key="features")
         labels = Panel.from_domain(
-            selected.with_columns((pl.col("value") * 2).alias("value")), selected_domain
+            selected.with_columns((pl.col("value") * 2).alias("value")), selected_domain, source_key="labels"
         )
         with (
             capture_operator_checkpoints(restored) as checkpoints,
@@ -186,9 +186,9 @@ def test_training_phase_and_label_maturity_include_empty_universe_sessions():
                 pl.lit(True).alias("active")
             ),
         )
-        source = Panel.from_domain(local, domain)
+        source = Panel.from_domain(local, domain, source_key="features")
         labels = Panel.from_domain(
-            local.with_columns((pl.col("value") * 2).alias("value")), domain
+            local.with_columns((pl.col("value") * 2).alias("value")), domain, source_key="labels"
         )
         with (
             capture_operator_checkpoints(restored, calendar=calendar) as checkpoints,

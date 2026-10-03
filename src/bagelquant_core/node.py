@@ -71,7 +71,36 @@ class Node(ABC):
             "name": self.name,
             "config": self.config(),
         }
+        if self.node_type == "operator":
+            from .operator import OPERATOR_REGISTRY
+            from .operator_state import operator_input_context
+            payload["implementation"] = OPERATOR_REGISTRY.get(self.config()["operator"]).version
+            payload["context"] = operator_input_context(self.logical_id)
         return hash_mapping(payload)
+
+    @property
+    def logical_id(self) -> str:
+        """Content address of the calculation, excluding names and data state."""
+
+        from .logical import LogicalNodeSpec, normalized_operator_config
+
+        if hasattr(self, "_logical_id_override"):
+            return self._logical_id_override
+
+        if self.node_type == "panel":
+            return LogicalNodeSpec.create(
+                node_type="input", input_key=getattr(self, "source_key", self.name),
+                parameters={"value_type": self.config().get("value_type", "panel")},
+            ).node_id
+        config = dict(self.config())
+        operation = config.pop("operator")
+        return LogicalNodeSpec.create(
+            node_type="operator", operator=operation,
+            parameters=normalized_operator_config(operation, config),
+            inputs=tuple(parent.logical_id for parent in self.spec_inputs()),
+            panel_parameters={role: tuple(parent.logical_id for parent in parents)
+                              for role, parents in self.spec_panel_parameters().items()},
+        ).node_id
 
     def spec_inputs(self) -> tuple["Node", ...]:
         """Return semantic operation inputs for graph serialization."""

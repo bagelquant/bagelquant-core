@@ -11,6 +11,7 @@ from .operator import Operator, OPERATOR_REGISTRY
 from .operation_contract import OperationContract, ExecutionMode, InputDensity, TraceRule
 from .machine_learning import ZeroPreservingRmsScaler, ElasticNetModel, fit_elastic_net
 from .operator_state import restored_operator_state, save_operator_state, operator_execution_calendar
+from .operator_state import save_training_audit
 from .estimator_adapters import LightGBMCandidate, LightGBMEstimatorAdapter
 
 _audits: ContextVar[list | None] = ContextVar("numerical_training_audits", default=None)
@@ -92,6 +93,14 @@ def capture_training_audits():
         yield records
     finally:
         _audits.reset(token)
+
+
+def replay_training_audits(records):
+    """Return saved fit receipts to the caller without performing a fit."""
+    from copy import deepcopy
+    collector = _audits.get()
+    if collector is not None:
+        collector.extend(deepcopy(list(records)))
 
 def _register(function):
     operator = Operator(function, input_mode="composer", minimum_inputs=1, maximum_inputs=None, version="2",
@@ -176,6 +185,7 @@ def _rolling(features, labels, *, window, fit_every, min_samples, max_samples,
             else:
                 audit.update(status="unavailable",reason="insufficient_mature_training_samples")
             collector = _audits.get()
+            save_training_audit(audit)
             if collector is not None:
                 collector.append(audit)
         current = by_date.get(day,frame.head(0))

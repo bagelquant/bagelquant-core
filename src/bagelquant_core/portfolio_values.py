@@ -10,7 +10,7 @@ import polars as pl
 from .operator import Operator, OPERATOR_REGISTRY
 from .operation_contract import ExecutionMode, InputDensity, OperationContract, TraceRule
 from .optimization import project_capped_simplex, solve_regularized_weights, solve_exposure_weights
-from .operator_state import restored_operator_state, save_operator_state
+from .operator_state import restored_operator_state, save_operator_state, save_operator_artifact, operator_execution_calendar
 
 _CONTRACT = OperationContract(execution=ExecutionMode.EAGER_BARRIER,
     density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.PARENT_MAX)
@@ -208,4 +208,11 @@ def rebalance_value(weights: pl.DataFrame, *, calendar: pl.DataFrame,
 def rebalance(frame: pl.DataFrame, *, every: int = 5, anchor: str = "data_start",
         calendar: pl.DataFrame, data_start: str) -> pl.DataFrame:
     """Return complete scheduled target snapshots; store decisions separately."""
-    return rebalance_value(frame, calendar=calendar, data_start=data_start, every=every, anchor=anchor).weights
+    # The explicit calendar includes empty-universe sessions. Preserve every
+    # hold/unavailable decision as a named result, not just sparse targets.
+    execution_calendar = operator_execution_calendar()
+    coverage = pl.DataFrame({"time": execution_calendar}) if execution_calendar else frame.select("time").unique()
+    value = rebalance_value(frame, calendar=calendar, data_start=data_start,
+        every=every, anchor=anchor, coverage_calendar=coverage)
+    save_operator_artifact("decisions", value.decisions)
+    return value.weights

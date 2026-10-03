@@ -6,6 +6,8 @@ operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 """
 
 from .node import Node
+from .logical import LogicalNodeSpec, LogicalGraphSpec, canonicalize_graph
+from .materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationLookup, MaterializationStatus
 from .operator import Operator, OperationNode, OPERATOR_REGISTRY
 from .portfolio_values import PortfolioValue, rebalance, rebalance_value, top_n, equal_weight, regularized_weights, exposure_constrained_weights
 from .execution import ExecutionRuntime
@@ -52,7 +54,7 @@ from .prediction import (
     fama_macbeth_ols_prediction,
     quantile_rank_information_coefficient,
 )
-from .transformer import pct_change_frame
+from .transformer import pct_change_frame, canonicalize_values, project_domain
 from .prediction_processing import (
     PredictionSmoothingConfig,
     PredictionSmoothingResult,
@@ -64,6 +66,10 @@ from .operator_state import capture_operator_checkpoints
 from .training_operators import rolling_elastic_net_prediction, rolling_lightgbm_prediction, capture_training_audits, date_balanced_training_keys
 
 __all__ = [
+    "LogicalNodeSpec", "LogicalGraphSpec", "canonicalize_graph",
+    "MaterializationKey", "MaterializationStore", "NodeMaterialization",
+    "MaterializationLookup", "MaterializationStatus",
+    "canonicalize_values", "project_domain",
     "PortfolioValue", "rebalance", "rebalance_value", "top_n", "equal_weight", "regularized_weights",
     "Node", "Operator", "OperationNode", "OPERATOR_REGISTRY",
     "CategoryPanel",

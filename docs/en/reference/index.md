@@ -5,7 +5,7 @@ BagelQuant operations build deterministic lazy graphs from sparse long-form
 `OperationNode` execution contract. Transformer/composer headings describe
 input arity; they do not create separate execution systems.
 
-- [Transformer reference](./transformers/index.md): 103 public operations
+- [Transformer reference](./transformers/index.md): 105 public operations
 - [Composer reference](./composers/index.md): 27 public operations
 
 The reference pages are generated from the exported API and curated

@@ -1,25 +1,19 @@
-# `rebalance`
+# `canonicalize_values`
 
-Select complete target snapshots on an explicit calendar anchored at Data Start.
+Round numerical values to explicit significant digits at a semantic boundary.
 
 ## Signature
 
 ```python
-rebalance(source, *, every=5, anchor='data_start', calendar, data_start, name=None, metadata=None)
+canonicalize_values(source, *, significant_digits=14, name=None, metadata=None)
 ```
 
 ## Parameters
 
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
-**every** : int, default `5`
-: Positive number of trading sessions between decisions.
-**anchor** : str, default `'data_start'`
-: Decision anchor: data_start.
-**calendar** : Panel | Graph
-: Explicit auxiliary trading calendar supplied by the application.
-**data_start** : str
-: Global Data Start; the first following trading session anchors decisions.
+**significant_digits** : int, default `14`
+: Positive number of significant digits at an explicit numerical boundary.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`
@@ -33,7 +27,7 @@ rebalance(source, *, every=5, anchor='data_start', calendar, data_start, name=No
 ## Executable Panel example
 
 ```python
-rebalance(source, calendar=calendar, every=1, data_start='2024-01-02')
+canonicalize_values(source)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
@@ -46,19 +40,13 @@ Tables are pivoted wide only for readability; runtime Panels remain long-form.
 |---|---:|---:|---:|
 | 2024-01-02 | 1 | 4 | 3 |
 | 2024-01-03 | missing | 2 | 8 |
-### Panel parameter: calendar
-
-| time | a | b | c |
-|---|---:|---:|---:|
-| 2024-01-02 | 1 | 2 | 2 |
-| 2024-01-03 | 2 | 1 | 4 |
 
 ### Output
 
 | time | a | b | c |
 |---|---:|---:|---:|
 | 2024-01-02 | 1 | 4 | 3 |
-| 2024-01-03 | missing | missing | missing |
+| 2024-01-03 | missing | 2 | 8 |
 
 ## Panel and temporal semantics
 

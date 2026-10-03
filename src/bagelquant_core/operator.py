@@ -66,6 +66,7 @@ class Operator:
             if parameter in scalar:
                 raw = scalar[parameter]
                 if raw is None:
+                    scalar.pop(parameter)
                     continue
                 scalar.pop(parameter)
                 values = tuple(raw) if multiple else (raw,)
@@ -96,7 +97,7 @@ class OperationNode(Node):
                  input_mode: str | None = None) -> None:
         super().__init__(name=name, metadata=metadata)
         self._inputs = inputs
-        self._panel_parameters = dict(panel_parameters)
+        self._panel_parameters = dict(sorted(panel_parameters.items()))
         self._operation = operation
         self._config = dict(config)
         self.execution_kind = input_mode or operation.input_mode
@@ -136,9 +137,10 @@ class OperationNode(Node):
             offset += len(nodes)
             auxiliary[parameter] = tuple(values) if self._operation.panel_parameter_kinds[parameter] else values[0]
         from .operator_state import operator_checkpoint_node
+        from .logical import normalized_operator_config
         signature = {"operator":self._operation.registry_name,"version":self._operation.version,
-            "parameters":{name:value for name,value in self._config.items() if name != "anchor_offset"}}
-        with operator_checkpoint_node(self.name, signature):
+            "parameters":normalized_operator_config(self._operation.registry_name, self._config)}
+        with operator_checkpoint_node(self.logical_id, signature):
             return self._operation.operation(*frames[:len(self._inputs)], **auxiliary, **self._config)
 
 

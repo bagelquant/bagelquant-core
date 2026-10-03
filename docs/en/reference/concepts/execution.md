@@ -47,5 +47,33 @@ february = compiled.compute(february_inputs, runtime=runtime)
 - `materializations` and `eager_barriers` counters support structural tests.
 - Scheduling is sequential.
 
-Parallel scheduling, persisted caches, and explicit invalidation remain future
-extensions.
+## Persistent Materialization
+
+An application implements `MaterializationStore.query(key)` and
+`MaterializationStore.publish(value)` and passes it to `ExecutionRuntime`.
+The query returns `MaterializationLookup` with HIT, PARTIAL or MISS. An exact
+HIT restores the saved typed Panel and its traces, fit audits, operator state and
+named numerical artifacts. PARTIAL is a candidate only: it is recomputed unless
+the application has already proved a causal prefix and supplied its checkpoint.
+
+`MaterializationKey` separates logical identity from implementation identity,
+relevant input identities, Domain and execution context. Unrelated snapshot
+changes need not change any of those relevant receipts. `Panel.from_domain`
+accepts a permanent `source_key`; its `identity` and `trace_identity` must prove
+immutable content. Anonymous instance identities cannot support reconstruction.
+
+The existing sparse/eager planner remains the numerical executor. Pending node
+outputs are collected together within the active resource budget, then reloaded
+as immutable Panels from the adapter. A scan-backed adapter bounds resident
+values without rerunning shared kernels. Large applications must also submit
+bounded date blocks; a resource limit never changes training history or cadence.
+
+`runtime.node_materializations` exposes saved records by logical node ID;
+`runtime.node_artifacts` exposes named numerical outputs. `rebalance` retains
+both sparse complete targets and every hold/unavailable decision. Checkpoints
+are keyed by logical node ID, and restored state and the explicit execution
+calendar participate in materialization identity. Callers own source proofs,
+historical invalidation, atomic publication and retention. Core performs no I/O.
+
+Parallel scheduling remains an application responsibility; one Runtime instance
+has a single owner and rejects nested runs.

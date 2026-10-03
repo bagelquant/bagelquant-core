@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
@@ -13,6 +14,11 @@ from .frame import ASSET_ID, TIME, VALUE
 from .graph import Graph
 from .hashing import hash_mapping
 from .node import Node
+from .materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationStatus
+from .operator_state import (
+    capture_node_evidence, capture_operator_checkpoints, current_operator_checkpoints,
+    operator_input_context, replay_node_evidence,
+)
 from .operation_contract import (
     ExecutionMode,
     InputDensity,
@@ -25,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 _TIME_ASSET_ORDER = "time_asset"
 _ASSET_TIME_ORDER = "asset_time"
+EXECUTION_KERNEL_VERSION = "logical_runtime.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,13 +68,27 @@ class _EagerLayout:
 class ExecutionRuntime:
     """Compile graphs into Polars plans and materialize only public outputs."""
 
-    def __init__(self, alignment: str = "inner") -> None:
+    def __init__(self, alignment: str = "inner", *,
+                 materialization_store: MaterializationStore | None = None,
+                 context_identity: str = "") -> None:
         if alignment != "inner":
             raise ValueError("ExecutionRuntime only supports inner alignment")
         self.cache: dict[str, Panel] = {}
         self._plan_cache: dict[str, PlanValue] = {}
         self._physical_plan_cache: dict[str, PlanValue] = {}
         self._alignment = alignment
+        self.materialization_store = materialization_store
+        self.context_identity = context_identity
+        self.node_materializations: dict[str, NodeMaterialization] = {}
+        self.node_artifacts: dict[str, Mapping[str, Any]] = {}
+        self._pending_materializations: dict[str, tuple[Node, PlanValue, MaterializationKey]] = {}
+        self._loaded_materializations: dict[str, NodeMaterialization] = {}
+        self._run_evidence = None
+        self._active_evaluated: dict[int, PlanValue] | None = None
+        self._pending_estimated_bytes = 0
+        self.persistent_hits = 0
+        self.persistent_misses = 0
+        self.persistent_partials = 0
         self._active_eager_inputs: dict[str, pl.DataFrame] | None = None
         self._active_eager_results: dict[
             tuple[object, ...],
@@ -125,17 +146,29 @@ class ExecutionRuntime:
         self._active_eager_results = {}
         self._active_eager_layouts = {}
         self._active_eager_physical_results = {}
+        self.node_materializations = {}
+        self.node_artifacts = {}
+        self._pending_materializations = {}
+        self._loaded_materializations = {}
+        self._pending_estimated_bytes = 0
+        scope = ExitStack()
+        self._run_evidence = scope.enter_context(capture_node_evidence())
+        if self.materialization_store is not None and current_operator_checkpoints() is None:
+            calendar = next((node.domain.times.to_list() for node in graph.nodes if isinstance(node, Panel)), ())
+            scope.enter_context(capture_operator_checkpoints(calendar=calendar))
         try:
             evaluated: dict[int, PlanValue] = {}
+            self._active_evaluated = evaluated
             plans = [
                 (node, self._run_node(node, evaluated))
                 for node in graph._outputs
             ]
+            if self.materialization_store is not None:
+                self._publish_materializations()
+                plans = [(node, self._frozen_output_plan(node, plan)) for node, plan in plans]
             if dense_output:
                 results = self._materialize_many(plans)
-                if len(plans) == 1:
-                    return results[plans[0][0].name]
-                return results
+                return graph._present_outputs(results)
 
             results: dict[str, Panel] = {}
             for node, plan in plans:
@@ -146,10 +179,12 @@ class ExecutionRuntime:
                 )
                 node.set_output(output)
                 results[node.name] = output
-            if len(plans) == 1:
-                return results[plans[0][0].name]
-            return results
+            return graph._present_outputs(results)
         finally:
+            self.node_artifacts = dict(self._run_evidence.artifacts)
+            scope.close()
+            self._run_evidence = None
+            self._active_evaluated = None
             self._active_eager_inputs = None
             self._active_eager_results = None
             self._active_eager_layouts = None
@@ -158,6 +193,7 @@ class ExecutionRuntime:
     def _materialize_many(
         self,
         outputs: list[tuple[Node, PlanValue]],
+        *, dense_output: bool = True,
     ) -> Mapping[str, Panel]:
         """Collect all uncached outputs in one Polars execution boundary."""
 
@@ -165,7 +201,7 @@ class ExecutionRuntime:
         pending: list[tuple[Node, PlanValue, Panel]] = []
         for node, plan in outputs:
             plan = self._expand_implicit(plan)
-            cached = self.cache.get(plan.identity) if plan.cacheable else None
+            cached = self.cache.get(plan.identity) if plan.cacheable and dense_output else None
             if cached is not None:
                 node.set_output(cached)
                 results[node.name] = cached
@@ -197,11 +233,8 @@ class ExecutionRuntime:
             key_owner_by_domain: dict[str, int] = {}
             key_owner_indices: list[int] = []
             for index, (_, plan, _) in enumerate(pending):
-                dense_plan = self._dense_output_plan(plan, plan.frame)
-                owner_index = key_owner_by_domain.setdefault(
-                    plan.domain.signature,
-                    index,
-                )
+                dense_plan = self._dense_output_plan(plan, plan.frame) if dense_output else plan.frame
+                owner_index = key_owner_by_domain.setdefault(plan.domain.signature, index) if dense_output else index
                 key_owner_indices.append(owner_index)
                 value_plans.append(
                     dense_plan
@@ -229,17 +262,11 @@ class ExecutionRuntime:
                     plan.trace_columns,
                 )
                 trace_keys.append(key)
+                trace_frame = plan.trace_frame.select(TIME, ASSET_ID, *plan.trace_columns)
                 trace_plans.setdefault(
                     key,
-                    self._dense_output_plan(
-                        plan,
-                        plan.trace_frame.select(
-                            TIME,
-                            ASSET_ID,
-                            *plan.trace_columns,
-                        ),
-                        order=plan.trace_order,
-                    ),
+                    self._dense_output_plan(plan, trace_frame, order=plan.trace_order)
+                    if dense_output else trace_frame,
                 )
             unique_trace_keys = list(trace_plans)
             collected = pl.collect_all(
@@ -281,15 +308,23 @@ class ExecutionRuntime:
                         frame = frame.with_columns(
                             pl.col(VALUE).fill_nan(None)
                         )
-                    panel._cached_dense = frame.select(
+                    validated = frame.select(
                         TIME,
                         ASSET_ID,
                         VALUE,
                         *plan.trace_columns,
                     )
                 else:
-                    panel._cached_dense = panel._validate_collected(frame)
-                if plan.cacheable:
+                    validated = panel._validate_collected(frame)
+                if dense_output:
+                    panel._cached_dense = validated
+                else:
+                    panel._frame = validated.lazy()
+                    panel._validated_keys = True
+                    panel._exact_domain = panel.domain._contains_exact_keys(validated)
+                    if panel._exact_domain:
+                        panel._cached_dense = validated
+                if plan.cacheable and dense_output:
                     self._remember_output(plan.identity, panel)
                 node.set_output(panel)
                 results[node.name] = panel
@@ -297,6 +332,112 @@ class ExecutionRuntime:
             node.name: results[node.name]
             for node, _ in outputs
         }
+
+    @staticmethod
+    def _panel_plan(panel: Panel) -> PlanValue:
+        return PlanValue(
+            frame=panel.lazy(include_traces=False), domain=panel.domain,
+            density=InputDensity.SPARSE_OK, identity=panel.identity,
+            trace_columns=panel.trace_columns,
+            trace_frame=panel.lazy(include_traces=True).select(TIME, ASSET_ID, *panel.trace_columns) if panel.trace_columns else None,
+            trace_identity=panel.trace_identity, categorical=isinstance(panel, CategoryPanel),
+            prediction=isinstance(panel, PredictionPanel), key_identity=panel._key_identity,
+            order=_TIME_ASSET_ORDER, trace_key_identity=panel._key_identity,
+            trace_order=_TIME_ASSET_ORDER, exact_domain=panel._exact_domain,
+            asset_time_ordered=True, validated_keys=panel._validated_keys,
+            physical_identity=panel.identity,
+        )
+
+    def _materialization_key(self, node: Node, parents: tuple[PlanValue, ...], domain: Domain) -> MaterializationKey:
+        from .operator import OPERATOR_REGISTRY
+
+        operator = OPERATOR_REGISTRY.get(node.config()["operator"])
+        implementation = hash_mapping({"operator": operator.registry_name, "version": operator.version,
+            "runtime_kernel": EXECUTION_KERNEL_VERSION,
+            "execution": operator.contract.execution, "density": operator.contract.density,
+            "trace_rule": operator.contract.trace_rule, "output_type": operator.output_type})
+        context = hash_mapping({"context": self.context_identity, "operator": operator_input_context(node.logical_id),
+                                "parameters": self._node_parameters(node)})
+        return MaterializationKey(node.logical_id, implementation,
+            tuple(parent.physical_identity or parent.identity for parent in parents), domain.signature, context)
+
+    def _record_materialization_plan(self, node: Node, value: PlanValue, key: MaterializationKey) -> PlanValue:
+        if self.materialization_store is not None and value.cacheable:
+            if key.identity not in self._pending_materializations:
+                self._pending_materializations[key.identity] = (node, value, key)
+                self._pending_estimated_bytes += self._estimate_plan_bytes(value.domain, len(value.trace_columns))
+        return replace(value, physical_identity=key.identity)
+
+    @staticmethod
+    def _estimate_plan_bytes(domain: Domain, traces: int) -> int:
+        # Conservative key/value/string offset plus trace-date estimate. Sparse
+        # plans are never expanded merely to measure admission requirements.
+        return domain.size * (40 + traces * 8)
+
+    def _admit_materialization(self, domain: Domain, parents: tuple[PlanValue, ...]) -> tuple[PlanValue, ...]:
+        from .resources import active_resource_limits
+
+        # A later sibling's recursive execution may have published an earlier
+        # parent after its PlanValue was captured. Refresh that local reference
+        # even when this node does not itself cross an admission boundary.
+        parents = tuple(self._frozen_output_plan(None, parent) for parent in parents)
+        if self.materialization_store is None or not self._pending_materializations:
+            return parents
+        limits = active_resource_limits()
+        available = min(limits.cache_mib, max(1, limits.memory_target_mib // 4)) * 1024 * 1024
+        estimate = self._estimate_plan_bytes(domain, len({trace for parent in parents for trace in parent.trace_columns}))
+        if self._pending_estimated_bytes + estimate > available:
+            self._publish_materializations()
+            return tuple(self._frozen_output_plan(None, parent) for parent in parents)
+        return parents
+
+    def _publish_materializations(self) -> None:
+        """Freeze sparse intermediate plans together at the existing collect boundary."""
+        pending = list(self._pending_materializations.values())
+        if not pending:
+            return
+        panels = self._materialize_many([(node, plan) for node, plan, _ in pending], dense_output=False)
+        for node, plan, key in pending:
+            panel = panels[node.name]
+            frozen = type(panel).from_domain(panel.lazy(include_traces=True), panel.domain,
+                name=node.logical_id, identity=key.identity, trace_identity=panel.trace_identity,
+                trace_columns=panel.trace_columns, source_key=node.logical_id)
+            frozen._validated_keys = True
+            frozen._exact_domain = panel._exact_domain
+            frozen._cached_dense = panel._cached_dense
+            record = NodeMaterialization(key, frozen,
+                artifacts=dict(self._run_evidence.artifacts.get(node.logical_id, {})),
+                checkpoint=self._run_evidence.checkpoints.get(node.logical_id),
+                training_audits=tuple(self._run_evidence.training_audits.get(node.logical_id, ())))
+            self.materialization_store.publish(record)
+            saved = self.materialization_store.query(key)
+            if saved.status != MaterializationStatus.HIT or saved.materialization is None or saved.materialization.key != key:
+                raise ValueError("materialization publication did not produce an exact immutable receipt")
+            record = saved.materialization
+            node.set_output(record.panel)
+            self.node_materializations[node.logical_id] = record
+            self._loaded_materializations[key.identity] = record
+        self._pending_materializations.clear()
+        self._pending_estimated_bytes = 0
+        if self._active_evaluated is not None:
+            for node_id, plan in list(self._active_evaluated.items()):
+                self._active_evaluated[node_id] = self._frozen_output_plan(None, plan)
+        # Persisted boundaries replace old plans with scan-backed inputs.
+        # Retaining the eager CSE arrays would defeat resource admission.
+        self._plan_cache.clear()
+        self._physical_plan_cache.clear()
+        self.cache.clear()
+        for cache in (self._active_eager_inputs, self._active_eager_results,
+                      self._active_eager_layouts, self._active_eager_physical_results):
+            if cache is not None:
+                cache.clear()
+
+    def _frozen_output_plan(self, node: Node | None, plan: PlanValue) -> PlanValue:
+        record = self._loaded_materializations.get(plan.physical_identity or "")
+        if record is None:
+            return plan
+        value = self._panel_plan(record.panel)
+        return replace(value, identity=plan.identity, physical_identity=record.key.identity)
 
     def _dense_output_plan(
         self,
@@ -366,26 +507,68 @@ class ExecutionRuntime:
                 exact_domain=node._exact_domain,
                 asset_time_ordered=True,
                 validated_keys=node._validated_keys,
-                physical_identity=node.identity,
+                physical_identity=hash_mapping({"input": node.identity, "trace": node.trace_identity,
+                    "trace_columns": node.trace_columns, "domain": node.domain.signature,
+                    "categorical": isinstance(node, CategoryPanel), "prediction": isinstance(node, PredictionPanel)}),
             )
             evaluated[node_id] = value
             return value
 
+        parents = tuple(self._run_node(parent, evaluated) for parent in node.parents)
+        projected = node.config().get("operator", "").endswith(".project_domain")
+        domain = parents[-1].domain if projected else self._resolve_domain(parents)
+        parents = self._admit_materialization(domain, parents)
+        key = self._materialization_key(node, parents, domain)
+        cacheable = self._contract(node).deterministic and all(parent.cacheable for parent in parents)
+        if self.materialization_store is not None and cacheable:
+            cached_record = self._loaded_materializations.get(key.identity)
+            if cached_record is None and key.identity not in self._pending_materializations:
+                lookup = self.materialization_store.query(key)
+                cached_record = lookup.materialization if lookup.status == MaterializationStatus.HIT else None
+                if lookup.status == MaterializationStatus.PARTIAL:
+                    self.persistent_partials += 1
+                if cached_record is not None:
+                    if cached_record.key != key or not cached_record.panel.domain.equivalent_to(domain):
+                        raise ValueError("materialization store returned a different numerical identity or Domain")
+                    expected_prediction = node.execution_kind == "prediction_composer" or (
+                        bool(node.spec_inputs()) and all(parent.prediction for parent in parents[:len(node.spec_inputs())])
+                        and getattr(node.operation, "output_type", None) != "weights")
+                    expected_category = node.execution_kind == "transformer" and parents[0].categorical
+                    if isinstance(cached_record.panel, PredictionPanel) != expected_prediction or isinstance(cached_record.panel, CategoryPanel) != expected_category:
+                        raise ValueError("materialization store did not preserve the numerical Panel type")
+                    expected_traces = tuple(dict.fromkeys(trace for parent in parents for trace in parent.trace_columns))
+                    if cached_record.panel.trace_columns != expected_traces:
+                        raise ValueError("materialization store did not preserve availability traces")
+                    self._loaded_materializations[key.identity] = cached_record
+                    replay_node_evidence(node.logical_id, artifacts=cached_record.artifacts,
+                        checkpoint=cached_record.checkpoint, training_audits=cached_record.training_audits)
+                    self.persistent_hits += 1
+                else:
+                    self.persistent_misses += 1
+            if cached_record is not None:
+                self.node_materializations[node.logical_id] = cached_record
+                value = self._panel_plan(cached_record.panel)
+                value = replace(value, identity=hash_mapping({"execution": key.identity, "name": node.name}),
+                                physical_identity=key.identity)
+                evaluated[node_id] = value
+                return value
+
         lowered = self._lower_scalar_arithmetic(node, evaluated)
         if lowered is not None:
+            lowered = self._record_materialization_plan(node, lowered, key)
             evaluated[node_id] = lowered
             return lowered
 
-        parents = tuple(self._run_node(parent, evaluated) for parent in node.parents)
         shifted = self._lower_calendar_shift(node, parents)
         if shifted is not None:
+            shifted = self._record_materialization_plan(node, shifted, key)
             evaluated[node_id] = shifted
             return shifted
         implicit = self._lower_implicit_dense(node, parents)
         if implicit is not None:
+            implicit = self._record_materialization_plan(node, implicit, key)
             evaluated[node_id] = implicit
             return implicit
-        domain = self._resolve_domain(parents)
         contract = self._contract(node)
         prepared = tuple(
             self._ensure_dense(parent)
@@ -412,6 +595,7 @@ class ExecutionRuntime:
         )
         cached = self._plan_cache.get(identity) if cacheable else None
         if cached is not None:
+            cached = self._record_materialization_plan(node, cached, key)
             evaluated[node_id] = cached
             return cached
         builtin = self._is_builtin_operation(node)
@@ -450,6 +634,7 @@ class ExecutionRuntime:
             )
             self._plan_cache[identity] = value
             self._diagnostics["semantic_cse_hits"] += 1
+            value = self._record_materialization_plan(node, value, key)
             evaluated[node_id] = value
             return value
 
@@ -607,6 +792,7 @@ class ExecutionRuntime:
             self._plan_cache[identity] = value
             if builtin and contract.execution == ExecutionMode.LAZY:
                 self._physical_plan_cache[physical_identity] = value
+        value = self._record_materialization_plan(node, value, key)
         evaluated[node_id] = value
         return value
 
@@ -1040,6 +1226,7 @@ class ExecutionRuntime:
                 traces,
             ),
             categorical=False,
+            prediction=constant_source.prediction and other.prediction,
             cacheable=cacheable,
             key_identity=key_identity,
             order=other.order,
@@ -1120,6 +1307,7 @@ class ExecutionRuntime:
                 ),
                 default_value=default,
                 categorical=parent.categorical,
+                prediction=parent.prediction,
                 cacheable=cacheable,
                 key_identity=parent.key_identity,
                 order=parent.order,
@@ -1221,6 +1409,7 @@ class ExecutionRuntime:
                 contract, parents, identity, traces
             ),
             default_value=default,
+            prediction=all(parent.prediction for parent in parents),
             cacheable=cacheable,
             key_identity=key_identity,
             trace_key_identity=trace_key_identity,
@@ -1312,6 +1501,7 @@ class ExecutionRuntime:
             ),
             default_value=parent.default_value,
             categorical=parent.categorical,
+            prediction=parent.prediction,
             cacheable=cacheable,
             key_identity=identity,
             order=_TIME_ASSET_ORDER,
@@ -1382,6 +1572,7 @@ class ExecutionRuntime:
             ),
             trace_identity=value.trace_identity,
             categorical=value.categorical,
+            prediction=value.prediction,
             cacheable=value.cacheable,
             key_identity=f"domain:{value.domain.signature}",
             order=_TIME_ASSET_ORDER,
@@ -1390,6 +1581,7 @@ class ExecutionRuntime:
             exact_domain=True,
             asset_time_ordered=True,
             validated_keys=value.validated_keys,
+            physical_identity=value.physical_identity,
         )
         self._plan_cache[identity] = result
         return result
@@ -1428,6 +1620,7 @@ class ExecutionRuntime:
             ),
             trace_identity=value.trace_identity,
             categorical=value.categorical,
+            prediction=value.prediction,
             cacheable=value.cacheable,
             key_identity=f"domain:{value.domain.signature}",
             order=_TIME_ASSET_ORDER,
@@ -1436,6 +1629,7 @@ class ExecutionRuntime:
             exact_domain=True,
             asset_time_ordered=True,
             validated_keys=value.validated_keys,
+            physical_identity=value.physical_identity,
         )
         if value.cacheable:
             self._plan_cache[identity] = result
@@ -1706,6 +1900,8 @@ class ExecutionRuntime:
             node.execution_kind == "transformer"
             and self._is_builtin_operation(node)
         ):
+            if node.config().get("operator", "").endswith((".project_domain", ".rebalance")):
+                return hash_mapping({"selected_keys": node_identity})
             return parents[0].key_identity
         return self._combined_key_identity(parents, node_identity)
 
@@ -1715,23 +1911,7 @@ class ExecutionRuntime:
         parents: tuple[PlanValue, ...],
         domain: Domain,
     ) -> str:
-        operation = getattr(node, "operation", None)
-        function = getattr(operation, "operation", None)
-        return hash_mapping(
-            {
-                "node_type": node.node_type,
-                "operation": (
-                    getattr(function, "__module__", ""),
-                    getattr(operation, "display_name", ""),
-                ),
-                "config": self._node_parameters(node),
-                "parents": [
-                    parent.physical_identity or parent.identity
-                    for parent in parents
-                ],
-                "domain": domain.signature,
-            }
-        )
+        return self._materialization_key(node, parents, domain).identity
 
     def _result_exact_domain(
         self,
@@ -1745,6 +1925,8 @@ class ExecutionRuntime:
         ):
             return False
         if node.execution_kind == "transformer":
+            if node.config().get("operator", "").endswith((".rebalance", ".project_domain")):
+                return False
             return parents[0].exact_domain
         key_identity = parents[0].key_identity
         return (

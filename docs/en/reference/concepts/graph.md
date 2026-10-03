@@ -29,6 +29,32 @@ operation nodes with an invalid number of parents.
 Graph does not store raw input frames and does not contain domain-specific
 operation methods.
 
+## Logical Definitions
+
+`Graph.spec()` is a local authoring template with symbolic names.
+`Graph.logical_spec()` converts it to the immutable `logical_dag.v1` storage
+format. `canonicalize_graph(template, input_keys=...)` provides the same boundary
+for declarative compilers. Permanent source keys and numerical input types,
+registered operations, normalized scalar defaults, ordered primary inputs and
+named auxiliary dependencies define a logical node ID. Labels, object metadata,
+data receipts, Domain, operator implementation versions and snapshots do not.
+
+```python
+first = rolling_mean(price, window=20, name="first").logical_spec()
+second = rolling_mean(price, window=20, min_periods=None, name="second").logical_spec()
+union = first.union(second)
+graph = Graph.from_logical_spec(union, inputs={price.source_key: price})
+```
+
+The union has one shared rolling operation and two output aliases. Portable
+serialization verifies each node's content address, dependency order and roots.
+The authoring template's provenance-only presentation edges are not numerical
+dependencies; applications retain that evidence outside the Core input boundary.
+
+Logical node parameters are immutable JSON values. Changing an operation or its
+parameters creates a different node. `parameter_bindings` resolves explicit
+execution placeholders without rewriting the stored logical definition.
+
 ## Output
 
 Before execution, output access raises an error:

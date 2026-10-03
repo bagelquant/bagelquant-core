@@ -1,25 +1,19 @@
-# `rebalance`
+# `project_domain`
 
-Select complete target snapshots on an explicit calendar anchored at Data Start.
+Restrict an upstream value to an explicit membership Domain after computing its source universe.
 
 ## Signature
 
 ```python
-rebalance(source, *, every=5, anchor='data_start', calendar, data_start, name=None, metadata=None)
+project_domain(source, *, membership, name=None, metadata=None)
 ```
 
 ## Parameters
 
 **source** : Panel | Graph
 : Input numeric `Panel` or single-output `Graph`.
-**every** : int, default `5`
-: Positive number of trading sessions between decisions.
-**anchor** : str, default `'data_start'`
-: Decision anchor: data_start.
-**calendar** : Panel | Graph
-: Explicit auxiliary trading calendar supplied by the application.
-**data_start** : str
-: Global Data Start; the first following trading session anchors decisions.
+**membership** : Panel | Graph
+: Explicit destination membership Panel; upstream computation keeps its source Domain.
 **name** : str | None, default `None`
 : Optional graph-node name. A generated name is used when omitted.
 **metadata** : Mapping[str, Any] | None, default `None`
@@ -33,7 +27,7 @@ rebalance(source, *, every=5, anchor='data_start', calendar, data_start, name=No
 ## Executable Panel example
 
 ```python
-rebalance(source, calendar=calendar, every=1, data_start='2024-01-02')
+project_domain(source, membership=membership)
 ```
 
 The call and tables below come from one deterministic, hand-checkable fixture.
@@ -46,7 +40,7 @@ Tables are pivoted wide only for readability; runtime Panels remain long-form.
 |---|---:|---:|---:|
 | 2024-01-02 | 1 | 4 | 3 |
 | 2024-01-03 | missing | 2 | 8 |
-### Panel parameter: calendar
+### Panel parameter: membership
 
 | time | a | b | c |
 |---|---:|---:|---:|
@@ -58,7 +52,7 @@ Tables are pivoted wide only for readability; runtime Panels remain long-form.
 | time | a | b | c |
 |---|---:|---:|---:|
 | 2024-01-02 | 1 | 4 | 3 |
-| 2024-01-03 | missing | missing | missing |
+| 2024-01-03 | missing | 2 | 8 |
 
 ## Panel and temporal semantics
 

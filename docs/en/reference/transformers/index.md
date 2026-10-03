@@ -11,6 +11,7 @@ parameter contract, executable Panel example, and temporal semantics.
 - [`arctan`](./arctan.md)
 - [`arctanh`](./arctanh.md)
 - [`boxcox`](./boxcox.md)
+- [`canonicalize_values`](./canonicalize_values.md)
 - [`ceil`](./ceil.md)
 - [`constant`](./constant.md)
 - [`cos`](./cos.md)
@@ -117,6 +118,7 @@ parameter contract, executable Panel example, and temporal semantics.
 
 - [`mask`](./mask.md)
 - [`project`](./project.md)
+- [`project_domain`](./project_domain.md)
 - [`vol_scale`](./vol_scale.md)
 
 ## Logical & comparison

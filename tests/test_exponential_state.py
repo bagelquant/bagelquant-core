@@ -21,7 +21,7 @@ def test_exponential_checkpoint_matches_polars_and_full_prefix(operator,adjust,i
         parameters['bias']=bias
     def graph(selected):
         domain=Domain(calendar=selected['time'].unique().sort(),universe=['A','B'])
-        return operator(Panel.from_domain(selected,domain),name='exp',**parameters)
+        return operator(Panel.from_domain(selected,domain,source_key='observations'),name='exp',**parameters)
     reference=graph(frame).compute().collect().sort(['time','asset_id'])
     with capture_operator_checkpoints() as first:
         prefix=graph(frame.filter(pl.col('time')<=days[6])).compute().collect()

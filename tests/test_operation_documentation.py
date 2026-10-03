@@ -45,7 +45,7 @@ def test_all_registered_operations_have_curated_authoritative_summaries() -> Non
         )
     ]
 
-    assert len(transformers) == 103
+    assert len(transformers) == 105
     assert len(composers) == 27
     for operation in [*transformers, *composers]:
         name = operation.operation.__name__

@@ -11,6 +11,27 @@ from .core import _expression_plan, _ordered_expression_plan, transformer
 
 
 @transformer
+def canonicalize_values(frame: pl.DataFrame, *, significant_digits: int = 14) -> pl.DataFrame:
+    """Round numerical values at an explicit, shareable semantic boundary."""
+
+    if isinstance(significant_digits, bool) or not isinstance(significant_digits, int) or significant_digits < 1:
+        raise ValueError("significant_digits must be a positive integer")
+    return frame.with_columns(pl.col(VALUE).round_sig_figs(significant_digits).alias(VALUE))
+
+
+@transformer
+def project_domain(frame: pl.DataFrame, *, membership: pl.DataFrame) -> pl.DataFrame:
+    """Restrict an existing value to an explicit membership Panel's Domain.
+
+    This happens after upstream computation, so a consumer's smaller universe
+    never changes the upstream cross-sectional numerical operation.
+    """
+
+    active = membership.filter(pl.col(VALUE).is_not_null() & pl.col(VALUE).is_finite() & (pl.col(VALUE) != 0))
+    return frame.join(active.select(TIME, ASSET_ID), on=[TIME, ASSET_ID], how="inner")
+
+
+@transformer
 def notnan(frame: pl.DataFrame) -> pl.DataFrame:
     present = pl.col(VALUE).is_not_null() & ~pl.col(VALUE).is_nan()
     return unary(frame, present.cast(pl.Float64))

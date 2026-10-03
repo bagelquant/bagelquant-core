@@ -42,6 +42,7 @@ class Panel(Node):
         _validated_keys: bool = False,
         _exact_domain: bool = False,
         _key_identity: str | None = None,
+        _source_key: str | None = None,
     ) -> None:
         if _token is not _INTERNAL_MATERIALIZATION_TOKEN or _domain is None:
             raise TypeError(
@@ -62,6 +63,7 @@ class Panel(Node):
         self._validated_keys = _validated_keys
         self._exact_domain = _exact_domain
         self._key_identity = _key_identity or self._identity
+        self._source_key = _source_key or self.name
 
     @classmethod
     def from_domain(
@@ -74,6 +76,7 @@ class Panel(Node):
         identity: str | None = None,
         trace_identity: str | None = None,
         trace_columns: Sequence[str] = (),
+        source_key: str | None = None,
     ) -> "Panel":
         if not isinstance(domain, Domain):
             raise TypeError("domain must be a Domain")
@@ -101,6 +104,7 @@ class Panel(Node):
                 if exact_domain
                 else None
             ),
+            _source_key=source_key,
         )
 
     @classmethod
@@ -156,6 +160,12 @@ class Panel(Node):
     @property
     def identity(self) -> str:
         return self._identity
+
+    @property
+    def source_key(self) -> str:
+        """Permanent symbolic input key, independent of payload and Domain."""
+
+        return self._source_key
 
     @property
     def trace_columns(self) -> tuple[str, ...]:
@@ -220,6 +230,7 @@ class Panel(Node):
             "input_identity": self._identity,
             "domain_signature": self._domain.signature,
             "trace_columns": self._trace_columns,
+            "value_type": "prediction" if isinstance(self, PredictionPanel) else "category" if isinstance(self, CategoryPanel) else "panel",
         }
 
     @staticmethod

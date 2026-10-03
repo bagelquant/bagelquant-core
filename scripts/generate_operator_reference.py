@@ -34,6 +34,8 @@ EXCLUDED = {
 }
 
 PARAMETER_DESCRIPTIONS = {
+    "significant_digits": "Positive number of significant digits at an explicit numerical boundary.",
+    "membership": "Explicit destination membership Panel; upstream computation keeps its source Domain.",
     "exposures": "Explicit auxiliary risk Panels, ordered like the bounds; missing required exposure fails.",
     "lower_bounds": "One lower portfolio exposure bound per auxiliary risk Panel.",
     "upper_bounds": "One upper portfolio exposure bound per auxiliary risk Panel.",

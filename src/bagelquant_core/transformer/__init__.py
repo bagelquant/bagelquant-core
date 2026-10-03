@@ -31,6 +31,8 @@ from ..composer.xsectional import (
 )
 from .core import TRANSFORMER_REGISTRY, transformer
 from .general import (
+    canonicalize_values,
+    project_domain,
     constant,
     date_age_constraint,
     denoise,
@@ -95,6 +97,7 @@ __all__ = [
     "bfill",
     "boxcox",
     "ceil",
+    "canonicalize_values",
     "constant",
     "cos",
     "date_age_constraint",
@@ -136,6 +139,7 @@ __all__ = [
     "orthogonalize",
     "posonly",
     "project",
+    "project_domain",
     "power",
     "rank",
     "rankpct",

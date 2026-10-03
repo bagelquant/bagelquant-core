@@ -16,6 +16,7 @@ from .node import Node, NodeSpec
 
 if TYPE_CHECKING:
     from .execution import ExecutionRuntime
+    from .logical import LogicalGraphSpec
     from .panel import Panel
 
 
@@ -181,7 +182,79 @@ class Graph(Generic[OutputT]):
             self._outputs = tuple(_nodes)
 
         self._nodes = self._collect_nodes(self._outputs)
+        self._output_aliases = {node.name: node.name for node in self._outputs}
         self.validate()
+
+    @classmethod
+    def from_logical_spec(cls, specification: LogicalGraphSpec | Mapping[str, Any], *, inputs: Mapping[str, "Panel"],
+                          parameter_bindings: Mapping[str, Any] | None = None) -> "Graph[Panel]":
+        """Bind a content-addressed DAG; symbolic source keys resolve explicitly."""
+
+        from .logical import LogicalGraphSpec
+        from .operator import OPERATOR_REGISTRY, OperationNode
+
+        spec = specification if isinstance(specification, LogicalGraphSpec) else LogicalGraphSpec.from_dict(specification)
+        bindings = dict(parameter_bindings or {})
+
+        def resolve(value):
+            if isinstance(value, str) and value.startswith("$"):
+                if value not in bindings:
+                    raise GraphValidationError(f"missing logical execution binding: {value}")
+                return bindings[value]
+            if isinstance(value, Mapping):
+                return {key: resolve(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return tuple(resolve(item) for item in value)
+            return value
+        by_id: dict[str, Node] = {}
+        for node in spec.nodes:
+            if node.node_type == "input":
+                if node.input_key not in inputs:
+                    raise GraphValidationError(f"missing logical input: {node.input_key}")
+                panel = inputs[node.input_key]
+                actual_type = panel.config()["value_type"]
+                if actual_type != node.parameters.get("value_type", "panel"):
+                    raise GraphValidationError(f"logical input {node.input_key!r} requires {node.parameters['value_type']}, got {actual_type}")
+                by_id[node.node_id] = type(panel).from_domain(
+                    panel.lazy(include_traces=True), panel.domain, name=node.node_id,
+                    identity=panel.identity, trace_identity=panel.trace_identity,
+                    trace_columns=panel.trace_columns, source_key=node.input_key,
+                )
+                by_id[node.node_id]._logical_id_override = node.node_id
+                continue
+            registered = OPERATOR_REGISTRY.get(node.operator)
+            config = resolve(node.parameters)
+            operation = registered
+            if registered.factory is not None:
+                operation = registered.factory(**{key: value for key, value in config.items() if key != "alpha_count"})
+            by_id[node.node_id] = OperationNode(inputs=tuple(by_id[parent] for parent in node.inputs),
+                panel_parameters={key: tuple(by_id[parent] for parent in parents) for key, parents in node.panel_parameters.items()},
+                operation=operation, config=config, input_mode=registered.input_mode, name=node.node_id)
+            by_id[node.node_id]._logical_id_override = node.node_id
+        graph = cls._from_nodes(tuple(by_id[node_id] for node_id in dict.fromkeys(spec.outputs.values())))
+        graph._output_aliases = {alias: by_id[node_id].name for alias, node_id in spec.outputs.items()}
+        graph._logical_specification = spec
+        return graph
+
+    def logical_spec(self, *, input_keys: Mapping[str, str] | None = None) -> LogicalGraphSpec:
+        """Intern structural sharing independently of bound data identities."""
+
+        from .logical import canonicalize_graph
+
+        if hasattr(self, "_logical_specification"):
+            if input_keys:
+                raise ValueError("a bound logical graph cannot redefine its immutable source keys")
+            return self._logical_specification
+
+        keys = {node.name: getattr(node, "source_key", node.name) for node in self._nodes if node.node_type == "panel"}
+        keys.update(input_keys or {})
+        return canonicalize_graph(self.spec(), input_keys=keys, output_aliases=self._output_aliases)
+
+    def _present_outputs(self, values: Mapping[str, "Panel"]):
+        results = {alias: values[name] for alias, name in self._output_aliases.items()}
+        if len(results) == 1:
+            return next(iter(results.values()))
+        return results
 
     @classmethod
     def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph[Panel]":
@@ -318,9 +391,7 @@ class Graph(Generic[OutputT]):
 
     @property
     def output(self) -> OutputT:
-        if len(self._outputs) == 1:
-            return cast(OutputT, self._outputs[0].output)
-        return cast(OutputT, {node.name: node.output for node in self._outputs})
+        return cast(OutputT, self._present_outputs({node.name: node.output for node in self._outputs}))
 
     def compute(
         self,

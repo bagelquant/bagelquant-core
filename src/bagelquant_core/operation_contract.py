@@ -106,6 +106,7 @@ _PANEL_PARAMETER_TRANSFORMERS = {
     "rolling_ols",
     "rolling_ridge",
     "vol_scale",
+    "project_domain",
 }
 
 

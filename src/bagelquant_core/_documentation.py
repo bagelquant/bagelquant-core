@@ -7,6 +7,8 @@ from typing import Any
 
 
 OPERATION_DESCRIPTIONS = {
+    "canonicalize_values": "Round numerical values to explicit significant digits at a semantic boundary.",
+    "project_domain": "Restrict an upstream value to an explicit membership Domain after computing its source universe.",
     "exposure_constrained_weights": "Optimize target weights within explicit exposure bounds using historical target state.",
     "rolling_elastic_net_prediction": "Fit and predict RMS-scaled Elastic Net using only matured historical labels.",
     "rolling_lightgbm_prediction": "Fit deterministic CPU LightGBM using explicit matured labels and resource budgets.",
@@ -164,7 +166,7 @@ def operation_category(name: str, *, kind: str) -> str:
         "streak_count",
     }:
         return "Rolling statistics"
-    if name in {"mask", "project", "vol_scale"}:
+    if name in {"mask", "project", "project_domain", "vol_scale"}:
         return "Masking & scaling"
     if name in {
         "fillna",

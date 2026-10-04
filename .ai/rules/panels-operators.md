@@ -9,18 +9,25 @@
 - Apply Universe membership before cross-sectional transforms. Missing dynamic
   membership rows are inactive, never forward-filled. Preserve lazy sparse plans;
   do not collect/densify eagerly without a correctness or contract reason.
-- Ordinary Transformers/Composers produce AlphaValue `Panel`; only allowlisted
-  `SignalComposer` produces the terminal `SignalPanel` accepted by the public
-  BT signal backtest boundary. Never bypass it using frames, Panels or weights.
+- Ordinary Transformers/Composers produce AlphaValue `Panel`.
+  `PredictionComposer` produces typed `PredictionPanel` for BT's prediction
+  boundary; BT's saved-target boundary is separate. Do not bypass the applicable
+  typed boundary.
 - `PredictionComposer` produces `PredictionPanel`. It may feed only a
   Transformer's semantic input; that Transformer preserves the type. Prediction
   never feeds a Composer or an auxiliary Panel parameter.
 
-Known implementation discrepancy: the current `graph.py` type propagation and
+Known implementation discrepancy, deferred to Core refactor stage 3: the current
+`graph.py` type propagation and
 `test_predictions_can_share_multi_input_operators` permit all-prediction Composer
 peers. The preceding restriction retains the original agent governance contract
-pending a separately authorized contract decision. Workflow maintenance does
-not remove that existing API or silently rewrite either behavior or instruction.
+until that stage resolves the type-flow contract. Stage-1 workflow maintenance
+does not remove the existing API or silently change numerical/type-flow behavior.
+
+Data returns neutral data/evidence without Core types. Generic conversion and
+Domain/Panel validation belong to Core public APIs; Workbench supplies China
+semantics and research bindings. Generic numerical artifact persistence is a
+stage-3 target under [Graph and runtime](graph-runtime.md), not an existing store.
 
 ## Operator shape and names
 
@@ -40,7 +47,9 @@ not remove that existing API or silently rewrite either behavior or instruction.
   `subtract`, `multiply`, `divide`, `min` or `max`.
 - Nodes have no hidden dependencies or side effects. Graphs are acyclic,
   allowlisted, serializable and reproducible. Keep factor computation separate
-  from evaluation prices, returns, governance, storage and publication.
+  from evaluation prices, returns and governance. Numerical operators remain
+  separate from explicit artifact persistence/publication at the Core runtime
+  boundary; generic storage implementation is pending stage 3.
 
 ## Catalog maintenance
 

@@ -16,7 +16,11 @@
 - Respect exact requested dates and both label end and availability gates;
   sparse embargo/decay weights must match direct eligible-row references.
   Rescale exponential moments from each admitted batch, never a future frame end.
-  Consumers own multi-horizon lifecycle/kernel identities and Raw timing evidence.
+  Current consumers supply multi-horizon lifecycle/kernel identities and Raw
+  timing evidence. In the target, Workbench owns research lifecycle/bindings,
+  Data owns source timing evidence and Core owns numerical artifact identities;
+  Workbench references backend receipts. Generic evidence/identity mechanisms
+  still in Workbench are pending their Data/Core owner stages.
 
 ## IC and OLS
 
@@ -38,8 +42,9 @@
 ## Computed targets
 
 - Core optimizers reference historical computed targets, never account positions.
-  Consumer market semantics, fills, lots, T+1, cash, costs, limits and corporate
-  actions belong to BT with explicit application inputs.
+  BT owns generic account execution, fills, cash, costs and corporate-action
+  mechanics with explicit inputs. Workbench owns China semantics, including
+  market-specific lots, T+1 and limits, supplied as policy inputs to BT.
 - `rebalance(weights, every=5, anchor="data_start")` anchors at the first trading
   session on/after Data Start. Save complete target snapshots including zero
   exits, explicit hold decisions, and unavailable reasons for inadequate warm-up

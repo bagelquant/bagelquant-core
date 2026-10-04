@@ -11,6 +11,22 @@
 - Core has no Data/BT/Workbench dependency. Put reusable mechanics here, consumer
   policy downstream, and declare any necessary dependency in the owning manifest.
 
+## Package target and staged refactor
+
+- Target ownership: Domain/Panel conversion, numerical transforms/ML, graph
+  execution and generic numerical artifact/materialization/cache/checkpoint
+  persistence belong to Core. The current MaterializationStore protocol has
+  application implementations; their generic relocation is pending stage 3.
+- Accept neutral frames/schema/availability/immutable identity evidence through
+  public APIs. Data owns dataset storage and frozen input evidence; Core does
+  not query Data or provider state. BT owns account/evaluation artifact storage.
+- Workbench owns China semantics, app metadata, research governance and task
+  orchestration, referencing backend artifacts. Generic conversion, computation,
+  numerical persistence and reuse proofs must not be reimplemented there.
+- Follow rules -> Data -> Core -> BT -> Workbench -> new database/service restart.
+  Stage 1 changes instructions only; concrete APIs and storage schemas are deferred
+  to their owner stages. Breaking refactors remove old paths without compatibility.
+
 ## Implementation
 
 - Prefer the smallest complete system and existing lower-level primitives. Keep
@@ -43,6 +59,11 @@
 - State cross-repo public contract changes. Keep edits independently coherent,
   update bounds/versions only when required, test Core first then affected BT
   and Workbench consumers, and regenerate Workbench DSL catalogs separately.
+- For a package refactor, name one owner per capability/artifact and prove the
+  public API works without Workbench using synthetic inputs and temporary roots.
+  Check dependency direction, remove superseded paths when authority moves,
+  and verify numerical artifact persistence/reuse separately from app metadata.
+  A missing backend API is work for its owner, not a generic Workbench workaround.
 - Major architecture changes update applicable AGENTS and owner rules in the
   same change; update root instructions if cross-repository boundaries change.
 - Do not commit caches, credentials, databases, provider data, environments,

@@ -1,5 +1,18 @@
 # Logical graph, materialization and resources
 
+## Target ownership and current implementation
+
+- Core's target owns generic numerical artifacts, materialization/cache stores,
+  checkpoints, their integrity/reuse and atomic publication through public APIs.
+  The current MaterializationStore is a protocol; generic application-backed
+  implementations and planning mechanisms in Workbench remain to move in stage 3.
+  This rule change does not implement a store or define future APIs/schemas.
+- Data owns frozen input datasets/evidence; Core consumes explicit neutral inputs
+  and validates numerical reuse against their immutable identities. Core never
+  imports or queries Data, BT or Workbench. BT owns account/evaluation storage.
+- Workbench freezes research intent, China semantics and backend receipt references
+  and orchestrates tasks; it does not own generic numerical storage or cache logic.
+
 ## Identity and execution
 
 - Immutable content-addressed `LogicalGraphSpec` is the sole persistent
@@ -14,9 +27,11 @@
   and decisions share one immutable result receipt.
 - Explicit projection/applicability and 14-significant-digit Alpha/Prediction
   boundaries are ordinary generic operations. Never round intermediate results.
-- Core performs no storage/provider/governance I/O. Applications own source
-  proofs, frozen input snapshots, atomic publication, retention and historical
-  invalidation; supplied input identities must prove immutable content.
+- Numerical operators perform no provider/governance or hidden storage I/O.
+  The target Core storage/runtime boundary owns numerical artifact publication,
+  retention and invalidation; Data owns source/frozen-input authority. Workbench
+  owns research metadata and governance. Supplied input identities must prove
+  immutable content; current application-backed storage remains a migration gap.
 
 ## Causal history and cache planning
 
@@ -30,8 +45,10 @@
 - Numerical execution policies participate in selected node context and
   propagate through parent keys. Hardware and physical chunks remain neutral.
   Do not reuse full-history prefixes as canonical finite-block receipts or
-  implicitly treat block receipts as full-domain results. Workbench owns its
-  fixed 32-session `finite_causal_blocks.v1` policy and `dag.values.v4` bindings.
+  implicitly treat block receipts as full-domain results. Current Workbench uses
+  fixed 32-session `finite_causal_blocks.v1` and `dag.values.v4` bindings; generic
+  block/reuse/publication mechanisms are pending migration to Core in stage 3,
+  while Workbench retains research binding metadata and task orchestration.
 - Keep observation-window endpoints distinct from the frozen information
   cutoff. Canonical prefix proofs use stable row order rather than scan order.
 

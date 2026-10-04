@@ -2,8 +2,11 @@
 
 This repository owns application-neutral Domain/Panel types, Node/Operator
 graphs, deterministic numerical estimators/optimizers and ML primitives.
-It has no BagelQuant package dependency. Do not import Data, BT or Workbench;
-do not add providers, accounts, investment policy, governance or storage.
+Its target also owns generic numerical artifact/materialization/cache/checkpoint
+persistence. That implementation is pending stage 3; the current durable-store
+protocol is backed by applications, including Workbench in this workspace.
+Core has no BagelQuant package dependency. Do not import Data, BT or Workbench;
+do not add providers, accounts, China policy, research governance or app metadata.
 
 Before work, read [`.ai/README.md`](.ai/README.md), the mandatory development
 rules, the affected topic rules, [`README.md`](README.md), [`pyproject.toml`](pyproject.toml)
@@ -16,7 +19,10 @@ Keep this entry short; detailed owner contracts live under `.ai/rules/`.
   mutate the workspace's real data root or call a real provider for validation.
 - Do not commit, push, create PRs, merge, release, deploy, install services,
   update real data or change governance unless explicitly requested.
-- Keep immutable long-form Panels and the typed Signal/Prediction boundaries.
+- Keep immutable long-form Panels and typed PredictionPanel; BT has a typed
+  prediction boundary and a separate saved-target boundary.
+- Accept neutral input data and immutable evidence through public APIs; Core
+  owns conversion and numerical persistence, Data owns frozen input authority.
 - Regenerate operation references from their generator after catalog changes;
   coordinate separate Workbench catalog updates when the public contract changes.
 

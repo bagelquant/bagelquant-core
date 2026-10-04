@@ -9,6 +9,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from ..frame import ASSET_ID, TIME, VALUE, panel_like
 from ..operation_contract import ExecutionMode, InputDensity, OperationContract, TraceRule
 from ..exponential_state import checkpoint_ewm
+from ..resources import kernel_batch_rows
 from .core import transformer
 
 _MAX_WORKING_BYTES = 64 * 1024 * 1024
@@ -717,11 +718,8 @@ def _rolling_rank_series(
     last_values = np.full(len(values), np.nan, dtype=float)
     has_value = last_indices >= 0
     last_values[has_value] = values[last_indices[has_value]]
-    rows_per_batch = max(
-        1,
-        _MAX_WORKING_BYTES
-        // max(window * _RANK_BYTES_PER_WINDOW_VALUE, 1),
-    )
+    rows_per_batch = kernel_batch_rows(window * _RANK_BYTES_PER_WINDOW_VALUE,
+                                      maximum_bytes=_MAX_WORKING_BYTES)
     for start in range(0, len(values), rows_per_batch):
         end = min(start + rows_per_batch, len(values))
         batch = windows[start:end]

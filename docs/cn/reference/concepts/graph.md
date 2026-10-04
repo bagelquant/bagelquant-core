@@ -30,6 +30,11 @@ Domain、Snapshot 与算子实现版本不进入逻辑 ID。
 参数不可变；修改参数会形成新节点。`parameter_bindings` 可在执行时绑定
 `$data_start` 等显式占位符，原始逻辑定义及节点 ID 保持不变。
 
+`Graph.from_logical_spec(..., node_bindings={node_id: panel})` 可绑定调用方已证明的
+算子中间值。执行在这些节点截断数值依赖，因此无需加载其原始输入；完整逻辑定义
+保持不变，Panel 类型仍受校验。来源完整性与坐标覆盖由应用证明，块收据不能直接
+冒充完整 Domain 的物化收据。
+
 ## 输出
 
 执行前访问 `Graph.output` 会报错。调用 `compute()` 后，`output` 返回对应的 `Panel`。

@@ -55,6 +55,13 @@ Logical node parameters are immutable JSON values. Changing an operation or its
 parameters creates a different node. `parameter_bindings` resolves explicit
 execution placeholders without rewriting the stored logical definition.
 
+`Graph.from_logical_spec(..., node_bindings={node_id: panel})` may bind
+caller-proven intermediate operator values. Execution stops traversing parents
+at those nodes, so their original sources need not be loaded. The complete
+logical definition remains unchanged; the numerical Panel type is checked.
+The application proves source integrity and coverage and must not publish a
+block-specific receipt as a complete full-domain value.
+
 ## Output
 
 Before execution, output access raises an error:

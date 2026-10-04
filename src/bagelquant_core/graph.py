@@ -187,14 +187,48 @@ class Graph(Generic[OutputT]):
 
     @classmethod
     def from_logical_spec(cls, specification: LogicalGraphSpec | Mapping[str, Any], *, inputs: Mapping[str, "Panel"],
-                          parameter_bindings: Mapping[str, Any] | None = None) -> "Graph[Panel]":
-        """Bind a content-addressed DAG; symbolic source keys resolve explicitly."""
+                          parameter_bindings: Mapping[str, Any] | None = None,
+                          node_bindings: Mapping[str, "Panel"] | None = None) -> "Graph[Panel]":
+        """Bind sources and caller-proven intermediate values to an immutable DAG.
+
+        ``node_bindings`` cuts execution dependencies at explicit operator nodes.
+        The caller proves their numerical receipt and coverage; this binding
+        does not certify a full-domain materialization or alter the logical DAG.
+        """
 
         from .logical import LogicalGraphSpec
         from .operator import OPERATOR_REGISTRY, OperationNode
+        from .panel import Panel
 
         spec = specification if isinstance(specification, LogicalGraphSpec) else LogicalGraphSpec.from_dict(specification)
         bindings = dict(parameter_bindings or {})
+        retained = dict(node_bindings or {})
+        declared = {node.node_id: node for node in spec.nodes}
+        if any(key not in declared or declared[key].node_type != "operator" for key in retained):
+            raise GraphValidationError("node bindings must reference declared logical operator nodes")
+        if any(not isinstance(panel, Panel) for panel in retained.values()):
+            raise GraphValidationError("node bindings require typed Panels")
+        required: set[str] = set()
+        pending = list(spec.outputs.values())
+        while pending:
+            node_id = pending.pop()
+            if node_id in required:
+                continue
+            required.add(node_id)
+            if node_id not in retained:
+                node = declared[node_id]
+                pending.extend((*node.inputs, *(parent for values in node.panel_parameters.values() for parent in values)))
+
+        value_types: dict[str, str] = {}
+        for node in spec.nodes:
+            if node.node_type == "input":
+                value_types[node.node_id] = node.parameters.get("value_type", "panel")
+            else:
+                registered = OPERATOR_REGISTRY.get(node.operator)
+                primary = [value_types[parent] for parent in node.inputs]
+                value_types[node.node_id] = ("prediction" if registered.input_mode == "prediction_composer" or (
+                    primary and all(value == "prediction" for value in primary) and registered.output_type != "weights")
+                    else "category" if registered.input_mode == "transformer" and primary[0] == "category" else "panel")
 
         def resolve(value):
             if isinstance(value, str) and value.startswith("$"):
@@ -208,6 +242,18 @@ class Graph(Generic[OutputT]):
             return value
         by_id: dict[str, Node] = {}
         for node in spec.nodes:
+            if node.node_id not in required:
+                continue
+            if node.node_id in retained:
+                panel = retained[node.node_id]
+                if panel.config()["value_type"] != value_types[node.node_id]:
+                    raise GraphValidationError(f"logical node {node.node_id!r} requires {value_types[node.node_id]}")
+                bound = type(panel).from_domain(panel.lazy(include_traces=True), panel.domain, name=node.node_id,
+                    identity=panel.identity, trace_identity=panel.trace_identity,
+                    trace_columns=panel.trace_columns, source_key=node.node_id)
+                bound._logical_id_override = node.node_id
+                by_id[node.node_id] = bound
+                continue
             if node.node_type == "input":
                 if node.input_key not in inputs:
                     raise GraphValidationError(f"missing logical input: {node.input_key}")

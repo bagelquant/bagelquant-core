@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import logging
+import gc
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from contextvars import copy_context
 from dataclasses import dataclass, replace
+from time import monotonic
 from typing import Any, Mapping
 
 import numpy as np
@@ -14,7 +19,7 @@ from .frame import ASSET_ID, TIME, VALUE
 from .graph import Graph
 from .hashing import hash_mapping
 from .node import Node
-from .materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationStatus
+from .materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationStatus, materialization_trace_identity
 from .operator_state import (
     capture_node_evidence, capture_operator_checkpoints, current_operator_checkpoints,
     operator_input_context, replay_node_evidence,
@@ -26,6 +31,7 @@ from .operation_contract import (
     TraceRule,
 )
 from .panel import CategoryPanel, Domain, Panel, PredictionPanel
+from .resources import active_resource_limits, current_resident_mib, resource_limits
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +71,26 @@ class _EagerLayout:
     time_offsets: np.ndarray
 
 
+@dataclass(frozen=True, slots=True)
+class _EagerWork:
+    node: Node
+    prepared: tuple[PlanValue, ...]
+    domain: Domain
+    physical_identity: str
+
+
+class _DeferredEager(Exception):
+    def __init__(self, work: _EagerWork) -> None:
+        self.work = work
+
+
 class ExecutionRuntime:
     """Compile graphs into Polars plans and materialize only public outputs."""
 
     def __init__(self, alignment: str = "inner", *,
                  materialization_store: MaterializationStore | None = None,
-                 context_identity: str = "") -> None:
+                  context_identity: str = "",
+                  node_contexts: Mapping[str, str] | None = None) -> None:
         if alignment != "inner":
             raise ValueError("ExecutionRuntime only supports inner alignment")
         self.cache: dict[str, Panel] = {}
@@ -79,7 +99,12 @@ class ExecutionRuntime:
         self._alignment = alignment
         self.materialization_store = materialization_store
         self.context_identity = context_identity
+        self.node_contexts = dict(node_contexts or {})
+        if any(not isinstance(node_id, str) or not node_id or not isinstance(context, str)
+               for node_id, context in self.node_contexts.items()):
+            raise ValueError("node execution contexts require nonempty logical IDs and string contexts")
         self.node_materializations: dict[str, NodeMaterialization] = {}
+        self.node_domains: dict[str, Domain] = {}
         self.node_artifacts: dict[str, Mapping[str, Any]] = {}
         self._pending_materializations: dict[str, tuple[Node, PlanValue, MaterializationKey]] = {}
         self._loaded_materializations: dict[str, NodeMaterialization] = {}
@@ -104,6 +129,12 @@ class ExecutionRuntime:
         ] | None = None
         self.materializations = 0
         self.eager_barriers = 0
+        self._defer_eager = False
+        self._completed_eager: dict[int, pl.DataFrame] = {}
+        self._effective_limits = active_resource_limits()
+        self._last_memory_sample = 0.0
+        self.resource_usage = {"peak_resident_mib": 0.0, "pressure_events": 0,
+            "max_parallel_nodes": 0, "eager_batches": 0}
         self._diagnostics = {
             "semantic_cse_hits": 0,
             "alignments_elided": 0,
@@ -117,8 +148,7 @@ class ExecutionRuntime:
 
     def _remember_output(self, identity: str, panel: Panel) -> None:
         """Bound retained numerical output caches without changing graph identity."""
-        from .resources import active_resource_limits
-        limit = active_resource_limits().cache_mib * 1024 * 1024
+        limit = self._effective_limits.cache_mib * 1024 * 1024
         def size(value):
             frame = value._cached_dense
             return 0 if frame is None else frame.estimated_size()
@@ -131,6 +161,197 @@ class ExecutionRuntime:
         while self.cache and resident + required > limit:
             resident -= size(self.cache.pop(next(iter(self.cache))))
         self.cache[identity] = panel
+
+    def plan_materialization_keys(self, graph: Graph) -> dict[str, MaterializationKey]:
+        """Plan operator identities without collecting or evaluating numerical inputs.
+
+        Uses the same full-calendar context as durable execution. Callers may
+        bind scan-backed or schema-correct placeholder inputs with proven
+        identities, query complete results, then load only missing payloads.
+        """
+        if not isinstance(graph, Graph):
+            raise TypeError("materialization planning expects a Graph")
+        values: dict[int, PlanValue] = {}
+        keys: dict[str, MaterializationKey] = {}
+        self.node_domains = {}
+        with ExitStack() as scope:
+            if current_operator_checkpoints() is None:
+                calendar = next((node.domain.times.to_list() for node in graph.nodes if isinstance(node, Panel)), ())
+                scope.enter_context(capture_operator_checkpoints(calendar=calendar))
+            for node in graph.topological_sort():
+                if isinstance(node, Panel):
+                    value = self._panel_plan(node)
+                    value = replace(value, physical_identity=hash_mapping({"input": node.identity,
+                        "trace": node.trace_identity, "trace_columns": node.trace_columns,
+                        "domain": node.domain.signature, "categorical": isinstance(node, CategoryPanel),
+                        "prediction": isinstance(node, PredictionPanel)}))
+                else:
+                    parents = tuple(values[id(parent)] for parent in node.parents)
+                    projected = node.config().get("operator", "").endswith(".project_domain")
+                    domain = parents[-1].domain if projected else self._resolve_domain(parents)
+                    key = self._materialization_key(node, parents, domain)
+                    keys[node.logical_id] = key
+                    self.node_domains[node.logical_id] = domain
+                    value = PlanValue(frame=parents[0].frame, domain=domain,
+                        density=self._contract(node).density, identity=key.identity,
+                        trace_columns=tuple(dict.fromkeys(trace for parent in parents for trace in parent.trace_columns)),
+                        categorical=node.execution_kind == "transformer" and parents[0].categorical,
+                        prediction=node.execution_kind == "prediction_composer" or (
+                            bool(node.spec_inputs()) and all(parent.prediction for parent in parents[:len(node.spec_inputs())])
+                            and getattr(node.operation, "output_type", None) != "weights"),
+                        physical_identity=key.identity)
+                values[id(node)] = value
+        return keys
+
+    def _memory_feedback(self, *, force: bool = False) -> float:
+        now = monotonic()
+        if not force and now - self._last_memory_sample < 0.1:
+            return self._resident_mib
+        self._last_memory_sample = now
+        self._resident_mib = current_resident_mib()
+        self.resource_usage["peak_resident_mib"] = max(
+            self.resource_usage["peak_resident_mib"], self._resident_mib)
+        reduced = self._effective_limits.under_pressure(self._resident_mib)
+        if reduced != self._effective_limits:
+            self.resource_usage["pressure_events"] += 1
+            self._effective_limits = reduced
+            self.cache.clear()
+            self._plan_cache.clear()
+            self._physical_plan_cache.clear()
+            for cache in (self._active_eager_inputs, self._active_eager_results,
+                          self._active_eager_layouts, self._active_eager_physical_results):
+                if cache is not None:
+                    cache.clear()
+            gc.collect()
+        return self._resident_mib
+
+    def _run_frontiers(self, graph: Graph, evaluated: dict[int, PlanValue]) -> None:
+        """Keep lazy work fused and admit bounded independent eager kernels."""
+        nodes = graph.topological_sort()
+        remaining = {id(node): len({id(parent) for parent in node.parents}) for node in nodes}
+        children: dict[int, list[Node]] = {}
+        for node in nodes:
+            for parent_id in dict.fromkeys(id(parent) for parent in node.parents):
+                children.setdefault(parent_id, []).append(node)
+        ready = deque(node for node in nodes if remaining[id(node)] == 0)
+
+        def completed(node: Node) -> None:
+            for child in children.get(id(node), ()):
+                remaining[id(child)] -= 1
+                if remaining[id(child)] == 0:
+                    ready.append(child)
+
+        with ThreadPoolExecutor(max_workers=self._effective_limits.parallel_nodes,
+                                thread_name_prefix="bagelquant-kernel") as executor:
+            while ready:
+                frontier: list[_EagerWork] = []
+                self._defer_eager = True
+                try:
+                    while ready:
+                        node = ready.popleft()
+                        try:
+                            self._run_node(node, evaluated)
+                        except _DeferredEager as deferred:
+                            frontier.append(deferred.work)
+                        else:
+                            completed(node)
+                finally:
+                    self._defer_eager = False
+                groups: dict[object, list[_EagerWork]] = {}
+                for work in frontier:
+                    groups.setdefault(self._eager_group_key(work), []).append(work)
+                waiting = deque(groups.values())
+                while waiting:
+                    resident = self._memory_feedback(force=True)
+                    limits = self._effective_limits
+                    headroom = max(0, limits.memory_target_mib - resident) * 1024 * 1024
+                    batch: list[list[_EagerWork]] = []
+                    estimate = 0
+                    while waiting and len(batch) < limits.parallel_nodes:
+                        group = waiting[0]
+                        work = group[0]
+                        required = self._estimate_plan_bytes(work.domain, 0) * (len(work.prepared) + 2)
+                        if batch and estimate + required > headroom:
+                            break
+                        batch.append(waiting.popleft())
+                        estimate += required
+                    self.resource_usage["max_parallel_nodes"] = max(
+                        self.resource_usage["max_parallel_nodes"], len(batch))
+                    self.resource_usage["eager_batches"] += 1
+                    # Planning a later ready branch may have spilled an earlier
+                    # branch. Do not collect the earlier captured lazy plan again.
+                    for index, group in enumerate(batch):
+                        refreshed = []
+                        for work in group:
+                            parents = tuple(self._frozen_output_plan(None, parent) for parent in work.prepared)
+                            prepared = tuple(self._ensure_dense(parent) if self._contract(work.node).density
+                                == InputDensity.DENSE_REQUIRED else self._expand_implicit(parent) for parent in parents)
+                            refreshed.append(replace(work, prepared=prepared))
+                        batch[index] = refreshed
+                    prepared = tuple(value for group in batch for value in group[0].prepared)
+                    frames = self._collect_eager_inputs(prepared,
+                        tuple(value.frame.select(TIME, ASSET_ID, VALUE) for value in prepared))
+                    offset = 0
+                    jobs = []
+                    for group in batch:
+                        count = len(group[0].prepared)
+                        inputs = frames[offset:offset + count]
+                        offset += count
+                        context = copy_context()
+                        arguments = (group, inputs, limits.for_workers(len(batch)))
+                        jobs.append(executor.submit(context.run, self._execute_eager_group, *arguments))
+                    # Merge evidence and publish in stable graph order, not completion order.
+                    for group, job in zip(batch, jobs, strict=True):
+                        outputs, evidence, diagnostics = job.result()
+                        for name, count in diagnostics.items():
+                            self._diagnostics[name] += count
+                        for work, output in zip(group, outputs, strict=True):
+                            node_id = work.node.logical_id
+                            replay_node_evidence(node_id,
+                                artifacts=evidence.artifacts.get(node_id, {}),
+                                checkpoint=evidence.checkpoints.get(node_id),
+                                training_audits=evidence.training_audits.get(node_id, ()))
+                            self._completed_eager[id(work.node)] = output
+                            self._run_node(work.node, evaluated)
+                            completed(work.node)
+                    del frames, jobs
+                    self._memory_feedback(force=True)
+
+    def _eager_group_key(self, work: _EagerWork) -> object:
+        node = work.node
+        if self._is_builtin_operation(node) and self._contract(node).deterministic:
+            operation = node.operation.display_name
+            if operation in {"rolling_rank", "rolling_percentile"}:
+                parameters = self._node_parameters(node)
+                parent = work.prepared[0]
+                return ("rolling_rank_pair", parent.identity, work.domain.signature,
+                    parameters.get("window"), parameters.get("min_periods"))
+            return work.physical_identity
+        return id(node)
+
+    @staticmethod
+    def _execute_eager_group(group: list[_EagerWork], inputs: tuple[pl.DataFrame, ...], limits):
+        from .training_operators import capture_training_audits
+
+        local = ExecutionRuntime()
+        local._active_eager_inputs = {}
+        local._active_eager_results = {}
+        local._active_eager_layouts = {}
+        checkpoint_context = current_operator_checkpoints()
+        restored = None if checkpoint_context is None else checkpoint_context.restored
+        calendar = () if checkpoint_context is None else checkpoint_context.calendar
+        results = []
+        with resource_limits(limits), capture_node_evidence() as evidence, \
+                capture_operator_checkpoints(restored, calendar=calendar), capture_training_audits():
+            first = group[0]
+            result = local._compute_eager(first.node, first.prepared, inputs, first.domain)
+            results.append(result)
+            for work in group[1:]:
+                if work.physical_identity == first.physical_identity:
+                    results.append(result)
+                else:
+                    results.append(local._compute_eager(work.node, work.prepared, inputs, work.domain))
+        return results, evidence, local._diagnostics
 
     def run(
         self,
@@ -147,10 +368,14 @@ class ExecutionRuntime:
         self._active_eager_layouts = {}
         self._active_eager_physical_results = {}
         self.node_materializations = {}
+        self.node_domains = {}
         self.node_artifacts = {}
         self._pending_materializations = {}
         self._loaded_materializations = {}
         self._pending_estimated_bytes = 0
+        self._effective_limits = active_resource_limits()
+        self._completed_eager = {}
+        self._memory_feedback(force=True)
         scope = ExitStack()
         self._run_evidence = scope.enter_context(capture_node_evidence())
         if self.materialization_store is not None and current_operator_checkpoints() is None:
@@ -159,6 +384,8 @@ class ExecutionRuntime:
         try:
             evaluated: dict[int, PlanValue] = {}
             self._active_evaluated = evaluated
+            if self._effective_limits.parallel_nodes > 1:
+                self._run_frontiers(graph, evaluated)
             plans = [
                 (node, self._run_node(node, evaluated))
                 for node in graph._outputs
@@ -188,6 +415,8 @@ class ExecutionRuntime:
             self._active_eager_inputs = None
             self._active_eager_results = None
             self._active_eager_layouts = None
+            self._completed_eager.clear()
+            self._defer_eager = False
             self._active_eager_physical_results = None
 
     def _materialize_many(
@@ -356,7 +585,8 @@ class ExecutionRuntime:
             "runtime_kernel": EXECUTION_KERNEL_VERSION,
             "execution": operator.contract.execution, "density": operator.contract.density,
             "trace_rule": operator.contract.trace_rule, "output_type": operator.output_type})
-        context = hash_mapping({"context": self.context_identity, "operator": operator_input_context(node.logical_id),
+        context = hash_mapping({"context": self.node_contexts.get(node.logical_id, self.context_identity),
+                                "operator": operator_input_context(node.logical_id),
                                 "parameters": self._node_parameters(node)})
         return MaterializationKey(node.logical_id, implementation,
             tuple(parent.physical_identity or parent.identity for parent in parents), domain.signature, context)
@@ -375,7 +605,7 @@ class ExecutionRuntime:
         return domain.size * (40 + traces * 8)
 
     def _admit_materialization(self, domain: Domain, parents: tuple[PlanValue, ...]) -> tuple[PlanValue, ...]:
-        from .resources import active_resource_limits
+        self._memory_feedback()
 
         # A later sibling's recursive execution may have published an earlier
         # parent after its PlanValue was captured. Refresh that local reference
@@ -383,7 +613,7 @@ class ExecutionRuntime:
         parents = tuple(self._frozen_output_plan(None, parent) for parent in parents)
         if self.materialization_store is None or not self._pending_materializations:
             return parents
-        limits = active_resource_limits()
+        limits = self._effective_limits
         available = min(limits.cache_mib, max(1, limits.memory_target_mib // 4)) * 1024 * 1024
         estimate = self._estimate_plan_bytes(domain, len({trace for parent in parents for trace in parent.trace_columns}))
         if self._pending_estimated_bytes + estimate > available:
@@ -400,7 +630,7 @@ class ExecutionRuntime:
         for node, plan, key in pending:
             panel = panels[node.name]
             frozen = type(panel).from_domain(panel.lazy(include_traces=True), panel.domain,
-                name=node.logical_id, identity=key.identity, trace_identity=panel.trace_identity,
+                name=node.logical_id, identity=key.identity, trace_identity=materialization_trace_identity(key, panel.trace_columns),
                 trace_columns=panel.trace_columns, source_key=node.logical_id)
             frozen._validated_keys = True
             frozen._exact_domain = panel._exact_domain
@@ -517,6 +747,7 @@ class ExecutionRuntime:
         parents = tuple(self._run_node(parent, evaluated) for parent in node.parents)
         projected = node.config().get("operator", "").endswith(".project_domain")
         domain = parents[-1].domain if projected else self._resolve_domain(parents)
+        self.node_domains[node.logical_id] = domain
         parents = self._admit_materialization(domain, parents)
         key = self._materialization_key(node, parents, domain)
         cacheable = self._contract(node).deterministic and all(parent.cacheable for parent in parents)
@@ -688,26 +919,27 @@ class ExecutionRuntime:
                     "expected LazyFrame-compatible output"
                 )
         else:
-            self.eager_barriers += 1
             assert self._active_eager_physical_results is not None
             result = (
                 self._active_eager_physical_results.get(physical_identity)
                 if cacheable and builtin
                 else None
             )
+            common_subexpression = result is not None
+            if result is None:
+                if self._defer_eager:
+                    raise _DeferredEager(_EagerWork(node, prepared, domain, physical_identity))
+                result = self._completed_eager.pop(node_id, None)
+            self.eager_barriers += 1
             if result is None:
                 eager_inputs = self._collect_eager_inputs(prepared, inputs)
-                result = self._compute_eager(
-                    node,
-                    prepared,
-                    eager_inputs,
-                    domain,
-                )
-                if cacheable and builtin:
-                    self._active_eager_physical_results[
-                        physical_identity
-                    ] = result
-            else:
+                self._memory_feedback()
+                self.resource_usage["max_parallel_nodes"] = max(self.resource_usage["max_parallel_nodes"], 1)
+                with resource_limits(self._effective_limits.for_workers(1)):
+                    result = self._compute_eager(node, prepared, eager_inputs, domain)
+            if cacheable and builtin:
+                self._active_eager_physical_results[physical_identity] = result
+            if common_subexpression:
                 self._diagnostics["eager_cse_hits"] += 1
             if not isinstance(result, pl.DataFrame):
                 raise TypeError(

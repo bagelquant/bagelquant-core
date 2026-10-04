@@ -9,9 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Callable
+from collections.abc import Mapping
+from typing import Any, Callable, TYPE_CHECKING
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from .logical import LogicalGraphSpec
 
 
 class ExecutionMode(StrEnum):
@@ -181,6 +185,77 @@ def _transformer_trace_rule(name: str) -> TraceRule:
     return TraceRule.PASSTHROUGH
 
 
+def causal_history_requirements(specification: LogicalGraphSpec | Mapping[str, Any]) -> dict[str, int | None]:
+    """Prove preceding observation counts for finite built-in dependency closures.
+
+    Zero means same-coordinate processing; None requires the full history. A
+    count is per asset's admitted coordinates, NOT calendar sessions: dynamic
+    Universe gaps require a membership-based halo proof by the caller. This
+    helper never proves input-prefix integrity or stateful checkpoint reuse.
+    """
+    from .logical import LogicalGraphSpec
+    from .operator import OPERATOR_REGISTRY
+
+    spec = (specification if isinstance(specification, LogicalGraphSpec)
+            else LogicalGraphSpec.from_dict(specification))
+    result: dict[str, int | None] = {}
+    for node in spec.nodes:
+        if node.node_type == "input":
+            result[node.node_id] = 0
+            continue
+        operator = OPERATOR_REGISTRY.get(node.operator)
+        own = _finite_history(operator.operation, node.parameters)
+        parents = [result[parent] for parent in (*node.inputs,
+            *(parent for values in node.panel_parameters.values() for parent in values))]
+        result[node.node_id] = (None if own is None or any(value is None for value in parents)
+            else own + max(parents, default=0))
+    return result
+
+
+def _finite_history(operation: Callable[..., Any], parameters: Mapping[str, Any]) -> int | None:
+    module, name = operation.__module__, operation.__name__
+    if not module.startswith("bagelquant_core."):
+        return None
+    if name == "smooth" and module == "bagelquant_core.transformer.rolling":
+        from .transformer.rolling import _SMOOTH_WINDOW
+        return _SMOOTH_WINDOW - 1
+    if name in {"lag", "diff", "pct_change"}:
+        return _history_parameter(parameters.get("periods", 1))
+    if name == "remove_repeated":
+        return 1
+    windows = {"rolling_mean", "rolling_std", "rolling_min", "rolling_max", "rolling_sum",
+        "rolling_var", "rolling_median", "rolling_skew", "rolling_kurt", "rolling_percentile",
+        "rolling_rank", "rolling_zscore", "rolling_ewm_fw", "date_age_constraint",
+        "rolling_corr", "rolling_cov"}
+    if name in windows:
+        value = _history_parameter(parameters.get("window"))
+        return None if value is None else max(0, value - 1)
+    if name in {"rolling_ols", "rolling_ridge", "rolling_lasso", "rolling_elastic_net"}:
+        # Regressions fit strictly prior windows, then predict the current row.
+        return _history_parameter(parameters.get("window"))
+    pointwise_modules = {"basic", "boxcox", "logarithmic", "outlier", "normalization",
+        "power", "ranking", "replace", "sign", "translation", "trigonometric",
+        "variance_stabilization"}
+    if module.startswith("bagelquant_core.transformer.") and module.rsplit(".", 1)[-1] in pointwise_modules:
+        return 0
+    if module == "bagelquant_core.transformer.general" and name in {
+        "canonicalize_values", "project_domain", "notnan", "denoise", "posonly", "negonly",
+        "constant", "replace_inf"}:
+        return 0
+    if module == "bagelquant_core.transformer.missing" and name in {"fillna", "fillna_zero"}:
+        return 0
+    if module.startswith("bagelquant_core.composer.") and module.rsplit(".", 1)[-1] in {
+        "arithmetic", "aggregation", "math", "xsectional", "scaling"}:
+        return 0
+    if module == "bagelquant_core.composer.general" and name in {"project", "mask", "coalesce"}:
+        return 0
+    return None
+
+
+def _history_parameter(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
+
+
 __all__ = [
     "ExecutionMode",
     "InputDensity",
@@ -188,4 +263,5 @@ __all__ = [
     "TraceFunction",
     "TraceRule",
     "default_operation_contract",
+    "causal_history_requirements",
 ]

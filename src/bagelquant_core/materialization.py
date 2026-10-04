@@ -59,6 +59,12 @@ class MaterializationKey:
         )
 
 
+def materialization_trace_identity(key: MaterializationKey, trace_columns: tuple[str, ...]) -> str | None:
+    """Canonical receipt trace token, independent of execution blocks and aliases."""
+    return (hash_mapping({"materialization": key.identity, "trace_columns": list(trace_columns)})
+            if trace_columns else None)
+
+
 @dataclass(frozen=True, slots=True)
 class NodeMaterialization:
     """A typed value with the evidence produced by that exact computation.
@@ -113,4 +119,4 @@ the caller's update planner, which submits the admitted execution block.
 
 
 __all__ = ["MaterializationKey", "MaterializationStore", "NodeMaterialization",
-           "MaterializationLookup", "MaterializationStatus"]
+           "MaterializationLookup", "MaterializationStatus", "materialization_trace_identity"]

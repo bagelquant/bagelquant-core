@@ -115,6 +115,24 @@ graphs can resume a verified causal prefix. `canonicalize_values` makes a
 significant-digit boundary explicit; `project_domain` restricts a consumer's
 Domain after computing its upstream source universe.
 
+`ResourceLimits.parallel_nodes` admits independent eager kernels from the DAG's
+ready frontier; lazy work stays fused in Polars' shared process thread pool.
+Each kernel receives a share of the total thread, LightGBM histogram and
+temporary-array budgets. Resident-memory feedback reduces subsequent admission,
+shrinks batches and releases optional caches; it is a soft target, so callers
+still submit bounded date blocks. `runtime.resource_usage` reports observed
+resident memory and actual eager concurrency.
+
+`runtime.plan_materialization_keys(graph)` and `runtime.node_domains` expose the
+full numerical identities and Domains without evaluating input payloads.
+`causal_history_requirements(spec)` proves finite preceding observation counts
+for supported built-ins; unknown or stateful closures require full history.
+Counts follow each asset's admitted coordinates. Dynamic membership gaps need a
+membership-based halo proof before calendar chunking. Applications own that
+proof and immutable block publication. `Graph.from_logical_spec(node_bindings=...)`
+binds caller-proven intermediate Panels while retaining the complete logical
+definition; block receipts do not become full-domain receipts implicitly.
+
 ## Development
 
 ```bash

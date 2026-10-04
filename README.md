@@ -135,6 +135,11 @@ definition; block receipts do not become full-domain receipts implicitly.
 
 ## Development
 
+AI contributors start with [AGENTS.md](AGENTS.md) and the
+[local workflow and topic routes](.ai/README.md). Integrated checkouts use the
+verified workspace's bilingual AI workflow guide and ignored task records;
+standalone checkouts use the local rules and conversation handoff.
+
 ```bash
 uv run ruff check .
 uv run python -m pytest

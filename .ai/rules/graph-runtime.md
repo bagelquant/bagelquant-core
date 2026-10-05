@@ -52,7 +52,14 @@
 - Keep observation-window endpoints distinct from the frozen information
   cutoff. Canonical prefix proofs use stable row order rather than scan order.
 
-## Resource ownership
+## Resource ownership target and current implementation
+
+Workbench owns global scheduling, runtime policy, hardware detection and total
+resource allocation. Core owns DAG/dependency resolution, cache APIs and node
+execution primitives, exposing caller-configured execution. Core must not choose
+whole-DAG concurrency from machine CPU/RAM or implement a second global scheduler.
+Current frontier/pressure mechanics below are stage-3 migration gaps where they
+choose policy; this stage-2 instruction update does not rewrite Core execution.
 
 - Share one total thread/memory budget across workers and native threads.
   Hardware limits are identity-neutral; sample/model/solver settings are
@@ -62,7 +69,7 @@
   fused lazy plans. Merge worker evidence in stable order on the coordinator
   thread. Native pools and LightGBM thread/histogram allocations share the
   concurrent worker budget; audit/checkpoint contexts stay isolated.
-- Memory pressure shrinks later batches, defers new nodes and releases optional
+- Caller pressure policy shrinks later batches, defers new nodes and releases optional
   caches. Record observed peak RSS, duration, pressure and actual batches/threads;
   the memory target remains soft. Bound caller date blocks while preserving
   numerical history and fixed arithmetic tile boundaries.

@@ -19,3 +19,5 @@ On macOS, install the CPU ML runtime's OpenMP dependency with
 
 Version 0.11 uses new API and storage schemas. It provides no compatibility reader
 or migration. Real data and service cutover are separate operations.
+
+Supported platforms: macOS and Linux. Windows support is retired.

@@ -2,7 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 
 import polars as pl
@@ -69,13 +69,18 @@ def orphan(store, identity="a"*64):
     return directory
 
 
-def test_cleanup_preserves_receipts_and_rejects_unapproved_members(tmp_path):
+@pytest.mark.parametrize("windows_paths", [False, True])
+def test_cleanup_preserves_receipts_and_rejects_unapproved_members(tmp_path, monkeypatch, windows_paths):
     store = CoreStore(tmp_path/"core.sqlite", tmp_path/"artifacts")
     record = value(Domain(calendar=[date(2024, 1, 2)], universe=["A"]))
     store.publish(record)
     directory = orphan(store)
+    if windows_paths:
+        # Manifest references are POSIX tokens even on a Windows host.
+        monkeypatch.setattr("bagelquant_core.store.Path", PureWindowsPath)
     plan = store.cleanup_plan()
     assert len(plan["candidates"]) == 1
+    assert plan["candidates"][0]["token"] == directory.relative_to(store.artifact_path).as_posix()
     extra = directory/"new-directory"
     extra.mkdir()
     with pytest.raises((ValueError, RuntimeError), match="changed|member"):

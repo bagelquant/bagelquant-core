@@ -6,7 +6,7 @@ from datetime import date, datetime
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
 from typing import Any, Iterator, Mapping
@@ -325,7 +325,7 @@ class CoreStore:
             def paths(item):
                 if isinstance(item, dict):
                     if "$file" in item:
-                        referenced.add(str(Path(item["$file"]).parent))
+                        referenced.add(PurePosixPath(item["$file"]).parent.as_posix())
                     for value in item.values():
                         paths(value)
                 elif isinstance(item, list):
@@ -371,7 +371,7 @@ class CoreStore:
             def record_paths(item):
                 if isinstance(item, dict):
                     if "$file" in item:
-                        referenced.add(str(Path(item["$file"]).parent))
+                        referenced.add(PurePosixPath(item["$file"]).parent.as_posix())
                     for child in item.values():
                         record_paths(child)
                 elif isinstance(item, list):

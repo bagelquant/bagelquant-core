@@ -65,11 +65,11 @@ def test_append_and_revision_equal_canonical_full_build(tmp_path, dynamic):
     first = source(65, dynamic=dynamic)
     graph, store, root = global_graph(tmp_path/"incremental", zscore(rolling_mean(first, window=4)))
     finish(graph.plan_update({"main": {"x": first}}, through=first.domain.times.max()))
-    for value in (source(75, dynamic=dynamic), source(75, revision=40, dynamic=dynamic)):
+    for index, value in enumerate((source(75, dynamic=dynamic), source(75, revision=40, dynamic=dynamic))):
         plan = graph.plan_update({"main": {"x": value}}, through=value.domain.times.max())
         updated = finish(plan, limits=ResourceLimits(batch_rows=3))
         assert any(usage["reused_blocks"] for usage in plan.resource_usage["main"].values())
-        full, fresh, full_root = global_graph(tmp_path/("full"+value.identity), zscore(rolling_mean(value, window=4)))
+        full, fresh, full_root = global_graph(tmp_path/f"full-{index}", zscore(rolling_mean(value, window=4)))
         reference = finish(full.plan_update({"main": {"x": value}}, through=value.domain.times.max()))
         actual = store.read(updated["results"]["main"][root]).panel.collect(include_traces=True)
         expected = fresh.read(reference["results"]["main"][full_root]).panel.collect(include_traces=True)

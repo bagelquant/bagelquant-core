@@ -13,6 +13,7 @@ from typing import Any, Iterator, Mapping
 import uuid
 
 import polars as pl
+from .inspection import open_metadata_snapshot
 
 from .domain import Domain
 from .hashing import hash_mapping, hash_dataframe
@@ -60,6 +61,39 @@ class CoreStore:
         self.artifact_path = Path(artifact_path).resolve()
         if self.meta_path == self.artifact_path:
             raise ValueError("metadata and artifact paths must be distinct")
+
+    def inspect(self) -> dict[str, Any]:
+        """Inspect schema readiness without creating storage or recovering work.
+
+        This reports the metadata contract, not artifact integrity. Call
+        ``check_integrity`` explicitly to inspect committed numerical evidence.
+        """
+        if not self.meta_path.exists():
+            return {"status": "uninitialized", "schema_version": None, "reason": "metadata_missing"}
+        if not self.meta_path.is_file():
+            return {"status": "incompatible", "schema_version": None, "reason": "metadata_not_file"}
+        try:
+            with open_metadata_snapshot(self.meta_path) as connection:
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+                required = {
+                    "materializations": {"identity", "node_id", "key_json", "manifest_json"},
+                    "graphs": {"graph_id", "revision", "state_revision", "spec_json", "current_update"},
+                    "graph_nodes": {"graph_id", "node_id", "status"},
+                    "contexts": {"graph_id", "context_id", "definition_json"},
+                    "cleanup_receipts": {"identity", "result_json"},
+                    "updates": {"identity", "graph_id", "receipt_json"},
+                }
+                if not tables and version == 0:
+                    return {"status": "uninitialized", "schema_version": 0, "reason": "metadata_empty"}
+                if version != SCHEMA_VERSION or not set(required).issubset(tables):
+                    return {"status": "incompatible", "schema_version": version, "reason": "schema_incompatible"}
+                if any(not columns.issubset({row[1] for row in connection.execute(f"PRAGMA table_info({table})")})
+                       for table, columns in required.items()):
+                    return {"status": "incompatible", "schema_version": version, "reason": "schema_incompatible"}
+                return {"status": "ready", "schema_version": version, "reason": None}
+        except (sqlite3.DatabaseError, OSError):
+            return {"status": "incompatible", "schema_version": None, "reason": "metadata_unreadable"}
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

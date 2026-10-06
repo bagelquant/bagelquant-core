@@ -32,3 +32,14 @@ unreferenced completed generations. New storage rejects old schemas.
 
 Run standalone temporary-store tests and owner checks before BT/Workbench.
 See [architecture](../../docs/en/architecture.md) for callable examples.
+
+CoreStore.inspect is a public read-only readiness contract for application setup.
+Missing storage is uninitialized; mismatched versions, tables or required columns
+are incompatible. Neither inspection nor construction initializes or recovers
+storage. The public inspection.open_metadata_snapshot primitive reads stable
+metadata/WAL copies in a private system temporary directory; source SQLite/WAL/
+SHM remain unchanged. BT may reuse this public Core mechanism. Temporary copies
+are removed after inspection and never become a second storage authority.
+Active/hot rollback journals are unreadable without explicit owner recovery;
+never accept spilled uncommitted schema pages. Include journal identity in
+snapshot stability checks; invalidated zero-header PERSIST journals are readable.

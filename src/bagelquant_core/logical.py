@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from .hashing import hash_mapping
+from bagelquant_core.hashing import hash_mapping
 
 if TYPE_CHECKING:
-    from .graph import GraphSpec
+    from bagelquant_core.graph import GraphSpec
 
 LOGICAL_GRAPH_SCHEMA = "logical_dag.v1"
 
@@ -51,7 +51,7 @@ def _json_value(value: Any) -> Any:
 def normalized_operator_config(operator_name: str, config: Mapping[str, Any]) -> dict[str, Any]:
     """Make omitted and explicitly supplied scalar defaults the same definition."""
 
-    from .operator import OPERATOR_REGISTRY
+    from bagelquant_core.operator import OPERATOR_REGISTRY
 
     operator = OPERATOR_REGISTRY.get(operator_name)
     parameters = dict(config)
@@ -111,9 +111,11 @@ class LogicalNodeSpec:
             raise ValueError("logical auxiliary inputs require named nonempty node ID lists")
         declared = dict(parameters or {})
         if node_type == "input":
-            declared.setdefault("value_type", "panel")
-            if declared["value_type"] not in {"panel", "category", "prediction"}:
-                raise ValueError("logical input value_type must be panel, category or prediction")
+            declared.setdefault("value_type", "numeric")
+            if declared["value_type"] not in {"numeric", "category", "prediction", "weights"}:
+                raise ValueError("logical input value_type must be numeric, category, prediction or weights")
+        if operator in {"bagelquant_core.operator.arithmetic.add", "bagelquant_core.operator.arithmetic.mul"} and len(inputs) == 2:
+            inputs = tuple(sorted(inputs))
         frozen_parameters = canonical_parameters(declared)
         auxiliary = MappingProxyType({key: tuple(values) for key, values in sorted((panel_parameters or {}).items())})
         body = {"node_type": node_type, "input_key": input_key, "operator": operator,
@@ -159,7 +161,7 @@ class LogicalGraphSpec:
             if node.node_id != reproduced.node_id:
                 raise ValueError("logical node content does not match its ID")
             seen.add(node.node_id)
-        if not self.outputs or any(not isinstance(alias, str) or not alias or node_id not in seen
+        if (self.nodes and not self.outputs) or any(not isinstance(alias, str) or not alias or node_id not in seen
                                    for alias, node_id in self.outputs.items()):
             raise ValueError("logical outputs must reference known nodes with nonempty aliases")
 
@@ -184,6 +186,21 @@ class LogicalGraphSpec:
                 raise ValueError("logical node content does not match its ID")
             nodes.append(node)
         return cls(value["outputs"], tuple(nodes))
+
+    def normalized(self):
+        """Apply only proven identity and binary exchange rules to definitions."""
+        mapping, nodes = {}, {}
+        for node in self.nodes:
+            if node.operator == "bagelquant_core.operator.basic.identity" and len(node.inputs) == 1 and not node.parameters and not node.panel_parameters:
+                mapping[node.node_id] = mapping[node.inputs[0]]
+                continue
+            canonical = LogicalNodeSpec.create(node_type=node.node_type, input_key=node.input_key,
+                operator=node.operator, parameters=node.parameters,
+                inputs=tuple(mapping[parent] for parent in node.inputs),
+                panel_parameters={role: tuple(mapping[parent] for parent in values) for role, values in node.panel_parameters.items()})
+            mapping[node.node_id] = canonical.node_id
+            nodes.setdefault(canonical.node_id, canonical)
+        return LogicalGraphSpec({alias: mapping[node_id] for alias, node_id in self.outputs.items()}, tuple(nodes.values())), mapping
 
     def union(self, *graphs: LogicalGraphSpec) -> LogicalGraphSpec:
         nodes: dict[str, LogicalNodeSpec] = {}
@@ -213,7 +230,7 @@ class LogicalGraphSpec:
 
 
 def canonicalize_graph(specification: GraphSpec | Mapping[str, Any], *, input_keys: Mapping[str, str] | None = None,
-                       output_aliases: Mapping[str, str] | None = None) -> LogicalGraphSpec:
+                       output_aliases: Mapping[str, str] | None = None, validate_types: bool = True) -> LogicalGraphSpec:
     """Compile a local authoring template into the sole persistent DAG format.
 
 ``input_keys`` maps template input names to permanent semantic source keys.
@@ -221,16 +238,16 @@ def canonicalize_graph(specification: GraphSpec | Mapping[str, Any], *, input_ke
 aliases nor node display metadata participate in node identity.
 """
 
-    from .graph import Graph
+    from bagelquant_core.graph import Graph
 
-    spec = Graph.validate_spec(specification)
+    spec = Graph.validate_spec(specification, validate_types=validate_types)
     by_name: dict[str, LogicalNodeSpec] = {}
     unique: dict[str, LogicalNodeSpec] = {}
     for node in spec.nodes:
-        if node.node_type == "panel":
-            value_type = node.config.get("value_type", node.metadata.get("value_type", "panel"))
-            if value_type not in {"panel", "category", "prediction"}:
-                value_type = "panel"
+        if node.node_type == "input":
+            value_type = node.config.get("value_type", node.metadata.get("value_type", "numeric"))
+            if value_type not in {"numeric", "category", "prediction", "weights"}:
+                raise TypeError(f"unsupported Node value type: {value_type}")
             logical = LogicalNodeSpec.create(node_type="input", input_key=(input_keys or {}).get(node.name, node.name),
                                             parameters={"value_type": value_type})
         else:
@@ -259,7 +276,7 @@ aliases nor node display metadata participate in node identity.
 
     for node_id in outputs.values():
         visit(node_id)
-    return LogicalGraphSpec(outputs, tuple(node for node in unique.values() if node.node_id in reachable))
+    return LogicalGraphSpec(outputs, tuple(node for node in unique.values() if node.node_id in reachable)).normalized()[0]
 
 
 __all__ = ["LogicalNodeSpec", "LogicalGraphSpec", "canonicalize_graph"]

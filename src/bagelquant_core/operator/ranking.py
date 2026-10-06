@@ -1,0 +1,67 @@
+"""Ranking transforms."""
+
+from __future__ import annotations
+
+import polars as pl
+
+from bagelquant_core.frame import TIME, VALUE, cross_section_rank, panel_like, unary
+from bagelquant_core.operator._plans import _expression_plan
+from bagelquant_core.operator._definition import operator
+
+
+@operator
+def rankpct(frame: pl.DataFrame) -> pl.DataFrame:
+    value = pl.col(VALUE).fill_nan(None)
+    dense = value.rank("dense").over(TIME)
+    distinct = value.drop_nulls().n_unique().over(TIME)
+    return panel_like(frame, dense / distinct)
+
+
+@operator
+def nrank(frame: pl.DataFrame) -> pl.DataFrame:
+    pct = cross_section_rank(frame, pct=True)
+    return unary(pct, 2.0 * pl.col(VALUE) - 1.0)
+
+
+def _plan_ranking(
+    frame: pl.LazyFrame,
+    operation: str,
+    order: str | None,
+    asset_time_ordered: bool,
+) -> tuple[pl.LazyFrame, str | None, bool]:
+    value = pl.col(VALUE)
+    if operation == "rankpct":
+        clean = value.fill_nan(None)
+        expression = (
+            clean.rank("dense").over(TIME)
+            / clean.drop_nulls().n_unique().over(TIME)
+        )
+    elif operation == "nrank":
+        percentile = (
+            value.rank("average").over(TIME) / value.count().over(TIME)
+        )
+        expression = 2.0 * percentile - 1.0
+    else:
+        raise ValueError(f"unsupported ranking operation: {operation}")
+    return _expression_plan(
+        frame,
+        expression,
+        order,
+        asset_time_ordered,
+    )
+
+
+for _plan_name, _plan_operator in {
+    "rankpct": rankpct,
+    "nrank": nrank,
+}.items():
+    _plan_operator._set_plan_operation(  # type: ignore[attr-defined]
+        lambda frame, config, order, asset_time_ordered, name=_plan_name: (
+            _plan_ranking(
+                frame,
+                name,
+                order,
+                asset_time_ordered,
+            )
+        )
+    )

@@ -704,114 +704,6 @@ def _scaled_centered_moments(
     return centered_gram, centered_target, feature_mean, target_mean
 
 
-@dataclass(frozen=True, slots=True)
-class ElasticNetPredictionComposer:
-    """Serializable Core facade for an application-owned ML state machine.
-
-    Core owns configuration validation, scaling, and candidate fitting.  The
-    application orchestrator owns fold lifecycle, while a backtesting package
-    evaluates frozen predictions.  Keeping the complete configuration here
-    makes the model contract reproducible without introducing a Core-to-BT
-    dependency.
-    """
-
-    walk_forward: WalkForwardConfig
-    coverage: Mapping[str, object]
-    target: Mapping[str, object]
-    elastic_net: ElasticNetConfig
-    validation: Mapping[str, object]
-
-    def __post_init__(self) -> None:
-        required_coverage = {
-            "minimum_all_market_observations",
-            "minimum_applicable_coverage",
-            "required_marker_unknown_policy",
-        }
-        missing_coverage = required_coverage - set(self.coverage)
-        if missing_coverage:
-            raise ValueError(
-                f"coverage configuration is missing {sorted(missing_coverage)}"
-            )
-        required_target = {"uuid", "revision", "revision_hash", "definition"}
-        missing_target = required_target - set(self.target)
-        if missing_target:
-            raise ValueError(
-                f"target configuration is missing {sorted(missing_target)}"
-            )
-        if "objective" not in self.validation:
-            raise ValueError("validation configuration requires objective")
-        object.__setattr__(self, "coverage", _json_copy(self.coverage))
-        object.__setattr__(self, "target", _json_copy(self.target))
-        object.__setattr__(self, "validation", _json_copy(self.validation))
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize every model-affecting composer parameter."""
-
-        return {
-            "kind": "elastic_net",
-            "walk_forward": self.walk_forward.to_dict(),
-            "coverage": _json_copy(self.coverage),
-            "target": _json_copy(self.target),
-            "elastic_net": self.elastic_net.to_dict(),
-            "validation": _json_copy(self.validation),
-            "scaling": {
-                "method": "weighted_rms_without_centering",
-                "fit_scope": "sample_per_fold",
-                "target_scaled": False,
-            },
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> ElasticNetPredictionComposer:
-        """Validate and restore a serialized composer configuration."""
-
-        walk = dict(value["walk_forward"])
-        walk.pop("frequency", None)
-        walk.pop("window_mode", None)
-        return cls(
-            walk_forward=WalkForwardConfig(**walk),
-            coverage=dict(value["coverage"]),
-            target=dict(value["target"]),
-            elastic_net=ElasticNetConfig(**dict(value["elastic_net"])),
-            validation=dict(value["validation"]),
-        )
-
-    def candidates(
-        self,
-        values: np.ndarray,
-        target: np.ndarray,
-        *,
-        sample_weight: np.ndarray | None = None,
-    ) -> tuple[ElasticNetCandidate, ...]:
-        """Materialize this composer's fold-specific candidate path."""
-
-        return elastic_net_candidates(
-            self.elastic_net,
-            values,
-            target,
-            sample_weight=sample_weight,
-        )
-
-    def fit(
-        self,
-        values: np.ndarray,
-        target: np.ndarray,
-        candidate: ElasticNetCandidate,
-        *,
-        sample_weight: np.ndarray | None = None,
-    ) -> ElasticNetModel:
-        """Fit one candidate using fixed non-search solver settings."""
-
-        return fit_elastic_net(
-            values,
-            target,
-            alpha=candidate.alpha,
-            l1_ratio=candidate.l1_ratio,
-            sample_weight=sample_weight,
-            max_iter=self.elastic_net.max_iter,
-            tolerance=self.elastic_net.tolerance,
-        )
-
 
 def equal_period_sample_weights(periods: Sequence[object]) -> np.ndarray:
     """Give every period the same total observation weight."""
@@ -1008,18 +900,11 @@ def _validate_positive_values(
             raise ValueError(f"{name} values must be positive, finite{qualifier}")
 
 
-def _json_copy(value: Mapping[str, object]) -> dict[str, object]:
-    import json
-
-    return json.loads(json.dumps(value, sort_keys=True, default=str))
-
-
 __all__ = [
     "ElasticNetCandidate",
     "ElasticNetConfig",
     "ElasticNetModel",
     "ElasticNetSearchMode",
-    "ElasticNetPredictionComposer",
     "LabelBoundary",
     "WalkForwardConfig",
     "WalkForwardFold",

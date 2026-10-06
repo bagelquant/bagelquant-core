@@ -6,8 +6,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from bagelquant_core import Domain, Panel
-from bagelquant_core.transformer import (
+from bagelquant_core import Domain, Node
+from bagelquant_core.operator import (
     rolling_elastic_net,
     rolling_lasso,
     rolling_ols,
@@ -22,11 +22,11 @@ def _static_panel(
     values: list[tuple[str, str, float | None]],
     *,
     name: str,
-) -> Panel:
+) -> Node:
     calendar = sorted({time for time, _, _ in values})
     assets = sorted({asset for _, asset, _ in values})
     present = [row for row in values if row[2] is not None]
-    return Panel.from_domain(
+    return Node.from_domain(
         pl.DataFrame(
             present,
             schema=["time", "asset_id", "value"],
@@ -37,7 +37,7 @@ def _static_panel(
     )
 
 
-def _dense_values(panel: Panel) -> np.ndarray:
+def _dense_values(panel: Node) -> np.ndarray:
     return (
         panel.collect(dense=True).sort(["asset_id", "time"])
         .get_column("value")
@@ -385,7 +385,7 @@ def test_rolling_ols_batched_path_matches_lstsq_reference() -> None:
         for index in range(group_size)
     ]
 
-    def build(values: np.ndarray, name: str) -> Panel:
+    def build(values: np.ndarray, name: str) -> Node:
         return _static_panel(
             [
                 (time, asset, None if np.isnan(value) else float(value))
@@ -447,7 +447,7 @@ def test_rolling_ols_multi_factor_gram_path_matches_reference(
     factor_values[7, 0] = np.nan
     factor_values[44, -1] = np.nan
 
-    def build(values: np.ndarray, name: str) -> Panel:
+    def build(values: np.ndarray, name: str) -> Node:
         return _static_panel(
             [
                 (time, asset, None if np.isnan(value) else float(value))
@@ -527,7 +527,7 @@ def test_regularized_rolling_paths_match_row_reference(
     factors_raw[8, 0] = np.nan
     factors_raw[46, -1] = np.nan
 
-    def build(values: np.ndarray, name: str) -> Panel:
+    def build(values: np.ndarray, name: str) -> Node:
         return _static_panel(
             [
                 (time, asset, None if np.isnan(value) else float(value))
@@ -596,7 +596,7 @@ def test_rolling_ols_single_factor_path_matches_lstsq_reference(
         for time in dates
     ]
 
-    def build(values: np.ndarray, name: str) -> Panel:
+    def build(values: np.ndarray, name: str) -> Node:
         return _static_panel(
             [
                 (time, asset, None if np.isnan(value) else float(value))
@@ -734,7 +734,7 @@ def test_fast_paths_preserve_dynamic_membership_and_traces() -> None:
             "base_available_date": [days[0], days[1], days[3], days[4]],
         }
     )
-    source = Panel.from_domain(
+    source = Node.from_domain(
         frame,
         domain,
         name="source",

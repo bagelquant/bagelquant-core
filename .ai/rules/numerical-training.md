@@ -20,21 +20,21 @@
   timing evidence. In the target, Workbench owns research lifecycle/bindings,
   Data owns source timing evidence and Core owns numerical artifact identities;
   Workbench references backend receipts. Generic evidence/identity mechanisms
-  still in Workbench are pending their Data/Core owner stages.
+  belong to Data/Core; Workbench supplies source declarations and scheduling.
 
 ## IC and OLS
 
 - Core owns the single quantile-rank-IC formula and public
-  `QuantileICWeightedPredictionComposer`. Form quantiles from every finite Alpha
+  `QuantileICWeightedPredictionOperator`. Form quantiles from every finite Alpha
   before target missingness. `window` and `quantiles` enter graph/cache identity.
   Rolling weights require a complete contiguous window, clip `mean_ic` at zero,
   and renormalize per asset over finite Alphas with positive weights.
-- `ICWeightedDecayPredictionComposer` applies `2 ** (-age / half_life)` within
+- `ICWeightedDecayPredictionOperator` applies `2 ** (-age / half_life)` within
   the complete contiguous Spearman IC window before the same clipping and
   renormalization. `window` and `half_life` enter identity; preserve ordinary
-  `ICWeightedPredictionComposer` arithmetic-mean behavior.
+  `ICWeightedPredictionOperator` arithmetic-mean behavior.
 - `fama_macbeth_ols_prediction` is the single numerical OLS entry point used
-  by `OLSPredictionComposer` and Workbench diagnostics. Preserve intercept,
+  by `OLSPredictionOperator` and Workbench diagnostics. Preserve intercept,
   complete-case/full-rank, contiguous-window, availability and missing-value
   behavior. Results include prediction, factor returns/cross-sectional standard
   errors, rolling premia and period diagnostics; do not duplicate formulas.

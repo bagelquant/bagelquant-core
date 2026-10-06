@@ -1,40 +1,46 @@
-# 架构与设计
+# Core：类型化计算与持久图
 
-## 统一 Node 与 Operator
+Core 0.11 是可独立运行的 Python 3.13 package，不依赖 Data、BT 或 Workbench。
+调用方传入输入证据、Domain、SQLite 路径、产物目录、观察区间、信息 cutoff 与资源参数；
+Workbench 负责机器探测、全局调度、中国市场语义和 GUI。
 
-Core 的计算抽象只有节点和算子。Panel、CategoryPanel、PredictionPanel、Domain、
-图规范、类型信息和运行器是基础设施。算子注册到统一 OPERATOR_REGISTRY；Transformer、
-Composer 和 Prediction Composer 共用 OperationNode、依赖处理和执行体系。
+## 对象与接口
 
-```text
-Domain / Panel 输入 → Operator / OperationNode DAG → 运行器 → Panel / 权重值
-```
+`Domain` 定义日历、资产和动态 membership。`Node` 统一承载稀疏长表
+`(time, asset_id, value)`，支持 Polars DataFrame/LazyFrame；`value_type` 分为
+numeric、category、prediction、weights。派生节点未计算时不可读取值。
+`Operator` 接受 Node 与命名辅助 Node，标量配置单独传入，返回 Node。
+所有算子集中在 `bagelquant_core.operator`，按数学功能组织。
+预测和普通数值不能作为同等输入混合；辅助角色独立校验并进入图。
 
-Node.dag() 在计算前返回完整 JSON-safe 图，Node.mermaid() 导出依赖图。主输入、命名辅助
-Panel 和状态依赖都参与序列化、校验和拓扑。算子拥有显式版本、参数、类型、因果性、密度
-与文档契约。Transformer / Composer 保留原有名称和数学行为，是目录分类。
+`Graph.from_dsl` 安全解析赋值、调用和表达式；`add_dsl` 原子合并且不计算。
+`merge`、`resolve_local`、`upstream`、`downstream` 包含完整辅助依赖。
+请显式设置跨会话稳定的 source_key；显示名称不参与逻辑身份。持久执行的 LazyFrame
+必须携带不可变输入 identity，值或可用性证据变化必须更新 identity。
+逻辑身份排除 Domain、输入版本、名称与硬件；物化身份包含这些数值上下文。
+仅消除纯恒等操作及规范化已验证的二元交换规则，规范定义也是实际执行定义。
 
-## Panel 与 Domain
+## 存储、增量与发布
 
-不可变 Panel 按 time、asset_id 索引。Domain 提供交易日与动态成员关系；源保持稀疏，
-只有显式 dense 边界才对齐。输出返回副本，跨截面与时间序列计算保留缺失与因果性。
+`CoreStore(meta_path, artifact_path)` 提供 SQLite＋Parquet，持有图、节点状态、
+数值、Domain、类型、availability traces、checkpoint、训练审计和附属产物。
+缓存区分精确命中、部分覆盖和缺失。精确命中不读取数值源、不执行算子。
+有限历史使用调用方锚点固定的 32-session 数学块，验证值、坐标、membership 与 traces
+后复用。状态节点只在全部父节点历史前缀证据一致时恢复 checkpoint；否则完整重放。
+物理分批与 workers 不改变数值契约或身份；读取窗口不改变冻结信息 cutoff。
 
-## 图与执行
+全局更新冻结图与状态版本，要求所有登记 Domain 的全部活跃派生节点成功。
+调用方从 `plan.ready(context)` 选取任务并执行 `plan.execute`，完成后 `plan.publish`。
+分支更新提供 roots，不推进整体版本。失败、取消和冲突保留可重试的不可变缓存。
+`sleep` 级联全部下游；`wake` 只恢复显式选择且上游活跃的节点，批量操作原子验证。
+休眠限制覆盖构图、准入、执行和发布，缓存不能绕过；历史证据仍可读取。
 
-Graph 收集依赖、检查循环、导出规范并委托运行器。Graph.compile(spec) 校验一次后可
-绑定多个批次。共享子图只执行一次，纯 Polars 算子融合为惰性计划，NumPy、回归和优化
-是显式 eager barrier。缓存身份包括输入、Domain 与节点参数。
+应用通过 `describe`、`read_values`、`evidence`、`inventory`、`check_integrity` 和
+`cleanup_plan/apply_cleanup` 管理 Core 凭据，不直接读写后端数据库或文件。
+清理仅回收已验证的无引用完整 generation；已提交历史证据保留。
+Core 先提交，应用随后使用 `reference_publication` 状态保护，在自己的事务中绑定凭据；
+中断后按稳定 request_id 找回并幂等绑定，不模拟跨库事务。
 
-## 权重与训练算子
-
-top_n、equal_weight、regularized_weights、exposure_constrained_weights 和 rebalance
-属于 Core。优化器只参考历史计算目标，不读取账户。rebalance 保存完整目标及 hold /
-unavailable / rebalance 状态，锚定 Data Start 首个交易日；零表示退出。
-滚动 ElasticNet、LightGBM、成熟标签窗口、固定采样与训练审计属于通用训练实现。
-标签数据、Universe、市场规则、训练生命周期与持久化由下游显式提供。
-
-## 资源与包边界
-
-ResourceLimits 控制线程、并发、批量、缓存与内存压力。硬件参数不改变研究身份；
-采样、模型和求解精度是算子参数。Core 不依赖 Data、BT 或 Workbench，也不拥有
-Provider、账户、市场规则或 evaluation 持久化。账户模拟、收益指标与图表由 BT 负责。
+新版存储拒绝旧格式，没有兼容读写或迁移。真实数据库和服务切换属于第 6 步。
+英文[完整 API 用例](../en/architecture.md)与[算子目录](../en/reference/operators/index.md)
+提供可执行示例。验证使用临时数据根和假输入；可选 LightGBM 运行还需对应原生库。

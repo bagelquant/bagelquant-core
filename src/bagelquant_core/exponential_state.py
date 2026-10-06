@@ -6,7 +6,7 @@ from datetime import date
 
 import polars as pl
 
-from .operator_state import checkpoint_capture_enabled, restored_operator_state, save_operator_state
+from bagelquant_core.operator_state import checkpoint_capture_enabled, restored_operator_state, save_operator_state
 
 
 def checkpoint_ewm(frame, *, alpha, min_periods, adjust, ignore_na, moment, bias=False):

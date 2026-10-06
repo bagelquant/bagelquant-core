@@ -6,8 +6,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import json
 import os
-import subprocess
-import sys
 
 
 @dataclass(frozen=True)
@@ -49,46 +47,6 @@ class ResourceLimits:
             memory_target_mib=memory, batch_rows=max(1, self.batch_rows // workers),
             cache_mib=min(self.cache_mib // workers, memory - 1))
 
-    def under_pressure(self, resident_mib: float):
-        """Reduce subsequent batches and suspend new concurrent nodes at the soft limit."""
-        if resident_mib < self.memory_target_mib:
-            return self
-        return replace(self, parallel_nodes=1, batch_rows=max(1, self.batch_rows // 2), cache_mib=0)
-
-
-def current_resident_mib() -> float:
-    """Read current process resident memory, rather than a historical high-water mark."""
-    if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
-
-        class ProcessMemoryCounters(ctypes.Structure):
-            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        process = kernel.GetCurrentProcess
-        process.restype = wintypes.HANDLE
-        query = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
-        query.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessMemoryCounters), wintypes.DWORD]
-        query.restype = wintypes.BOOL
-        counters = ProcessMemoryCounters()
-        counters.cb = ctypes.sizeof(counters)
-        if not query(process(), ctypes.byref(counters), counters.cb):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return counters.WorkingSetSize / (1024 * 1024)
-    if sys.platform.startswith("linux"):
-        with open("/proc/self/statm", encoding="ascii") as stream:
-            pages = int(stream.read().split()[1])
-        return pages * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)
-    # macOS ps reports current RSS in KiB; sample only at admission boundaries.
-    result = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())],
-        check=True, capture_output=True, text=True)
-    return float(result.stdout.strip()) / 1024
-
 
 def kernel_batch_rows(bytes_per_row: int, *, history_rows: int = 0,
                       maximum_bytes: int = 64 * 1024 * 1024) -> int:
@@ -107,7 +65,6 @@ def active_resource_limits() -> ResourceLimits:
         return selected
     raw = os.environ.get("BAGELQUANT_RESOURCE_LIMITS")
     selected = ResourceLimits(**json.loads(raw)) if raw else ResourceLimits()
-    selected = selected.effective(os.cpu_count() or 1)
     return selected
 
 

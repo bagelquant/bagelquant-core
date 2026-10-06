@@ -7,6 +7,7 @@ from typing import Any
 
 
 OPERATION_DESCRIPTIONS = {
+    "prediction_signal": "Declare a numeric signal as a typed prediction, preserving coordinates and availability.",
     "canonicalize_values": "Round numerical values to explicit significant digits at a semantic boundary.",
     "project_domain": "Restrict an upstream value to an explicit membership Domain after computing its source universe.",
     "exposure_constrained_weights": "Optimize target weights within explicit exposure bounds using historical target state.",
@@ -26,7 +27,7 @@ OPERATION_DESCRIPTIONS = {
     "arctanh": "Return the inverse hyperbolic tangent of each element, masking values outside `(-1, 1)`.",
     "bfill": "Fill each asset's missing rows from later observations in time order, optionally bounded by `limit`.",
     "boxcox": "Apply the Box-Cox power transform element-wise with the supplied lambda.",
-    "broadcast_by_time": "Broadcast one source value per date to every keyed row present in a second Panel.",
+    "broadcast_by_time": "Broadcast one source value per date to every keyed row present in a second Node.",
     "ceil": "Round each element upward to the nearest integer.",
     "coalesce": "Return the first non-missing value from the supplied inputs for each cell.",
     "constant": "Replace every active-domain cell, including a missing value, with the configured constant.",
@@ -92,7 +93,7 @@ OPERATION_DESCRIPTIONS = {
     "power": "Raise each present source value to the configured scalar exponent.",
     "power_df": "Raise each element of the first input to the corresponding element of the second input.",
     "product": "Return the element-wise product across all aligned input panels.",
-    "project": "Keep source values only where the key-aligned binary Panel equals one.",
+    "project": "Keep source values only where the key-aligned binary Node equals one.",
     "rank": "Return average-tie percentile ranks, `rank / valid_count`, within each date cross-section.",
     "rankpct": "Return dense percentile ranks within each date cross-section.",
     "repeat_count": "Count consecutive equal valid values within each asset in time order.",
@@ -132,7 +133,7 @@ OPERATION_DESCRIPTIONS = {
     "trim": "Mask values outside the configured absolute bounds.",
     "trim_quantile": "Mask values outside the configured same-date cross-sectional quantiles.",
     "truncate": "Clip values to the configured lower and upper bounds.",
-    "vol_scale": "Divide source values by the key-aligned volatility Panel without estimating volatility implicitly.",
+    "vol_scale": "Divide source values by the key-aligned volatility Node without estimating volatility implicitly.",
     "weighted_mean": "Return the element-wise weighted mean of aligned value and weight panels.",
     "weighted_sum": "Return the element-wise weighted sum of aligned value and weight panels.",
     "winsorize": "Clip values to the configured same-date cross-sectional quantiles.",
@@ -190,7 +191,7 @@ def operation_category(name: str, *, kind: str) -> str:
         "less_equal",
     }:
         return "Logical & comparison"
-    if kind == "composer" and name in {
+    if name in {
         "add",
         "sub",
         "mul",
@@ -199,7 +200,7 @@ def operation_category(name: str, *, kind: str) -> str:
         "power_df",
     }:
         return "Arithmetic"
-    if kind == "composer":
+    if name in {"mean", "product", "sum_frames", "weighted_sum", "weighted_mean", "minimum", "maximum", "coalesce"}:
         return "Aggregation"
     if name in {
         "demean",

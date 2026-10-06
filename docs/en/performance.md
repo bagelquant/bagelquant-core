@@ -106,7 +106,7 @@ than with total rows multiplied by window size.
 
 Wide n-ary aggregations build a balanced inner-join tree. This reduces lazy
 plan depth from linear to logarithmic while preserving sparse inner alignment,
-output ordering, and public composer behavior. Benefits grow with graph width;
+output ordering, and public operator behavior. Benefits grow with graph width;
 the ten-input comparison case above is intentionally included as a regression
 reference.
 
@@ -167,7 +167,7 @@ Same-machine 500,000-row medians with a 20-session window were:
 The ten-layer rolling chain contains no physical sort node, down from eleven
 before order lineage was introduced. A 20-layer rolling chain similarly
 contains no sort and completed in 0.171 seconds. Semantic CSE excludes output
-names and metadata from physical identity while keeping public Panel
+names and metadata from physical identity while keeping public Node
 identities, names, metadata, GraphSpec, and runtime cache keys distinct.
 
 For eager operations, exact same-key parents now collect one immutable key
@@ -197,7 +197,7 @@ array.
 ## July 2026 compatible-kernel pass
 
 The fourth pass batches regularized regression windows across assets, uses
-positionally aligned lazy value columns for exact same-key composers, and
+positionally aligned lazy value columns for exact same-key operators, and
 extends physical CSE to deterministic eager operations. Public operation
 calls, GraphSpec, trace rules, and finite coordinate-descent iteration
 semantics are unchanged.
@@ -219,7 +219,7 @@ sweep. Benchmarks cover one, two, and eight factors plus one, 100, and 1,000
 iteration limits.
 
 Exact same-key arithmetic, aggregation, weighting, coalesce, mask, scaling,
-and rolling-pair composers use lazy horizontal value plans instead of key hash
+and rolling-pair operators use lazy horizontal value plans instead of key hash
 joins. Sparse or unproven inputs retain the balanced join path. At 6.25
 million rows, `sum_10` improved from 2.73 seconds and 5.69 GiB peak RSS to
 0.045 seconds and 1.52 GiB. Rolling correlation improved from 1.74 to 0.85
@@ -229,9 +229,16 @@ Deterministic eager physical results are shared for the duration of one
 runtime execution. Five equivalent OLS, lasso, or orthogonalize outputs retain
 five logical eager barriers and distinct public identities, names, metadata,
 and traces, while the numeric kernel runs once. Diagnostics report positional
-composer hits, eager CSE hits, solver batches, and active-window iterations.
+operator hits, eager CSE hits, solver batches, and active-window iterations.
 
 The 6.25-million-row, 252-session regularized paths completed in 5.57 seconds
 for lasso and 5.98 seconds for elastic-net on the static domain. The dynamic
 domain completed in 5.02 and 5.91 seconds respectively. Pointwise and
 cross-sectional 20-layer chains contain no runtime-generated sort nodes.
+
+
+## Stage 3 resource ownership
+
+Core accepts explicit ResourceLimits and executes admitted nodes. Workbench owns
+machine detection, DAG admission and memory-pressure response. Historical
+measurements above are not a performance claim for the refactored storage path.

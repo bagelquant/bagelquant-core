@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bagelquant_core.composer import div
+from bagelquant_core.operator import div
 
 from helpers import panel, values
 

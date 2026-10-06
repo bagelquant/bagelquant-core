@@ -5,18 +5,18 @@ import math
 import numpy as np
 import polars as pl
 import pytest
-import bagelquant_core.transformer.rolling as rolling_module
+import bagelquant_core.operator.rolling_stats as rolling_module
 
 from bagelquant_core import ExecutionRuntime, Graph
-from bagelquant_core.composer import rolling_corr, rolling_cov
-from bagelquant_core.transformer import (
+from bagelquant_core.operator import rolling_corr, rolling_cov
+from bagelquant_core.operator import (
     ewm_mean,
     orthogonalize,
     rolling_ols,
     rolling_percentile,
     rolling_rank,
 )
-from bagelquant_core.transformer.core import transformer
+from bagelquant_core.operator import operator
 
 from helpers import panel, values
 
@@ -33,7 +33,7 @@ def test_panel_data_remains_defensive() -> None:
 def test_reusable_execution_runtime_hits_cache() -> None:
     calls = {"count": 0}
 
-    @transformer
+    @operator
     def counted(frame: pl.DataFrame) -> pl.DataFrame:
         calls["count"] += 1
         return frame
@@ -130,7 +130,7 @@ def test_ewm_mean_honors_adjusted_and_recursive_weighting() -> None:
     assert recursive_values[("2024-01-03", "a")] == 2.25
 
 
-def test_rolling_pair_composers_are_grouped_by_asset() -> None:
+def test_rolling_pair_operators_are_grouped_by_asset() -> None:
     left = panel(
         [
             ("2024-01-01", "a", 1.0),

@@ -16,8 +16,8 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from bagelquant_core import Domain, ExecutionRuntime, Graph, Panel
-from bagelquant_core.composer import (
+from bagelquant_core import Domain, ExecutionRuntime, Graph, Node
+from bagelquant_core.operator import (
     add,
     coalesce,
     rolling_corr,
@@ -25,7 +25,7 @@ from bagelquant_core.composer import (
     sum_frames,
     weighted_sum,
 )
-from bagelquant_core.transformer import (
+from bagelquant_core.operator import (
     abs as absolute_value,
     constant,
     ewm_mean,
@@ -162,7 +162,7 @@ def make_panels(
     assets: int,
     *,
     dynamic: bool,
-) -> tuple[Panel, Panel]:
+) -> tuple[Node, Node]:
     if rows <= 0:
         raise ValueError("rows must be positive")
     if assets <= 0:
@@ -194,8 +194,8 @@ def make_panels(
     frame = keys.select("time", "asset_id").with_columns(
         pl.Series("value", values)
     )
-    base = Panel.from_domain(frame, domain, name="benchmark")
-    other = Panel.from_domain(
+    base = Node.from_domain(frame, domain, name="benchmark")
+    other = Node.from_domain(
         frame.with_columns((pl.col("value") * 1.5 + 2.0).alias("value")),
         domain,
         name="other",
@@ -205,30 +205,30 @@ def make_panels(
 
 def _case_runner(
     case: str,
-    base: Panel,
-    other: Panel,
+    base: Node,
+    other: Node,
     *,
     window: int,
 ) -> Callable[
     [],
-    tuple[Panel | Mapping[str, Panel], ExecutionRuntime | None],
+    tuple[Node | Mapping[str, Node], ExecutionRuntime | None],
 ]:
     min_periods = max(1, (window * 4 + 4) // 5)
-    square = Panel.from_domain(
+    square = Node.from_domain(
         base.lazy(dense=False).with_columns(
             (pl.col("value") ** 2).alias("value")
         ),
         base.domain,
         name="square",
     )
-    cube = Panel.from_domain(
+    cube = Node.from_domain(
         base.lazy(dense=False).with_columns(
             (pl.col("value") ** 3).alias("value")
         ),
         base.domain,
         name="cube",
     )
-    sparse_square = Panel.from_domain(
+    sparse_square = Node.from_domain(
         square.lazy(dense=False).filter(
             pl.col("value").is_not_null()
             & ((pl.col("value").abs() * 100).cast(pl.Int64) % 3 != 0)
@@ -236,7 +236,7 @@ def _case_runner(
         base.domain,
         name="sparse_square",
     )
-    sparse_cube = Panel.from_domain(
+    sparse_cube = Node.from_domain(
         cube.lazy(dense=False).filter(
             pl.col("value").is_not_null()
             & ((pl.col("value").abs() * 100).cast(pl.Int64) % 5 != 0)
@@ -244,27 +244,27 @@ def _case_runner(
         base.domain,
         name="sparse_cube",
     )
-    independent_factors: tuple[Panel, ...] = ()
+    independent_factors: tuple[Node, ...] = ()
     if case in {
         "rolling_lasso_8f",
         "rolling_elastic_net_8f",
     }:
         keys = base.data.select("time", "asset_id")
-        factors: list[Panel] = []
+        factors: list[Node] = []
         for index in range(8):
             factor_values = np.random.default_rng(100 + index).normal(
                 size=len(keys)
             )
             factor_values[(index + 17) :: 131] = np.nan
             factors.append(
-                Panel.from_domain(
+                Node.from_domain(
                     keys.with_columns(pl.Series("value", factor_values)),
                     base.domain,
                     name=f"independent_factor_{index}",
                 )
             )
         independent_factors = tuple(factors)
-    traced = Panel.from_domain(
+    traced = Node.from_domain(
         base.lazy(dense=False).with_columns(
             pl.col("time").alias("observation_date"),
             pl.col("time").alias("base_available_date"),
@@ -278,17 +278,17 @@ def _case_runner(
         runtime = ExecutionRuntime()
         graph.compute(runtime=runtime)
 
-        def cached() -> tuple[Panel, ExecutionRuntime]:
+        def cached() -> tuple[Node, ExecutionRuntime]:
             return graph.compute(runtime=runtime), runtime
 
         return cached
 
     def execute() -> tuple[
-        Panel | Mapping[str, Panel],
+        Node | Mapping[str, Node],
         ExecutionRuntime | None,
     ]:
         if case == "domain_materialization":
-            output = Panel.from_domain(base.data, base.domain).output
+            output = Node.from_domain(base.data, base.domain).output
             output.data
             return output, None
 
@@ -581,7 +581,7 @@ def _case_runner(
     return execute
 
 
-def _panel_summary(output: Panel) -> dict[str, int | float | None]:
+def _panel_summary(output: Node) -> dict[str, int | float | None]:
     frame = output.collect(dense=False)
     values = frame.get_column("value")
     numeric = values.fill_nan(None)
@@ -594,9 +594,9 @@ def _panel_summary(output: Panel) -> dict[str, int | float | None]:
 
 
 def _output_summary(
-    output: Panel | Mapping[str, Panel],
+    output: Node | Mapping[str, Node],
 ) -> dict[str, Any]:
-    if isinstance(output, Panel):
+    if isinstance(output, Node):
         return _panel_summary(output)
     return {
         name: _panel_summary(panel)
@@ -604,8 +604,8 @@ def _output_summary(
     }
 
 
-def _plan_sort_count(output: Panel | Mapping[str, Panel]) -> int:
-    panels = [output] if isinstance(output, Panel) else output.values()
+def _plan_sort_count(output: Node | Mapping[str, Node]) -> int:
+    panels = [output] if isinstance(output, Node) else output.values()
     return sum(
         panel.lazy(dense=False)
         .explain(optimized=True)
@@ -671,7 +671,7 @@ def _run_worker(args: argparse.Namespace) -> None:
         window=args.worker_window,
     )
     timings: list[float] = []
-    output: Panel | Mapping[str, Panel] | None = None
+    output: Node | Mapping[str, Node] | None = None
     runtime: ExecutionRuntime | None = None
     for _ in range(args.repeats):
         start = time.perf_counter()
@@ -844,7 +844,7 @@ def main() -> None:
             f"elided_sort={diagnostics.get('sorts_elided', 0)} "
             f"elided_align={diagnostics.get('alignments_elided', 0)} "
             f"cse={diagnostics.get('semantic_cse_hits', 0)} "
-            f"pos={diagnostics.get('positional_composer_hits', 0)} "
+            f"pos={diagnostics.get('positional_operator_hits', 0)} "
             f"eager_cse={diagnostics.get('eager_cse_hits', 0)} "
             f"solver_batches={diagnostics.get('solver_batches', 0)}"
         )

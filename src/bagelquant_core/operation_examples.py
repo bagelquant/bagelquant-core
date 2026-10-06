@@ -8,9 +8,8 @@ from typing import Any, Mapping
 
 import polars as pl
 
-from .composer import COMPOSER_REGISTRY
-from .panel import CategoryPanel, Domain, Panel
-from .transformer import TRANSFORMER_REGISTRY
+from bagelquant_core.operator import OPERATOR_REGISTRY
+from bagelquant_core.node import Node, Domain
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,21 +34,37 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
     operation = _registry_item(name, kind=kind)
     source, auxiliary, binary, group = _panels(name)
     config = _config(name)
+    if operation.factory is not None:
+        import inspect
+        config = {key: {"window": 2, "half_life": 2, "quantiles": 2}[key]
+                  for key in inspect.signature(operation.factory).parameters}
+        auxiliary_inputs = {}
+        if operation.factory.supervised:
+            auxiliary_inputs = {"targets": auxiliary, "availability": Node.from_domain(
+                auxiliary.collect().with_columns(pl.lit(date(2024, 1, 1).toordinal()).alias("value")), auxiliary.domain)}
+        peers = (source,) if name == "identity_prediction" else (source, auxiliary)
+        result = operation(*peers, **auxiliary_inputs, **config).compute()
+        peer_names = ("source",) if len(peers) == 1 else ("source", "second")
+        arguments = ", ".join(peer_names) + "".join(f", {key}={key}" for key in auxiliary_inputs)
+        return OperationExample(name, kind, f"{name}({arguments}{_config_call(config)})",
+            tuple(ExamplePanel(key, value.collect()) for key, value in zip(peer_names, peers, strict=True)),
+            {key: (ExamplePanel(key, value.collect()),) for key, value in auxiliary_inputs.items()},
+            ExamplePanel("output", result.collect()))
     if name == "equal_weight":
         source = binary
 
-    if kind == "composer":
+    if operation.minimum_inputs > 1 or operation.maximum_inputs is None:
         if name in {"rolling_elastic_net_prediction", "rolling_lightgbm_prediction"}:
             config.update(window=3, fit_every=1, min_samples=2, max_samples=100, label_maturity=1)
             if name == "rolling_lightgbm_prediction":
-                config.update(num_boost_round=2, min_data_in_leaf=1)
+                config.update(num_boost_round=2, min_data_in_leaf=1, min_samples=100)
             graph = operation(source, labels=auxiliary, **config)
             return OperationExample(name, kind, f"{name}(source, labels=labels{_config_call(config)})",
                 (ExamplePanel("source", source.collect(dense=True)),),
                 {"labels": (ExamplePanel("labels", auxiliary.collect(dense=True)),)},
                 ExamplePanel("output", graph.compute().collect(dense=True)))
         if name == "broadcast_by_time":
-            source = Panel.from_domain(
+            source = Node.from_domain(
                 auxiliary.collect(dense=False)
                 .filter(pl.col("asset_id") == "a")
                 .select("time", "asset_id", "value"),
@@ -103,18 +118,18 @@ def operation_example(name: str, *, kind: str) -> OperationExample:
 
 
 def _registry_item(name: str, *, kind: str) -> Any:
-    registry = TRANSFORMER_REGISTRY if kind == "transformer" else COMPOSER_REGISTRY
+    registry = OPERATOR_REGISTRY
     matches = [
         registry.get(value)
         for value in registry.names()
-        if registry.get(value).operation.__name__ == name
+        if (value.split(":", 1)[1]+"_prediction" if value.startswith("prediction:") else registry.get(value).operation.__name__) == name
     ]
     if len(matches) != 1:
         raise ValueError(f"unknown or ambiguous {kind} example operation: {name}")
     return matches[0]
 
 
-def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
+def _panels(name: str) -> tuple[Node, Node]:
     if name.startswith("group_") or name == "orthogonalize":
         times = [date(2024, 1, 2)]
         assets = ["a", "b", "c", "d"]
@@ -264,13 +279,13 @@ def _panels(name: str) -> tuple[Panel, Panel, Panel, CategoryPanel]:
             }
         )
 
-    source = Panel.from_domain(frame(source_values), domain, name="source")
-    auxiliary = Panel.from_domain(
+    source = Node.from_domain(frame(source_values), domain, name="source")
+    auxiliary = Node.from_domain(
         frame(auxiliary_values), domain, name="auxiliary"
     )
     binary_values = [float(index % 2 == 0) for index in range(len(rows))]
-    binary = Panel.from_domain(frame(binary_values), domain, name="binary")
-    group = CategoryPanel.from_domain(frame(groups), domain, name="group")
+    binary = Node.from_domain(frame(binary_values), domain, name="binary")
+    group = Node.from_domain(frame(groups), domain, name="group", value_type="category")
     return source, auxiliary, binary, group
 
 

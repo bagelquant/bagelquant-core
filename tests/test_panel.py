@@ -5,9 +5,9 @@ from datetime import date
 import pytest
 import polars as pl
 
-from bagelquant_core import CategoryPanel, Domain, Panel
-from bagelquant_core.composer import add
-from bagelquant_core.transformer import rolling_mean
+from bagelquant_core import Domain, Node
+from bagelquant_core.operator import add
+from bagelquant_core.operator import rolling_mean
 from bagelquant_core.frame import normalize_panel_frame, normalize_time_series
 
 
@@ -39,7 +39,7 @@ def test_string_times_normalize_across_dynamic_domain_and_panel_traces() -> None
             }
         ),
     )
-    panel = Panel.from_domain(
+    panel = Node.from_domain(
         pl.DataFrame(
             {
                 "time": ["2024-01-01"],
@@ -57,7 +57,7 @@ def test_string_times_normalize_across_dynamic_domain_and_panel_traces() -> None
 
 def test_panel_normalizes_to_time_asset_id_grid() -> None:
     domain = Domain(calendar=["2024-01-01", "2024-01-02"], universe=["a", "b"])
-    panel = Panel.from_domain(
+    panel = Node.from_domain(
         pl.DataFrame({"time": ["2024-01-01"], "asset_id": ["a"], "value": [1.0]}),
         domain,
     )
@@ -78,7 +78,7 @@ def test_dynamic_membership_masks_inactive_rows() -> None:
             }
         ),
     )
-    panel = Panel.from_domain(
+    panel = Node.from_domain(
         pl.DataFrame(
             {
                 "time": ["2024-01-01", "2024-01-01"],
@@ -105,7 +105,7 @@ def test_dynamic_membership_treats_missing_rows_as_inactive() -> None:
             }
         ),
     )
-    panel = Panel.from_domain(
+    panel = Node.from_domain(
         pl.DataFrame(
             {
                 "time": ["2024-01-01", "2024-01-01"],
@@ -202,7 +202,7 @@ def test_dynamic_universe_rejects_null_active_values() -> None:
         )
 
 
-def test_dynamic_membership_is_reapplied_after_transformers() -> None:
+def test_dynamic_membership_is_reapplied_after_operators() -> None:
     domain = Domain(
         calendar=["2024-01-01", "2024-01-02"],
         universe=pl.DataFrame(
@@ -213,7 +213,7 @@ def test_dynamic_membership_is_reapplied_after_transformers() -> None:
             }
         ),
     )
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": ["2024-01-01"],
@@ -232,7 +232,7 @@ def test_dynamic_membership_is_reapplied_after_transformers() -> None:
     ]
 
 
-def test_dynamic_membership_is_reapplied_after_composers() -> None:
+def test_dynamic_membership_is_reapplied_after_binary_operator() -> None:
     domain = Domain(
         calendar=["2024-01-01", "2024-01-02"],
         universe=pl.DataFrame(
@@ -243,11 +243,11 @@ def test_dynamic_membership_is_reapplied_after_composers() -> None:
             }
         ),
     )
-    left = Panel.from_domain(
+    left = Node.from_domain(
         pl.DataFrame({"time": ["2024-01-01"], "asset_id": ["a"], "value": [1.0]}),
         domain,
     )
-    right = Panel.from_domain(
+    right = Node.from_domain(
         pl.DataFrame({"time": ["2024-01-01"], "asset_id": ["a"], "value": [2.0]}),
         domain,
     )
@@ -298,9 +298,9 @@ def test_domain_accepts_series_calendar_and_static_universe() -> None:
 
 def test_category_panel_accepts_non_numeric_values() -> None:
     domain = Domain(calendar=["2024-01-01"], universe=["a"])
-    panel = CategoryPanel.from_domain(
+    panel = Node.from_domain(
         pl.DataFrame({"time": ["2024-01-01"], "asset_id": ["a"], "value": ["tech"]}),
         domain,
-    )
+     value_type="category")
 
     assert panel.collect(dense=True)["value"].to_list() == ["tech"]

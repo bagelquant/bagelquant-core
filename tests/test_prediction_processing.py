@@ -6,8 +6,7 @@ from polars.testing import assert_frame_equal
 
 from bagelquant_core import (
     Domain,
-    Panel,
-    PredictionPanel,
+    Node,
     PredictionSmoothingConfig,
     PredictionSmoothingState,
     smooth_prediction,
@@ -23,10 +22,10 @@ def _panel(values, days=None, inactive=()):
             "active": [day not in inactive for day in days],
         }
     )
-    return PredictionPanel.from_domain(
+    return Node.from_domain(
         pl.DataFrame({"time": days, "asset_id": ["a"] * len(days), "value": values}),
         Domain(calendar=days, universe=membership),
-    )
+     value_type="prediction")
 
 
 @pytest.mark.parametrize("method", ["none", "sma", "ewma"])
@@ -164,12 +163,12 @@ def test_typed_boundary_and_no_input_mutation():
     result = smooth_prediction(
         panel, PredictionSmoothingConfig(), evaluation_calendar=panel.domain.times
     )
-    assert isinstance(result.prediction, PredictionPanel)
+    assert (isinstance(result.prediction, Node) and result.prediction.value_type == "prediction")
     assert_frame_equal(before, result.prediction.collect())
     assert_frame_equal(before, panel.collect())
-    with pytest.raises(TypeError, match="PredictionPanel"):
+    with pytest.raises(TypeError, match="Node"):
         smooth_prediction(
-            Panel.from_domain(before, panel.domain),
+            Node.from_domain(before, panel.domain),
             PredictionSmoothingConfig(),
             evaluation_calendar=panel.domain.times,
         )

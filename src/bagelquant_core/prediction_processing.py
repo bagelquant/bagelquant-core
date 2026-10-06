@@ -14,9 +14,9 @@ from typing import Any, Literal
 
 import polars as pl
 
-from .frame import normalize_date_expression
-from .hashing import hash_mapping
-from .panel import PredictionPanel
+from bagelquant_core.frame import normalize_date_expression
+from bagelquant_core.hashing import hash_mapping
+from bagelquant_core.node import Node
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,12 +88,12 @@ class PredictionSmoothingState:
 
 @dataclass(frozen=True, slots=True)
 class PredictionSmoothingResult:
-    prediction: PredictionPanel
+    prediction: Node
     state: PredictionSmoothingState
 
 
 def smooth_prediction(
-    prediction: PredictionPanel,
+    prediction: Node,
     config: PredictionSmoothingConfig,
     *,
     evaluation_calendar: Sequence[Any] | pl.Series,
@@ -109,8 +109,8 @@ def smooth_prediction(
     and inactive membership all interrupt continuity without emitting a value.
     """
 
-    if not isinstance(prediction, PredictionPanel):
-        raise TypeError("smoothing requires a PredictionPanel")
+    if not (isinstance(prediction, Node) and prediction.value_type == "prediction"):
+        raise TypeError("smoothing requires a Node")
     if not isinstance(config, PredictionSmoothingConfig):
         raise TypeError("config must be a PredictionSmoothingConfig")
     raw = pl.DataFrame({"time": evaluation_calendar})
@@ -203,9 +203,9 @@ def smooth_prediction(
         orient="row",
     )
     return PredictionSmoothingResult(
-        prediction=PredictionPanel.from_domain(
+        prediction=Node.from_domain(
             frame, prediction.domain, name=prediction.name, metadata=prediction.metadata
-        ),
+        , value_type="prediction"),
         state=PredictionSmoothingState(
             config=config,
             last_time=periods[-1],

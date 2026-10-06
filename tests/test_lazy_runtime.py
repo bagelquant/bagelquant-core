@@ -10,11 +10,11 @@ from bagelquant_core import (
     ExecutionRuntime,
     Graph,
     OperationContract,
-    Panel,
+    Node,
     TraceRule,
 )
-from bagelquant_core.composer import add, mul, rolling_corr, sum_frames
-from bagelquant_core.transformer import (
+from bagelquant_core.operator import add, mul, rolling_corr, sum_frames
+from bagelquant_core.operator import (
     bfill,
     constant,
     date_age_constraint,
@@ -34,10 +34,10 @@ from bagelquant_core.transformer import (
     smooth,
     streak_count,
 )
-from bagelquant_core.transformer.core import transformer
+from bagelquant_core.operator import operator
 
 
-def _traced_panel(*, identity: str | None = None) -> Panel:
+def _traced_panel(*, identity: str | None = None) -> Node:
     days = [date(2024, 1, day) for day in (2, 3, 4)]
     domain = Domain(calendar=days, universe=["A"])
     frame = pl.DataFrame(
@@ -49,7 +49,7 @@ def _traced_panel(*, identity: str | None = None) -> Panel:
             "base_available_date": days,
         }
     )
-    return Panel.from_domain(
+    return Node.from_domain(
         frame.lazy(),
         domain,
         name="input",
@@ -108,9 +108,9 @@ def test_trace_rules_cover_window_and_parent_max() -> None:
     ]
 
 
-def test_transformer_panel_parameters_participate_in_availability_trace() -> None:
+def test_operator_panel_parameters_participate_in_availability_trace() -> None:
     source = _traced_panel()
-    delayed = Panel.from_domain(
+    delayed = Node.from_domain(
         source.collect(include_traces=True).with_columns(
             pl.Series(
                 "base_available_date",
@@ -118,7 +118,7 @@ def test_transformer_panel_parameters_participate_in_availability_trace() -> Non
             )
         ).lazy(),
         source.domain,
-        name="group",
+        name="group", value_type="category",
         trace_columns=("observation_date", "base_available_date"),
     )
 
@@ -136,7 +136,7 @@ def test_transformer_panel_parameters_participate_in_availability_trace() -> Non
 def test_trace_rules_preserve_exact_shift_fill_and_rolling_dates() -> None:
     days = [date(2024, 2, day) for day in (1, 2, 3)]
     domain = Domain(calendar=days, universe=["A"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,
@@ -174,11 +174,11 @@ def test_trace_rules_preserve_exact_shift_fill_and_rolling_dates() -> None:
     }
 
 
-def test_windowed_transformer_traces_cover_every_read_session() -> None:
+def test_windowed_operator_traces_cover_every_read_session() -> None:
     days = [date(2024, 4, day) for day in range(1, 6)]
     available = [days[0], days[4], days[2], days[3], days[4]]
     domain = Domain(calendar=days, universe=["A"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,
@@ -218,8 +218,8 @@ def test_rolling_regression_trace_includes_prior_training_target() -> None:
     days = [date(2024, 5, day) for day in range(1, 6)]
     domain = Domain(calendar=days, universe=["A"])
 
-    def traced(name: str, availability: list[date]) -> Panel:
-        return Panel.from_domain(
+    def traced(name: str, availability: list[date]) -> Node:
+        return Node.from_domain(
             pl.DataFrame(
                 {
                     "time": days,
@@ -246,8 +246,8 @@ def test_rolling_pair_trace_includes_both_trailing_windows() -> None:
     days = [date(2024, 6, day) for day in range(1, 4)]
     domain = Domain(calendar=days, universe=["A"])
 
-    def traced(name: str, availability: list[date]) -> Panel:
-        return Panel.from_domain(
+    def traced(name: str, availability: list[date]) -> Node:
+        return Node.from_domain(
             pl.DataFrame(
                 {
                     "time": days,
@@ -273,7 +273,7 @@ def test_rolling_pair_trace_includes_both_trailing_windows() -> None:
 def test_expanding_ewm_trace_includes_all_prior_rows() -> None:
     days = [date(2024, 7, day) for day in range(1, 4)]
     domain = Domain(calendar=days, universe=["A"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,
@@ -299,7 +299,7 @@ def test_run_length_traces_cover_only_the_current_causal_run() -> None:
     days = [date(2024, 3, day) for day in range(1, 6)]
     available = [days[0], days[4], days[2], days[3], days[4]]
     domain = Domain(calendar=days, universe=["A"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,
@@ -333,7 +333,7 @@ def test_run_length_traces_cover_only_the_current_causal_run() -> None:
 
 
 def test_custom_operator_with_traces_must_declare_trace_rule() -> None:
-    @transformer
+    @operator
     def unsafe(frame: pl.DataFrame) -> pl.DataFrame:
         return frame
 
@@ -342,7 +342,7 @@ def test_custom_operator_with_traces_must_declare_trace_rule() -> None:
 
 
 def test_custom_trace_contract_can_opt_in_explicitly() -> None:
-    @transformer(
+    @operator(
         contract=OperationContract(trace_rule=TraceRule.PASSTHROUGH)
     )
     def safe(frame: pl.LazyFrame) -> pl.LazyFrame:
@@ -467,30 +467,30 @@ def test_semantically_equal_eager_nodes_share_physical_result() -> None:
     assert runtime._diagnostics["eager_cse_hits"] == 4
 
 
-def test_same_key_composer_uses_positional_plan() -> None:
-    source = Panel.from_domain(_traced_panel().collect(dense=True), _traced_panel().domain)
+def test_same_key_operator_uses_positional_plan() -> None:
+    source = Node.from_domain(_traced_panel().collect(dense=True), _traced_panel().domain)
     runtime = ExecutionRuntime()
 
     output = sum_frames(*([source] * 10)).compute(runtime=runtime)
 
     assert output.collect(dense=True)["value"].to_list() == [100.0, 110.0, 120.0]
-    assert runtime._diagnostics["positional_composer_hits"] == 1
+    assert runtime._diagnostics["positional_operator_hits"] == 1
     assert "SORT BY" not in output.lazy(dense=False).explain().upper()
 
 
-def test_unvalidated_composer_input_keeps_conservative_join() -> None:
+def test_unvalidated_operator_input_keeps_conservative_join() -> None:
     source = _traced_panel()
     runtime = ExecutionRuntime()
 
     add(source, source).compute(runtime=runtime)
 
-    assert runtime._diagnostics["positional_composer_hits"] == 0
+    assert runtime._diagnostics["positional_operator_hits"] == 0
 
 
 def test_custom_operation_remains_scoped_sorted_and_conservative() -> None:
     days = [date(2024, 3, day) for day in (1, 2)]
     domain = Domain(calendar=days, universe=["A"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,
@@ -501,7 +501,7 @@ def test_custom_operation_remains_scoped_sorted_and_conservative() -> None:
         domain,
     )
 
-    @transformer
+    @operator
     def disorder(frame: pl.DataFrame) -> pl.DataFrame:
         return pl.concat(
             [
@@ -543,7 +543,7 @@ def test_direct_rolling_operation_preserves_public_sorting() -> None:
     assert output["time"].to_list() == sorted(output["time"].to_list())
 
 
-def test_direct_composer_operation_preserves_public_sorting() -> None:
+def test_direct_operator_operation_preserves_public_sorting() -> None:
     frame = pl.DataFrame(
         {
             "time": [date(2024, 4, 2), date(2024, 4, 1)],

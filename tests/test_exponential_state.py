@@ -4,8 +4,8 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from bagelquant_core import Domain, Panel, capture_operator_checkpoints
-from bagelquant_core.transformer.rolling import ewm_mean, ewm_std, ewm_var
+from bagelquant_core import Domain, Node, capture_operator_checkpoints
+from bagelquant_core.operator.rolling_stats import ewm_mean, ewm_std, ewm_var
 
 
 @pytest.mark.parametrize('operator',[ewm_mean,ewm_var,ewm_std])
@@ -21,7 +21,7 @@ def test_exponential_checkpoint_matches_polars_and_full_prefix(operator,adjust,i
         parameters['bias']=bias
     def graph(selected):
         domain=Domain(calendar=selected['time'].unique().sort(),universe=['A','B'])
-        return operator(Panel.from_domain(selected,domain,source_key='observations'),name='exp',**parameters)
+        return operator(Node.from_domain(selected,domain,source_key='observations'),name='exp',**parameters)
     reference=graph(frame).compute().collect().sort(['time','asset_id'])
     with capture_operator_checkpoints() as first:
         prefix=graph(frame.filter(pl.col('time')<=days[6])).compute().collect()

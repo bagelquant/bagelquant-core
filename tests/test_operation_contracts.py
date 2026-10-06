@@ -5,13 +5,12 @@ import math
 
 import pytest
 
-from bagelquant_core.composer import (
-    COMPOSER_REGISTRY,
+from bagelquant_core.operator import (
+    OPERATOR_REGISTRY,
     weighted_sum,
     xand,
 )
-from bagelquant_core.transformer import (
-    TRANSFORMER_REGISTRY,
+from bagelquant_core.operator import (
     anscombe,
     boxcox,
     date_age_constraint,
@@ -48,7 +47,7 @@ from helpers import panel, values
 
 
 def test_registered_operations_expose_reference_docstrings() -> None:
-    for registry in (TRANSFORMER_REGISTRY, COMPOSER_REGISTRY):
+    for registry in (OPERATOR_REGISTRY, OPERATOR_REGISTRY):
         for name in registry.names():
             documentation = inspect.getdoc(registry.get(name).operation)
             assert documentation, name
@@ -256,6 +255,7 @@ def test_project_mask_and_replace_helpers_keep_their_public_semantics() -> None:
 def test_group_dense_rank_and_average_percentile_are_distinct() -> None:
     source = _single_time([1.0, 1.0, 2.0, 3.0], name="x")
     groups = _single_time([1.0, 1.0, 1.0, 1.0], name="group")
+    groups = type(groups).from_domain(groups.collect(), groups.domain, name="group", value_type="category")
 
     dense = group_rankpct(source, group=groups)
     average = group_percentile(source, group=groups)
@@ -273,6 +273,7 @@ def test_group_dense_rank_and_average_percentile_are_distinct() -> None:
 def test_dense_percentile_ranks_exclude_missing_values_from_denominator() -> None:
     source = _single_time([1.0, 2.0, None], name="x")
     groups = _single_time([1.0, 1.0, 1.0], name="group")
+    groups = type(groups).from_domain(groups.collect(), groups.domain, name="group", value_type="category")
 
     ungrouped = rankpct(source).compute().collect(dense=True)
     grouped = group_rankpct(source, group=groups).compute().collect(dense=True)
@@ -284,6 +285,7 @@ def test_dense_percentile_ranks_exclude_missing_values_from_denominator() -> Non
 def test_group_operations_exclude_missing_group_labels() -> None:
     source = _single_time([1.0, 3.0, 7.0], name="x")
     groups = _single_time([1.0, 1.0, None], name="group")
+    groups = type(groups).from_domain(groups.collect(), groups.domain, name="group", value_type="category")
 
     eager = group_mean.operation(
         source.collect(dense=True),

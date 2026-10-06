@@ -3,15 +3,15 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from bagelquant_core import CategoryPanel, Domain, Graph, GraphSpec, GraphValidationError, Panel
-from bagelquant_core.composer import div
-from bagelquant_core.transformer import group_demean, rank
+from bagelquant_core import Domain, Graph, GraphSpec, GraphValidationError, Node
+from bagelquant_core.operator import div
+from bagelquant_core.operator import group_demean, rank
 
 
-def _inputs() -> dict[str, Panel]:
+def _inputs() -> dict[str, Node]:
     domain = Domain(calendar=["2024-01-02"], universe=["A", "B"])
     return {
-        "book": Panel.from_domain(
+        "book": Node.from_domain(
             pl.DataFrame(
                 {
                     "time": ["2024-01-02", "2024-01-02"],
@@ -22,7 +22,7 @@ def _inputs() -> dict[str, Panel]:
             domain,
             name="book",
         ),
-        "price": Panel.from_domain(
+        "price": Node.from_domain(
             pl.DataFrame(
                 {
                     "time": ["2024-01-02", "2024-01-02"],
@@ -52,7 +52,7 @@ def test_graph_spec_round_trip_and_compilation() -> None:
 
 def test_graph_spec_round_trips_named_panel_parameters() -> None:
     inputs = _inputs()
-    groups = CategoryPanel.from_domain(
+    groups = Node.from_domain(
         pl.DataFrame(
             {
                 "time": ["2024-01-02", "2024-01-02"],
@@ -62,7 +62,7 @@ def test_graph_spec_round_trips_named_panel_parameters() -> None:
         ),
         inputs["book"].domain,
         name="industry",
-    )
+     value_type="category")
     all_inputs = {**inputs, "industry": groups}
     original = group_demean(
         inputs["book"], group=groups, name="industry_neutral"
@@ -81,7 +81,7 @@ def test_graph_spec_rejects_unknown_operations() -> None:
     specification = {
         "outputs": ["bad"],
         "nodes": [
-            {"name": "book", "node_type": "panel", "inputs": []},
+            {"name": "book", "node_type": "input", "inputs": []},
             {
                 "name": "bad",
                 "node_type": "operator",
@@ -104,10 +104,10 @@ def test_graph_spec_rejects_forward_references() -> None:
                 "node_type": "operator",
                 "inputs": ["book"],
                 "config": {
-                    "operator": "bagelquant_core.transformer.ranking.rank"
+                    "operator": "bagelquant_core.operator.ranking.rank"
                 },
             },
-            {"name": "book", "node_type": "panel", "inputs": []},
+            {"name": "book", "node_type": "input", "inputs": []},
         ],
     }
 

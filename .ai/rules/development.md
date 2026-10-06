@@ -13,10 +13,9 @@
 
 ## Package target and staged refactor
 
-- Target ownership: Domain/Panel conversion, numerical transforms/ML, graph
+- Target ownership: Domain/Node conversion, numerical transforms/ML, graph
   execution and generic numerical artifact/materialization/cache/checkpoint
-  persistence belong to Core. The current MaterializationStore protocol has
-  application implementations; their generic relocation is pending stage 3.
+  persistence belong to Core. CoreStore implements caller-located SQLite/Parquet persistence; applications use public receipts.
 - Accept neutral frames/schema/availability/immutable identity evidence through
   public APIs. Data owns dataset storage and frozen input evidence; Core does
   not query Data or provider state. BT owns account/evaluation artifact storage.
@@ -24,8 +23,7 @@
   orchestration, referencing backend artifacts. Generic conversion, computation,
   numerical persistence and reuse proofs must not be reimplemented there.
 - Follow rules -> Data -> Core -> BT -> Workbench -> new database/service restart.
-  Stage 1 changes instructions only; concrete APIs and storage schemas are deferred
-  to their owner stages. Breaking refactors remove old paths without compatibility.
+  Stages 2 and 3 implement Data and Core; BT and full Workbench cleanup remain later stages. Breaking refactors remove old paths without compatibility.
 
 ## Implementation
 

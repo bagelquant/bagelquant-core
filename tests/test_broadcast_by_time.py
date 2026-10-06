@@ -5,16 +5,16 @@ from datetime import date
 import polars as pl
 import pytest
 
-from bagelquant_core import Domain, Panel
-from bagelquant_core.composer import broadcast_by_time
-from bagelquant_core.transformer import ceil
+from bagelquant_core import Domain, Node
+from bagelquant_core.operator import broadcast_by_time
+from bagelquant_core.operator import ceil
 
 
 def test_ceil_preserves_missing_values_and_rounds_finite_values() -> None:
     domain = Domain(
         calendar=[date(2024, 1, 2)], universe=["a", "b", "c", "d", "e"]
     )
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": [date(2024, 1, 2)] * 5,
@@ -38,7 +38,7 @@ def test_ceil_preserves_missing_values_and_rounds_finite_values() -> None:
 def test_broadcast_by_time_uses_like_keys_and_combines_traces() -> None:
     days = [date(2024, 1, 2), date(2024, 1, 3)]
     domain = Domain(calendar=days, universe=["a", "b", "benchmark"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,
@@ -50,7 +50,7 @@ def test_broadcast_by_time_uses_like_keys_and_combines_traces() -> None:
         domain,
         trace_columns=("available",),
     )
-    like = Panel.from_domain(
+    like = Node.from_domain(
         pl.DataFrame(
             {
                 "time": [days[0], days[0], days[1]],
@@ -78,7 +78,7 @@ def test_broadcast_by_time_uses_like_keys_and_combines_traces() -> None:
 def test_broadcast_by_time_rejects_multiple_source_rows_on_one_date() -> None:
     day = date(2024, 1, 2)
     domain = Domain(calendar=[day], universe=["a", "b"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": [day, day],
@@ -88,7 +88,7 @@ def test_broadcast_by_time_rejects_multiple_source_rows_on_one_date() -> None:
         ),
         domain,
     )
-    like = Panel.from_domain(
+    like = Node.from_domain(
         pl.DataFrame({"time": [day], "asset_id": ["a"], "value": [0.0]}),
         domain,
     )
@@ -100,7 +100,7 @@ def test_broadcast_by_time_rejects_multiple_source_rows_on_one_date() -> None:
 def test_broadcast_by_time_omits_like_dates_without_a_source_value() -> None:
     days = [date(2024, 1, 2), date(2024, 1, 3)]
     domain = Domain(calendar=days, universe=["a", "benchmark"])
-    source = Panel.from_domain(
+    source = Node.from_domain(
         pl.DataFrame(
             {
                 "time": [days[0]],
@@ -110,7 +110,7 @@ def test_broadcast_by_time_omits_like_dates_without_a_source_value() -> None:
         ),
         domain,
     )
-    like = Panel.from_domain(
+    like = Node.from_domain(
         pl.DataFrame(
             {
                 "time": days,

@@ -7,7 +7,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 import numpy as np
 
-from bagelquant_core import (
+from bagelquant_core.machine_learning import (
     ElasticNetCandidate,
     ElasticNetConfig,
     ElasticNetModel,
@@ -22,7 +22,7 @@ from bagelquant_core import (
     fit_elastic_net_from_moments,
     zero_preserving_rms_scaler_from_moments,
 )
-from .resources import active_resource_limits
+from bagelquant_core.resources import active_resource_limits
 
 
 @dataclass(frozen=True, slots=True)

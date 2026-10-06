@@ -7,16 +7,16 @@ import pytest
 from polars.testing import assert_frame_equal
 
 from bagelquant_core import (
-    CategoryPanel, Domain, ExecutionMode, ExecutionRuntime, Graph, MaterializationLookup,
-    MaterializationStatus, OPERATOR_REGISTRY, OperationContract, Panel, TraceRule,
+    Domain, ExecutionMode, ExecutionRuntime, Graph, MaterializationLookup,
+    MaterializationStatus, OPERATOR_REGISTRY, OperationContract, Node, TraceRule,
     capture_operator_checkpoints, capture_training_audits, causal_history_requirements,
     project_domain, materialization_trace_identity,
 )
 from bagelquant_core.operator_state import save_operator_artifact, save_operator_state, save_training_audit
-from bagelquant_core.prediction import IdentityPredictionComposer
-from bagelquant_core.resources import ResourceLimits, active_resource_limits, current_resident_mib, resource_limits
-from bagelquant_core.transformer import identity, negate, pct_change, rolling_rank, rolling_ols, smooth, zscore
-from bagelquant_core.transformer.core import transformer
+from bagelquant_core.operator.prediction import IdentityPredictionOperator
+from bagelquant_core.resources import ResourceLimits, active_resource_limits, resource_limits
+from bagelquant_core.operator import identity, negate, pct_change, rolling_rank, rolling_ols, smooth, zscore
+from bagelquant_core.operator import operator
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def source():
     frame = domain.grid_lazy().collect().with_columns(
         pl.Series("value", [float(index + 1) for index in range(domain.size)]),
         pl.col("time").alias("available_date"))
-    return Panel.from_domain(frame, domain, source_key="quotes", identity="quotes.v1",
+    return Node.from_domain(frame, domain, source_key="quotes", identity="quotes.v1",
         trace_columns=("available_date",), trace_identity="timing.v1")
 
 
@@ -50,7 +50,7 @@ def test_frontier_runs_independent_kernels_and_merges_evidence_with_one_budget()
     barrier, lock = Barrier(2), Lock()
     budgets = []
 
-    @transformer(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, trace_rule=TraceRule.PASSTHROUGH))
+    @operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, trace_rule=TraceRule.PASSTHROUGH))
     def kernel(frame: pl.DataFrame, *, scale: int):
         limits = active_resource_limits()
         with lock:
@@ -98,11 +98,11 @@ def test_parallel_runtime_matches_serial_and_exact_materialization_keys():
 
 def test_identity_planner_never_executes_and_preserves_typed_auxiliary_domains(monkeypatch):
     input_ = source()
-    category = CategoryPanel.from_domain(input_.collect(include_traces=True).with_columns(pl.lit("group").alias("value")),
-        input_.domain, source_key="groups", identity="groups.v1", trace_columns=("available_date",))
-    members = Panel.from_domain(input_.collect().filter(pl.col("asset_id") == "A"),
+    category = Node.from_domain(input_.collect(include_traces=True).with_columns(pl.lit("group").alias("value")),
+        input_.domain, source_key="groups", identity="groups.v1", trace_columns=("available_date",), value_type="category")
+    members = Node.from_domain(input_.collect().filter(pl.col("asset_id") == "A"),
         Domain(calendar=input_.domain.times, universe=["A"]), source_key="members", identity="members.v1")
-    forecast = IdentityPredictionComposer().compose(input_)
+    forecast = IdentityPredictionOperator()(input_)
     graph = Graph(outputs=[identity(category, name="groups"), project_domain(zscore(forecast), membership=members, name="forecast")])
     runtime = ExecutionRuntime(materialization_store=MemoryStore())
     with monkeypatch.context() as patch:
@@ -114,18 +114,13 @@ def test_identity_planner_never_executes_and_preserves_typed_auxiliary_domains(m
     assert all(domains[node_id].equivalent_to(record.panel.domain) for node_id, record in runtime.node_materializations.items())
 
 
-def test_memory_pressure_reduces_new_admission_and_releases_output_cache(monkeypatch):
-    monkeypatch.setattr("bagelquant_core.execution.current_resident_mib", lambda: 200.0)
+def test_resource_policy_uses_only_explicit_budget():
+    limits = ResourceLimits(total_threads=4, parallel_nodes=2, memory_target_mib=100, cache_mib=10, batch_rows=64)
     input_ = source()
-    graph = Graph(outputs=[rolling_rank(input_, window=3, name="a"), rolling_rank(input_, window=5, name="b")])
-    runtime = ExecutionRuntime()
-    with resource_limits(ResourceLimits(total_threads=4, parallel_nodes=2, memory_target_mib=100, cache_mib=10, batch_rows=64)):
-        graph.compute(runtime=runtime)
-    assert runtime.resource_usage["pressure_events"] >= 1
-    assert runtime._effective_limits.parallel_nodes == 1
-    assert runtime._effective_limits.batch_rows <= 32
-    assert runtime.cache == {}
-    assert runtime.resource_usage["peak_resident_mib"] == 200.0
+    with resource_limits(limits):
+        runtime = ExecutionRuntime()
+        rolling_rank(input_, window=3).compute(runtime=runtime)
+    assert runtime._effective_limits == limits
 
 
 def test_finite_history_composes_halos_and_unknown_operations_stay_conservative():
@@ -135,7 +130,7 @@ def test_finite_history_composes_halos_and_unknown_operations_stay_conservative(
     histories = causal_history_requirements(spec)
     assert histories[next(iter(spec.outputs.values()))] == 249
 
-    @transformer
+    @operator
     def unknown(frame: pl.DataFrame):
         return frame
 
@@ -143,20 +138,19 @@ def test_finite_history_composes_halos_and_unknown_operations_stay_conservative(
     assert causal_history_requirements(spec)[next(iter(spec.outputs.values()))] is None
 
 
-def test_resident_memory_is_available_and_worker_budgets_do_not_expand_small_batches():
-    assert current_resident_mib() > 0
+def test_worker_budgets_do_not_expand_small_batches():
     limits = ResourceLimits(total_threads=8, parallel_nodes=4, memory_target_mib=100,
         cache_mib=10, histogram_pool_mib=24, batch_rows=1, lightgbm_threads=8)
     worker = limits.for_workers(4)
     assert worker.total_threads == worker.lightgbm_threads == 2
     assert worker.histogram_pool_mib == 6
-    assert worker.batch_rows == worker.under_pressure(100).batch_rows == 1
+    assert worker.batch_rows == 1
 
 
 def test_proven_node_binding_cuts_upstream_execution_and_keeps_logical_definition():
     calls = []
 
-    @transformer(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, trace_rule=TraceRule.PASSTHROUGH))
+    @operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, trace_rule=TraceRule.PASSTHROUGH))
     def counted(frame: pl.DataFrame):
         calls.append(1)
         return frame
@@ -173,8 +167,8 @@ def test_proven_node_binding_cuts_upstream_execution_and_keeps_logical_definitio
     assert_frame_equal(actual.collect(), input_.collect().with_columns((-pl.col("value")).alias("value")))
     with pytest.raises(ValueError, match="operator nodes"):
         Graph.from_logical_spec(spec, inputs={}, node_bindings={"unknown": input_})
-    category = CategoryPanel.from_domain(input_.collect().with_columns(pl.lit("x").alias("value")), input_.domain)
-    with pytest.raises(ValueError, match="requires panel"):
+    category = Node.from_domain(input_.collect().with_columns(pl.lit("x").alias("value")), input_.domain, value_type="category")
+    with pytest.raises(ValueError, match="requires numeric"):
         Graph.from_logical_spec(spec, inputs={}, node_bindings={upstream.node_id: category})
 
 
@@ -182,9 +176,9 @@ def test_small_temporary_batches_preserve_rank_and_regression_values():
     base = source()
     random = np.random.default_rng(1729)
     frame = base.collect(include_traces=True)
-    input_ = Panel.from_domain(frame.with_columns(pl.Series("value", random.normal(size=len(frame)))),
+    input_ = Node.from_domain(frame.with_columns(pl.Series("value", random.normal(size=len(frame)))),
         base.domain, source_key="feature", identity="feature.v1", trace_columns=base.trace_columns)
-    target = Panel.from_domain(frame.with_columns(pl.Series("value", random.normal(size=len(frame)))),
+    target = Node.from_domain(frame.with_columns(pl.Series("value", random.normal(size=len(frame)))),
         base.domain, source_key="target", identity="target.v1", trace_columns=base.trace_columns)
     graph = Graph(outputs=[rolling_rank(input_, window=4, name="rank"),
         rolling_ols(target, factors=(input_,), window=4, name="ols")])
@@ -196,7 +190,7 @@ def test_small_temporary_batches_preserve_rank_and_regression_values():
 
 
 def test_node_contexts_isolate_finite_ancestors_and_propagate_their_exact_parent_keys():
-    @transformer(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, trace_rule=TraceRule.PASSTHROUGH))
+    @operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, trace_rule=TraceRule.PASSTHROUGH))
     def unknown(frame: pl.DataFrame):
         return frame.with_columns((pl.col("value") + 1).alias("value"))
 

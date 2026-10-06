@@ -3,35 +3,33 @@
 from __future__ import annotations
 
 import logging
-import gc
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from contextvars import copy_context
 from dataclasses import dataclass, replace
-from time import monotonic
 from typing import Any, Mapping
 
 import numpy as np
 import polars as pl
 
-from .frame import ASSET_ID, TIME, VALUE
-from .graph import Graph
-from .hashing import hash_mapping
-from .node import Node
-from .materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationStatus, materialization_trace_identity
-from .operator_state import (
+from bagelquant_core.frame import ASSET_ID, TIME, VALUE
+from bagelquant_core.graph import Graph
+from bagelquant_core.hashing import hash_mapping
+from bagelquant_core.node import Node
+from bagelquant_core.materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationStatus, materialization_trace_identity
+from bagelquant_core.operator_state import (
     capture_node_evidence, capture_operator_checkpoints, current_operator_checkpoints,
     operator_input_context, replay_node_evidence,
 )
-from .operation_contract import (
+from bagelquant_core.operation_contract import (
     ExecutionMode,
     InputDensity,
     OperationContract,
     TraceRule,
 )
-from .panel import CategoryPanel, Domain, Panel, PredictionPanel
-from .resources import active_resource_limits, current_resident_mib, resource_limits
+from bagelquant_core.node import Domain
+from bagelquant_core.resources import active_resource_limits, resource_limits
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +88,11 @@ class ExecutionRuntime:
     def __init__(self, alignment: str = "inner", *,
                  materialization_store: MaterializationStore | None = None,
                   context_identity: str = "",
-                  node_contexts: Mapping[str, str] | None = None) -> None:
+                  node_contexts: Mapping[str, str] | None = None, check_canceled=None) -> None:
         if alignment != "inner":
             raise ValueError("ExecutionRuntime only supports inner alignment")
-        self.cache: dict[str, Panel] = {}
+        self.check_canceled = check_canceled or (lambda: None)
+        self.cache: dict[str, Node] = {}
         self._plan_cache: dict[str, PlanValue] = {}
         self._physical_plan_cache: dict[str, PlanValue] = {}
         self._alignment = alignment
@@ -106,6 +105,8 @@ class ExecutionRuntime:
         self.node_materializations: dict[str, NodeMaterialization] = {}
         self.node_domains: dict[str, Domain] = {}
         self.node_artifacts: dict[str, Mapping[str, Any]] = {}
+        self.node_checkpoints = {}
+        self.node_training_audits = {}
         self._pending_materializations: dict[str, tuple[Node, PlanValue, MaterializationKey]] = {}
         self._loaded_materializations: dict[str, NodeMaterialization] = {}
         self._run_evidence = None
@@ -133,20 +134,19 @@ class ExecutionRuntime:
         self._completed_eager: dict[int, pl.DataFrame] = {}
         self._effective_limits = active_resource_limits()
         self._last_memory_sample = 0.0
-        self.resource_usage = {"peak_resident_mib": 0.0, "pressure_events": 0,
-            "max_parallel_nodes": 0, "eager_batches": 0}
+        self.resource_usage = {"max_parallel_nodes": 0, "eager_batches": 0}
         self._diagnostics = {
             "semantic_cse_hits": 0,
             "alignments_elided": 0,
             "sorts_elided": 0,
             "membership_applications": 0,
-            "positional_composer_hits": 0,
+            "positional_operator_hits": 0,
             "eager_cse_hits": 0,
             "solver_batches": 0,
             "active_window_iterations": 0,
         }
 
-    def _remember_output(self, identity: str, panel: Panel) -> None:
+    def _remember_output(self, identity: str, panel: Node) -> None:
         """Bound retained numerical output caches without changing graph identity."""
         limit = self._effective_limits.cache_mib * 1024 * 1024
         def size(value):
@@ -169,6 +169,8 @@ class ExecutionRuntime:
         bind scan-backed or schema-correct placeholder inputs with proven
         identities, query complete results, then load only missing payloads.
         """
+        if isinstance(graph, Node):
+            graph = graph.graph
         if not isinstance(graph, Graph):
             raise TypeError("materialization planning expects a Graph")
         values: dict[int, PlanValue] = {}
@@ -176,15 +178,15 @@ class ExecutionRuntime:
         self.node_domains = {}
         with ExitStack() as scope:
             if current_operator_checkpoints() is None:
-                calendar = next((node.domain.times.to_list() for node in graph.nodes if isinstance(node, Panel)), ())
+                calendar = next((node.domain.times.to_list() for node in graph.nodes if node.node_type == "input"), ())
                 scope.enter_context(capture_operator_checkpoints(calendar=calendar))
             for node in graph.topological_sort():
-                if isinstance(node, Panel):
+                if node.node_type == "input":
                     value = self._panel_plan(node)
-                    value = replace(value, physical_identity=hash_mapping({"input": node.identity,
+                    value = replace(value, physical_identity=getattr(node, "_materialization_identity", None) or hash_mapping({"input": node.identity,
                         "trace": node.trace_identity, "trace_columns": node.trace_columns,
-                        "domain": node.domain.signature, "categorical": isinstance(node, CategoryPanel),
-                        "prediction": isinstance(node, PredictionPanel)}))
+                        "domain": node.domain.signature, "categorical": (isinstance(node, Node) and node.value_type == "category"),
+                        "prediction": (isinstance(node, Node) and node.value_type == "prediction")}))
                 else:
                     parents = tuple(values[id(parent)] for parent in node.parents)
                     projected = node.config().get("operator", "").endswith(".project_domain")
@@ -195,35 +197,11 @@ class ExecutionRuntime:
                     value = PlanValue(frame=parents[0].frame, domain=domain,
                         density=self._contract(node).density, identity=key.identity,
                         trace_columns=tuple(dict.fromkeys(trace for parent in parents for trace in parent.trace_columns)),
-                        categorical=node.execution_kind == "transformer" and parents[0].categorical,
-                        prediction=node.execution_kind == "prediction_composer" or (
-                            bool(node.spec_inputs()) and all(parent.prediction for parent in parents[:len(node.spec_inputs())])
-                            and getattr(node.operation, "output_type", None) != "weights"),
+                        categorical=node.value_type == "category",
+                        prediction=node.value_type == "prediction",
                         physical_identity=key.identity)
                 values[id(node)] = value
         return keys
-
-    def _memory_feedback(self, *, force: bool = False) -> float:
-        now = monotonic()
-        if not force and now - self._last_memory_sample < 0.1:
-            return self._resident_mib
-        self._last_memory_sample = now
-        self._resident_mib = current_resident_mib()
-        self.resource_usage["peak_resident_mib"] = max(
-            self.resource_usage["peak_resident_mib"], self._resident_mib)
-        reduced = self._effective_limits.under_pressure(self._resident_mib)
-        if reduced != self._effective_limits:
-            self.resource_usage["pressure_events"] += 1
-            self._effective_limits = reduced
-            self.cache.clear()
-            self._plan_cache.clear()
-            self._physical_plan_cache.clear()
-            for cache in (self._active_eager_inputs, self._active_eager_results,
-                          self._active_eager_layouts, self._active_eager_physical_results):
-                if cache is not None:
-                    cache.clear()
-            gc.collect()
-        return self._resident_mib
 
     def _run_frontiers(self, graph: Graph, evaluated: dict[int, PlanValue]) -> None:
         """Keep lazy work fused and admit bounded independent eager kernels."""
@@ -262,9 +240,8 @@ class ExecutionRuntime:
                     groups.setdefault(self._eager_group_key(work), []).append(work)
                 waiting = deque(groups.values())
                 while waiting:
-                    resident = self._memory_feedback(force=True)
                     limits = self._effective_limits
-                    headroom = max(0, limits.memory_target_mib - resident) * 1024 * 1024
+                    headroom = max(0, limits.memory_target_mib) * 1024 * 1024
                     batch: list[list[_EagerWork]] = []
                     estimate = 0
                     while waiting and len(batch) < limits.parallel_nodes:
@@ -315,7 +292,6 @@ class ExecutionRuntime:
                             self._run_node(work.node, evaluated)
                             completed(work.node)
                     del frames, jobs
-                    self._memory_feedback(force=True)
 
     def _eager_group_key(self, work: _EagerWork) -> object:
         node = work.node
@@ -331,7 +307,7 @@ class ExecutionRuntime:
 
     @staticmethod
     def _execute_eager_group(group: list[_EagerWork], inputs: tuple[pl.DataFrame, ...], limits):
-        from .training_operators import capture_training_audits
+        from bagelquant_core.operator.training import capture_training_audits
 
         local = ExecutionRuntime()
         local._active_eager_inputs = {}
@@ -358,11 +334,24 @@ class ExecutionRuntime:
         graph: Graph,
         *,
         dense_output: bool = True,
-    ) -> Panel | Mapping[str, Panel]:
+    ) -> Node | Mapping[str, Node]:
+        if isinstance(graph, Node):
+            graph = graph.graph
         if not isinstance(graph, Graph):
             raise TypeError("ExecutionRuntime.run expects a Graph")
+        if self.materialization_store is not None and any(node.node_type == "input" and not getattr(node, "_durable_identity", False) for node in graph.nodes):
+            raise ValueError("persistent execution requires immutable source evidence for lazy inputs")
         if self._active_eager_inputs is not None:
             raise RuntimeError("ExecutionRuntime does not support nested runs")
+        guards = tuple(dict.fromkeys((*getattr(graph, "_execution_guards", ()), *(guard for node in graph.nodes for guard in getattr(node, "_execution_guards", ())))))
+        for guard in guards:
+            guard()
+        previous_check = self.check_canceled
+        def check():
+            previous_check()
+            for guard in guards:
+                guard()
+        self.check_canceled = check
         self._active_eager_inputs = {}
         self._active_eager_results = {}
         self._active_eager_layouts = {}
@@ -375,11 +364,10 @@ class ExecutionRuntime:
         self._pending_estimated_bytes = 0
         self._effective_limits = active_resource_limits()
         self._completed_eager = {}
-        self._memory_feedback(force=True)
         scope = ExitStack()
         self._run_evidence = scope.enter_context(capture_node_evidence())
         if self.materialization_store is not None and current_operator_checkpoints() is None:
-            calendar = next((node.domain.times.to_list() for node in graph.nodes if isinstance(node, Panel)), ())
+            calendar = next((node.domain.times.to_list() for node in graph.nodes if node.node_type == "input"), ())
             scope.enter_context(capture_operator_checkpoints(calendar=calendar))
         try:
             evaluated: dict[int, PlanValue] = {}
@@ -397,7 +385,7 @@ class ExecutionRuntime:
                 results = self._materialize_many(plans)
                 return graph._present_outputs(results)
 
-            results: dict[str, Panel] = {}
+            results: dict[str, Node] = {}
             for node, plan in plans:
                 output = self._materialize_node(
                     node,
@@ -408,7 +396,10 @@ class ExecutionRuntime:
                 results[node.name] = output
             return graph._present_outputs(results)
         finally:
+            self.check_canceled = previous_check
             self.node_artifacts = dict(self._run_evidence.artifacts)
+            self.node_checkpoints = dict(self._run_evidence.checkpoints)
+            self.node_training_audits = dict(self._run_evidence.training_audits)
             scope.close()
             self._run_evidence = None
             self._active_evaluated = None
@@ -423,11 +414,11 @@ class ExecutionRuntime:
         self,
         outputs: list[tuple[Node, PlanValue]],
         *, dense_output: bool = True,
-    ) -> Mapping[str, Panel]:
+    ) -> Mapping[str, Node]:
         """Collect all uncached outputs in one Polars execution boundary."""
 
-        results: dict[str, Panel] = {}
-        pending: list[tuple[Node, PlanValue, Panel]] = []
+        results: dict[str, Node] = {}
+        pending: list[tuple[Node, PlanValue, Node]] = []
         for node, plan in outputs:
             plan = self._expand_implicit(plan)
             cached = self.cache.get(plan.identity) if plan.cacheable and dense_output else None
@@ -435,15 +426,10 @@ class ExecutionRuntime:
                 node.set_output(cached)
                 results[node.name] = cached
                 continue
-            panel_type = (
-                PredictionPanel
-                if plan.prediction
-                else CategoryPanel
-                if plan.categorical
-                else Panel
-            )
+            panel_type = Node
             panel = panel_type._from_plan(
                 self._frame_with_traces(plan),
+                value_type=node.value_type,
                 domain=plan.domain,
                 name=node.name,
                 metadata=node.metadata,
@@ -563,14 +549,14 @@ class ExecutionRuntime:
         }
 
     @staticmethod
-    def _panel_plan(panel: Panel) -> PlanValue:
+    def _panel_plan(panel: Node) -> PlanValue:
         return PlanValue(
             frame=panel.lazy(include_traces=False), domain=panel.domain,
             density=InputDensity.SPARSE_OK, identity=panel.identity,
             trace_columns=panel.trace_columns,
             trace_frame=panel.lazy(include_traces=True).select(TIME, ASSET_ID, *panel.trace_columns) if panel.trace_columns else None,
-            trace_identity=panel.trace_identity, categorical=isinstance(panel, CategoryPanel),
-            prediction=isinstance(panel, PredictionPanel), key_identity=panel._key_identity,
+            trace_identity=panel.trace_identity, categorical=(isinstance(panel, Node) and panel.value_type == "category"),
+            prediction=(isinstance(panel, Node) and panel.value_type == "prediction"), key_identity=panel._key_identity,
             order=_TIME_ASSET_ORDER, trace_key_identity=panel._key_identity,
             trace_order=_TIME_ASSET_ORDER, exact_domain=panel._exact_domain,
             asset_time_ordered=True, validated_keys=panel._validated_keys,
@@ -578,7 +564,7 @@ class ExecutionRuntime:
         )
 
     def _materialization_key(self, node: Node, parents: tuple[PlanValue, ...], domain: Domain) -> MaterializationKey:
-        from .operator import OPERATOR_REGISTRY
+        from bagelquant_core.operator import OPERATOR_REGISTRY
 
         operator = OPERATOR_REGISTRY.get(node.config()["operator"])
         implementation = hash_mapping({"operator": operator.registry_name, "version": operator.version,
@@ -605,7 +591,6 @@ class ExecutionRuntime:
         return domain.size * (40 + traces * 8)
 
     def _admit_materialization(self, domain: Domain, parents: tuple[PlanValue, ...]) -> tuple[PlanValue, ...]:
-        self._memory_feedback()
 
         # A later sibling's recursive execution may have published an earlier
         # parent after its PlanValue was captured. Refresh that local reference
@@ -629,7 +614,7 @@ class ExecutionRuntime:
         panels = self._materialize_many([(node, plan) for node, plan, _ in pending], dense_output=False)
         for node, plan, key in pending:
             panel = panels[node.name]
-            frozen = type(panel).from_domain(panel.lazy(include_traces=True), panel.domain,
+            frozen = Node.from_domain(panel.lazy(include_traces=True), panel.domain, value_type=panel.value_type,
                 name=node.logical_id, identity=key.identity, trace_identity=materialization_trace_identity(key, panel.trace_columns),
                 trace_columns=panel.trace_columns, source_key=node.logical_id)
             frozen._validated_keys = True
@@ -639,6 +624,7 @@ class ExecutionRuntime:
                 artifacts=dict(self._run_evidence.artifacts.get(node.logical_id, {})),
                 checkpoint=self._run_evidence.checkpoints.get(node.logical_id),
                 training_audits=tuple(self._run_evidence.training_audits.get(node.logical_id, ())))
+            self.check_canceled()
             self.materialization_store.publish(record)
             saved = self.materialization_store.query(key)
             if saved.status != MaterializationStatus.HIT or saved.materialization is None or saved.materialization.key != key:
@@ -710,10 +696,11 @@ class ExecutionRuntime:
         node: Node,
         evaluated: dict[int, PlanValue],
     ) -> PlanValue:
+        self.check_canceled()
         node_id = id(node)
         if node_id in evaluated:
             return evaluated[node_id]
-        if isinstance(node, Panel):
+        if node.node_type == "input":
             value = PlanValue(
                 frame=node._frame.select(TIME, ASSET_ID, VALUE),
                 domain=node.domain,
@@ -728,8 +715,8 @@ class ExecutionRuntime:
                     else None
                 ),
                 trace_identity=node.trace_identity,
-                categorical=isinstance(node, CategoryPanel),
-                prediction=isinstance(node, PredictionPanel),
+                categorical=(isinstance(node, Node) and node.value_type == "category"),
+                prediction=(isinstance(node, Node) and node.value_type == "prediction"),
                 key_identity=node._key_identity,
                 order=_TIME_ASSET_ORDER,
                 trace_key_identity=node._key_identity,
@@ -737,9 +724,9 @@ class ExecutionRuntime:
                 exact_domain=node._exact_domain,
                 asset_time_ordered=True,
                 validated_keys=node._validated_keys,
-                physical_identity=hash_mapping({"input": node.identity, "trace": node.trace_identity,
+                physical_identity=getattr(node, "_materialization_identity", None) or hash_mapping({"input": node.identity, "trace": node.trace_identity,
                     "trace_columns": node.trace_columns, "domain": node.domain.signature,
-                    "categorical": isinstance(node, CategoryPanel), "prediction": isinstance(node, PredictionPanel)}),
+                    "categorical": (isinstance(node, Node) and node.value_type == "category"), "prediction": (isinstance(node, Node) and node.value_type == "prediction")}),
             )
             evaluated[node_id] = value
             return value
@@ -761,12 +748,8 @@ class ExecutionRuntime:
                 if cached_record is not None:
                     if cached_record.key != key or not cached_record.panel.domain.equivalent_to(domain):
                         raise ValueError("materialization store returned a different numerical identity or Domain")
-                    expected_prediction = node.execution_kind == "prediction_composer" or (
-                        bool(node.spec_inputs()) and all(parent.prediction for parent in parents[:len(node.spec_inputs())])
-                        and getattr(node.operation, "output_type", None) != "weights")
-                    expected_category = node.execution_kind == "transformer" and parents[0].categorical
-                    if isinstance(cached_record.panel, PredictionPanel) != expected_prediction or isinstance(cached_record.panel, CategoryPanel) != expected_category:
-                        raise ValueError("materialization store did not preserve the numerical Panel type")
+                    if cached_record.panel.value_type != node.value_type:
+                        raise ValueError("materialization store did not preserve the numerical Node type")
                     expected_traces = tuple(dict.fromkeys(trace for parent in parents for trace in parent.trace_columns))
                     if cached_record.panel.trace_columns != expected_traces:
                         raise ValueError("materialization store did not preserve availability traces")
@@ -883,7 +866,7 @@ class ExecutionRuntime:
             )
             if (
                 plan_operation is not None
-                and node.execution_kind == "transformer"
+                and len(node.spec_inputs()) == 1
             ):
                 if prepared[0].asset_time_ordered:
                     self._diagnostics["sorts_elided"] += 1
@@ -895,10 +878,10 @@ class ExecutionRuntime:
                 )
             elif (
                 plan_operation is not None
-                and node.execution_kind == "composer"
+                and len(node.spec_inputs()) > 1
                 and self._positionally_aligned(prepared)
             ):
-                self._diagnostics["positional_composer_hits"] += 1
+                self._diagnostics["positional_operator_hits"] += 1
                 common_order = prepared[0].order
                 plan_asset_time_ordered = all(
                     parent.asset_time_ordered for parent in prepared
@@ -910,7 +893,7 @@ class ExecutionRuntime:
                     plan_asset_time_ordered,
                 )
             else:
-                result = node.compute(*inputs)
+                result = node.evaluate_frames(*inputs)
             if isinstance(result, pl.DataFrame):
                 result = result.lazy()
             if not isinstance(result, pl.LazyFrame):
@@ -933,7 +916,6 @@ class ExecutionRuntime:
             self.eager_barriers += 1
             if result is None:
                 eager_inputs = self._collect_eager_inputs(prepared, inputs)
-                self._memory_feedback()
                 self.resource_usage["max_parallel_nodes"] = max(self.resource_usage["max_parallel_nodes"], 1)
                 with resource_limits(self._effective_limits.for_workers(1)):
                     result = self._compute_eager(node, prepared, eager_inputs, domain)
@@ -989,19 +971,8 @@ class ExecutionRuntime:
             trace_identity=self._trace_plan_identity(
                 contract, prepared, identity, traces
             ),
-            categorical=(
-                prepared[0].categorical
-                if node.execution_kind == "transformer"
-                else False
-            ),
-            prediction=(
-                node.execution_kind == "prediction_composer"
-                or (
-                    bool(node.spec_inputs())
-                    and all(parent.prediction for parent in prepared[:len(node.spec_inputs())])
-                    and getattr(node.operation, "output_type", None) != "weights"
-                )
-            ),
+            categorical=node.value_type == "category",
+            prediction=node.value_type == "prediction",
             cacheable=cacheable,
             key_identity=key_identity,
             order=order,
@@ -1189,7 +1160,7 @@ class ExecutionRuntime:
                 )
             )
             if positionally_aligned:
-                from .composer.xsectional import _orthogonalize_aligned
+                from bagelquant_core.operator.cross_sectional import _orthogonalize_aligned
 
                 if domain.is_dynamic:
                     time_offsets = self._eager_layout(
@@ -1213,7 +1184,7 @@ class ExecutionRuntime:
                     ),
                     group_offsets=time_offsets,
                 )
-            return node.compute(*inputs)
+            return node.evaluate_frames(*inputs)
         if operation in regression_operations:
             key_identity = prepared[0].key_identity
             positionally_aligned = (
@@ -1227,7 +1198,7 @@ class ExecutionRuntime:
                 )
             )
             if positionally_aligned:
-                from .composer.rolling import _rolling_regression_aligned
+                from bagelquant_core.operator.regression import _rolling_regression_aligned
 
                 static_shape = (
                     (len(domain.times), len(domain.asset_ids))
@@ -1256,11 +1227,11 @@ class ExecutionRuntime:
                     ),
                     diagnostics=self._diagnostics,
                 )
-            return node.compute(*inputs)
+            return node.evaluate_frames(*inputs)
         if operation not in {"rolling_rank", "rolling_percentile"}:
-            return node.compute(*inputs)
+            return node.evaluate_frames(*inputs)
 
-        from .transformer.rolling import (
+        from bagelquant_core.operator.rolling_stats import (
             _rolling_last_rank_pair,
             _validate_window,
         )
@@ -1268,7 +1239,7 @@ class ExecutionRuntime:
         parameters = self._node_parameters(node)
         window = parameters.get("window")
         if not isinstance(window, int) or isinstance(window, bool):
-            return node.compute(*inputs)
+            return node.evaluate_frames(*inputs)
         min_periods = _validate_window(
             window,
             parameters.get("min_periods"),
@@ -1327,20 +1298,15 @@ class ExecutionRuntime:
         plan: PlanValue,
         *,
         dense_output: bool,
-    ) -> Panel:
+    ) -> Node:
         cached = self.cache.get(plan.identity) if plan.cacheable else None
         if cached is not None:
             logger.debug("Cache hit: %s", node.name)
             return cached
-        panel_type = (
-            PredictionPanel
-            if plan.prediction
-            else CategoryPanel
-            if plan.categorical
-            else Panel
-        )
+        panel_type = Node
         output = panel_type._from_plan(
             self._frame_with_traces(plan),
+            value_type=node.value_type,
             domain=plan.domain,
             name=node.name,
             metadata=node.metadata,
@@ -1365,7 +1331,7 @@ class ExecutionRuntime:
     ) -> PlanValue | None:
         """Fuse ``constant(panel)`` into a binary arithmetic expression."""
 
-        if node.execution_kind != "composer" or len(node.parents) != 2:
+        if len(node.spec_inputs()) < 2 or len(node.parents) != 2:
             return None
         operation = getattr(getattr(node, "operation", None), "display_name", "")
         expressions = {
@@ -1384,7 +1350,7 @@ class ExecutionRuntime:
             (
                 index
                 for index, parent in enumerate(node.parents)
-                if parent.execution_kind == "transformer"
+                if parent.node_type == "operator" and len(parent.spec_inputs()) == 1
                 and getattr(
                     getattr(parent, "operation", None), "display_name", ""
                 )
@@ -1483,7 +1449,7 @@ class ExecutionRuntime:
 
         operation = getattr(getattr(node, "operation", None), "display_name", "")
         contract = self._contract(node)
-        if node.execution_kind == "transformer" and operation in {
+        if len(node.spec_inputs()) == 1 and operation in {
             "constant",
             "fillna",
             "fillna_zero",
@@ -1567,7 +1533,7 @@ class ExecutionRuntime:
             ),
         }
         if (
-            node.execution_kind != "composer"
+            len(node.spec_inputs()) < 2
             or operation not in reducers
             or not any(parent.default_value is not None for parent in parents)
         ):
@@ -1575,7 +1541,7 @@ class ExecutionRuntime:
         domain = self._resolve_domain(parents)
         identity = hash_mapping(
             {
-                "implicit_composer": node.signature(),
+                "implicit_operator": node.signature(),
                 "parents": [parent.identity for parent in parents],
                 "domain": domain.signature,
             }
@@ -1665,7 +1631,7 @@ class ExecutionRuntime:
         """Lower lag to a sparse calendar-key shift instead of a dense grid."""
 
         operation = getattr(getattr(node, "operation", None), "display_name", "")
-        if node.execution_kind != "transformer" or operation != "lag":
+        if len(node.spec_inputs()) != 1 or operation != "lag":
             return None
         parent = parents[0]
         periods = self._node_parameters(node).get("periods", 1)
@@ -2129,7 +2095,7 @@ class ExecutionRuntime:
         node_identity: str,
     ) -> str | None:
         if (
-            node.execution_kind == "transformer"
+            len(node.spec_inputs()) == 1
             and self._is_builtin_operation(node)
         ):
             if node.config().get("operator", "").endswith((".project_domain", ".rebalance")):
@@ -2153,10 +2119,10 @@ class ExecutionRuntime:
         if (
             not parents
             or not self._is_builtin_operation(node)
-            or node.execution_kind == "prediction_composer"
+            or node._registered.factory is not None
         ):
             return False
-        if node.execution_kind == "transformer":
+        if len(node.spec_inputs()) == 1:
             if node.config().get("operator", "").endswith((".rebalance", ".project_domain")):
                 return False
             return parents[0].exact_domain
@@ -2239,7 +2205,7 @@ class ExecutionRuntime:
             raise ValueError("Derived nodes require at least one panel input")
         domain = inputs[0].domain
         if any(not domain.equivalent_to(value.domain) for value in inputs[1:]):
-            raise ValueError("Composer inputs must use equivalent Domains")
+            raise ValueError("Operator inputs must use equivalent Domains")
         return domain
 
     @staticmethod

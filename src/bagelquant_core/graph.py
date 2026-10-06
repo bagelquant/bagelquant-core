@@ -1,23 +1,26 @@
 """Lazy graph expression objects for BagelQuant Core.
 
-Graphs collect panel inputs, transformer nodes, and composer nodes into a
+Graphs collect input and derived Nodes into a
 validated DAG. They can be inspected through ``spec()`` or evaluated by an
 ``ExecutionRuntime``.
 """
 
 from __future__ import annotations
 
+from .graph_management import GraphManagement
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from inspect import signature
 from typing import TYPE_CHECKING, Any, Generic, Iterable, Sequence, TypeVar, cast
 
-from .node import Node, NodeSpec
+from bagelquant_core.node import Node
+from ._node_definition import NodeSpec
 
 if TYPE_CHECKING:
-    from .execution import ExecutionRuntime
-    from .logical import LogicalGraphSpec
-    from .panel import Panel
+    from bagelquant_core.execution import ExecutionRuntime
+    from bagelquant_core.logical import LogicalGraphSpec
+    from bagelquant_core.node import Node
 
 
 class GraphValidationError(ValueError):
@@ -108,7 +111,7 @@ class GraphSpec:
                 raise GraphValidationError("context_dependencies must map roles to non-empty node name lists")
             if not isinstance(name, str) or not name:
                 raise GraphValidationError("graph node name must be a non-empty string")
-            if node_type not in {"panel", "operator"}:
+            if node_type not in {"input", "operator"}:
                 raise GraphValidationError(
                     f"unsupported graph node type: {node_type!r}"
                 )
@@ -153,7 +156,9 @@ class GraphSpec:
 OutputT = TypeVar("OutputT", covariant=True)
 
 
-class Graph(Generic[OutputT]):
+
+
+class Graph(GraphManagement, Generic[OutputT]):
     """
     Public graph expression API.
 
@@ -164,17 +169,35 @@ class Graph(Generic[OutputT]):
     def __init__(
         self,
         *,
-        outputs: Sequence["Graph[Panel]"] | None = None,
+        outputs: Sequence["Graph[Node]"] | None = None,
         _nodes: Sequence[Node] | None = None,
+        store=None, graph_id: str | None = None,
     ) -> None:
+        if store is not None and (outputs is not None or _nodes is not None):
+            raise ValueError("stored graphs must merge definitions and bind execution inputs explicitly")
+        self._store = store
+        self.graph_id = graph_id
+        if store is not None:
+            if not graph_id:
+                raise ValueError("a stored graph requires graph_id")
+            state = store.graph_state(graph_id)
+            self._logical_specification = state["spec"]
+            self._statuses = state["statuses"]
         sources = sum(value is not None for value in (outputs, _nodes))
+        if sources == 0:
+            from .logical import LogicalGraphSpec
+            self._nodes = self._outputs = ()
+            self._output_aliases = {}
+            if not hasattr(self, "_logical_specification"):
+                self._logical_specification = LogicalGraphSpec({}, ())
+            return
         if sources != 1:
             raise ValueError("Graph requires exactly one of outputs or _nodes")
 
         if outputs is not None:
             if not outputs:
                 raise ValueError("Graph requires at least one output")
-            self._outputs = tuple(graph._single_output() for graph in outputs)
+            self._outputs = tuple(outputs)
         else:
             assert _nodes is not None
             if not _nodes:
@@ -186,9 +209,9 @@ class Graph(Generic[OutputT]):
         self.validate()
 
     @classmethod
-    def from_logical_spec(cls, specification: LogicalGraphSpec | Mapping[str, Any], *, inputs: Mapping[str, "Panel"],
+    def from_logical_spec(cls, specification: LogicalGraphSpec | Mapping[str, Any], *, inputs: Mapping[str, "Node"] | None = None,
                           parameter_bindings: Mapping[str, Any] | None = None,
-                          node_bindings: Mapping[str, "Panel"] | None = None) -> "Graph[Panel]":
+                          node_bindings: Mapping[str, "Node"] | None = None) -> "Graph[Node]":
         """Bind sources and caller-proven intermediate values to an immutable DAG.
 
         ``node_bindings`` cuts execution dependencies at explicit operator nodes.
@@ -196,17 +219,18 @@ class Graph(Generic[OutputT]):
         does not certify a full-domain materialization or alter the logical DAG.
         """
 
-        from .logical import LogicalGraphSpec
-        from .operator import OPERATOR_REGISTRY, OperationNode
-        from .panel import Panel
+        from bagelquant_core.logical import LogicalGraphSpec
+        from bagelquant_core.operator import OPERATOR_REGISTRY
+        from bagelquant_core.node import Node
 
         spec = specification if isinstance(specification, LogicalGraphSpec) else LogicalGraphSpec.from_dict(specification)
+        spec, normalization = spec.normalized()
         bindings = dict(parameter_bindings or {})
-        retained = dict(node_bindings or {})
+        retained = {normalization.get(key, key): value for key, value in (node_bindings or {}).items()}
         declared = {node.node_id: node for node in spec.nodes}
         if any(key not in declared or declared[key].node_type != "operator" for key in retained):
             raise GraphValidationError("node bindings must reference declared logical operator nodes")
-        if any(not isinstance(panel, Panel) for panel in retained.values()):
+        if any(not isinstance(panel, Node) for panel in retained.values()):
             raise GraphValidationError("node bindings require typed Panels")
         required: set[str] = set()
         pending = list(spec.outputs.values())
@@ -222,13 +246,17 @@ class Graph(Generic[OutputT]):
         value_types: dict[str, str] = {}
         for node in spec.nodes:
             if node.node_type == "input":
-                value_types[node.node_id] = node.parameters.get("value_type", "panel")
+                value_types[node.node_id] = node.parameters.get("value_type", "numeric")
             else:
                 registered = OPERATOR_REGISTRY.get(node.operator)
-                primary = [value_types[parent] for parent in node.inputs]
-                value_types[node.node_id] = ("prediction" if registered.input_mode == "prediction_composer" or (
-                    primary and all(value == "prediction" for value in primary) and registered.output_type != "weights")
-                    else "category" if registered.input_mode == "transformer" and primary[0] == "category" else "panel")
+                value_types[node.node_id] = registered.infer_type(
+                    tuple(value_types[parent] for parent in node.inputs),
+                    {role: tuple(value_types[parent] for parent in values) for role, values in node.panel_parameters.items()}).value
+
+        if inputs is None and not retained:
+            graph = cls()
+            graph._logical_specification = spec
+            return graph
 
         def resolve(value):
             if isinstance(value, str) and value.startswith("$"):
@@ -248,36 +276,45 @@ class Graph(Generic[OutputT]):
                 panel = retained[node.node_id]
                 if panel.config()["value_type"] != value_types[node.node_id]:
                     raise GraphValidationError(f"logical node {node.node_id!r} requires {value_types[node.node_id]}")
-                bound = type(panel).from_domain(panel.lazy(include_traces=True), panel.domain, name=node.node_id,
+                bound = Node.from_domain(panel.lazy(include_traces=True), panel.domain, value_type=panel.value_type, name=node.node_id,
                     identity=panel.identity, trace_identity=panel.trace_identity,
                     trace_columns=panel.trace_columns, source_key=node.node_id)
                 bound._logical_id_override = node.node_id
+                bound._materialization_identity = panel.identity
+                bound._durable_identity = panel._durable_identity
+                bound._execution_guards = getattr(panel, "_execution_guards", ())
                 by_id[node.node_id] = bound
                 continue
             if node.node_type == "input":
+                if inputs is None:
+                    by_id[node.node_id] = Node.symbolic(node.input_key, name=node.node_id, value_type=node.parameters.get("value_type", "numeric"))
+                    by_id[node.node_id]._logical_id_override = node.node_id
+                    continue
                 if node.input_key not in inputs:
                     raise GraphValidationError(f"missing logical input: {node.input_key}")
                 panel = inputs[node.input_key]
                 actual_type = panel.config()["value_type"]
-                if actual_type != node.parameters.get("value_type", "panel"):
+                if actual_type != node.parameters.get("value_type", "numeric"):
                     raise GraphValidationError(f"logical input {node.input_key!r} requires {node.parameters['value_type']}, got {actual_type}")
-                by_id[node.node_id] = type(panel).from_domain(
-                    panel.lazy(include_traces=True), panel.domain, name=node.node_id,
+                by_id[node.node_id] = Node.from_domain(
+                    panel.lazy(include_traces=True), panel.domain, value_type=panel.value_type, name=node.node_id,
                     identity=panel.identity, trace_identity=panel.trace_identity,
                     trace_columns=panel.trace_columns, source_key=node.input_key,
                 )
                 by_id[node.node_id]._logical_id_override = node.node_id
+                by_id[node.node_id]._durable_identity = panel._durable_identity
+                by_id[node.node_id]._execution_guards = getattr(panel, "_execution_guards", ())
                 continue
             registered = OPERATOR_REGISTRY.get(node.operator)
             config = resolve(node.parameters)
             operation = registered
             if registered.factory is not None:
                 operation = registered.factory(**{key: value for key, value in config.items() if key != "alpha_count"})
-            by_id[node.node_id] = OperationNode(inputs=tuple(by_id[parent] for parent in node.inputs),
+            by_id[node.node_id] = Node.from_operation(inputs=tuple(by_id[parent] for parent in node.inputs),
                 panel_parameters={key: tuple(by_id[parent] for parent in parents) for key, parents in node.panel_parameters.items()},
-                operation=operation, config=config, input_mode=registered.input_mode, name=node.node_id)
+                operation=operation, config=config, name=node.node_id)
             by_id[node.node_id]._logical_id_override = node.node_id
-        graph = cls._from_nodes(tuple(by_id[node_id] for node_id in dict.fromkeys(spec.outputs.values())))
+        graph = cls._from_nodes(tuple(by_id[node_id] for node_id in dict.fromkeys(spec.outputs.values()))) if spec.outputs else cls()
         graph._output_aliases = {alias: by_id[node_id].name for alias, node_id in spec.outputs.items()}
         graph._logical_specification = spec
         return graph
@@ -285,25 +322,27 @@ class Graph(Generic[OutputT]):
     def logical_spec(self, *, input_keys: Mapping[str, str] | None = None) -> LogicalGraphSpec:
         """Intern structural sharing independently of bound data identities."""
 
-        from .logical import canonicalize_graph
+        from bagelquant_core.logical import canonicalize_graph
 
+        if getattr(self, "_store", None) is not None:
+            return self._store.graph_state(self.graph_id)["spec"]
         if hasattr(self, "_logical_specification"):
             if input_keys:
                 raise ValueError("a bound logical graph cannot redefine its immutable source keys")
             return self._logical_specification
 
-        keys = {node.name: getattr(node, "source_key", node.name) for node in self._nodes if node.node_type == "panel"}
+        keys = {node.name: getattr(node, "source_key", node.name) for node in self._nodes if node.node_type == "input"}
         keys.update(input_keys or {})
         return canonicalize_graph(self.spec(), input_keys=keys, output_aliases=self._output_aliases)
 
-    def _present_outputs(self, values: Mapping[str, "Panel"]):
+    def _present_outputs(self, values: Mapping[str, "Node"]):
         results = {alias: values[name] for alias, name in self._output_aliases.items()}
         if len(results) == 1:
             return next(iter(results.values()))
         return results
 
     @classmethod
-    def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph[Panel]":
+    def _from_nodes(cls, nodes: Sequence[Node]) -> "Graph[Node]":
         return Graph(_nodes=nodes)
 
     @classmethod
@@ -312,23 +351,23 @@ class Graph(Generic[OutputT]):
     ) -> "CompiledGraph":
         """Validate and resolve a reusable declarative graph template."""
 
-        return CompiledGraph(cls.validate_spec(specification))
+        return CompiledGraph(cls.validate_spec(specification, validate_types=False))
 
     @classmethod
     def from_spec(
         cls,
         specification: GraphSpec | Mapping[str, Any],
         *,
-        inputs: Mapping[str, "Panel"],
-    ) -> "Graph[Panel]":
+        inputs: Mapping[str, "Node"],
+    ) -> "Graph[Node]":
         """Compile a declarative graph using registered safe operations.
 
-        Panel nodes are symbolic references resolved from ``inputs``.
-        Transformer and composer names resolve through BagelQuant's registries;
+        Node nodes are symbolic references resolved from ``inputs``.
+        Operator and operator names resolve through BagelQuant's registries;
         arbitrary Python callables are never deserialized.
         """
 
-        spec = cls.validate_spec(specification)
+        spec = cls.validate_spec(specification, validate_types=False)
         return cls._from_validated_spec(spec, inputs=inputs)
 
     @classmethod
@@ -336,18 +375,23 @@ class Graph(Generic[OutputT]):
         cls,
         spec: GraphSpec,
         *,
-        inputs: Mapping[str, "Panel"],
-    ) -> "Graph[Panel]":
+        inputs: Mapping[str, "Node"],
+    ) -> "Graph[Node]":
         """Bind inputs without repeating topology and signature validation."""
 
-        from .operator import OPERATOR_REGISTRY, OperationNode
+        from bagelquant_core.operator import OPERATOR_REGISTRY
 
         by_name: dict[str, Node] = {}
         for node in spec.nodes:
-            if node.node_type == "panel":
+            if node.node_type == "input":
                 if node.name not in inputs:
                     raise GraphValidationError(f"missing symbolic panel input: {node.name}")
-                by_name[node.name] = inputs[node.name]
+                value = inputs[node.name]
+                if not isinstance(value, Node):
+                    raise TypeError("graph sources must be Nodes")
+                if "value_type" in node.config and value.value_type != node.config["value_type"]:
+                    raise TypeError(f"source {node.name!r} has an incompatible value type")
+                by_name[node.name] = value
                 continue
             config = dict(node.config)
             registered = OPERATOR_REGISTRY.get(config.pop("operator"))
@@ -355,39 +399,41 @@ class Graph(Generic[OutputT]):
             if registered.factory is not None:
                 parameters = {key: value for key, value in config.items() if key != "alpha_count"}
                 operation = registered.factory(**parameters)
-            by_name[node.name] = OperationNode(
+            by_name[node.name] = Node.from_operation(
                 inputs=tuple(by_name[parent] for parent in node.inputs),
                 panel_parameters={key: tuple(by_name[parent] for parent in values)
                                   for key, values in node.panel_parameters.items()},
-                operation=operation, config=config, input_mode=registered.input_mode,
+                operation=operation, config=config,
                 name=node.name, metadata=node.metadata,
             )
         return Graph(_nodes=tuple(by_name[name] for name in spec.outputs))
 
     @classmethod
     def validate_spec(
-        cls, specification: GraphSpec | Mapping[str, Any]
+        cls, specification: GraphSpec | Mapping[str, Any], *, validate_types: bool = True
     ) -> GraphSpec:
         """Validate topology, registered operators, and operator parameters."""
 
-        from .operator import OPERATOR_REGISTRY
+        from bagelquant_core.operator import OPERATOR_REGISTRY
 
         spec = specification if isinstance(specification, GraphSpec) else GraphSpec.from_dict(specification)
         declared_names = [node.name for node in spec.nodes]
         if len(declared_names) != len(set(declared_names)):
             raise GraphValidationError("graph specification has duplicate node names")
         seen: set[str] = set()
+        value_types = {}
         for node in spec.nodes:
-            if node.node_type not in {"panel", "operator"}:
+            if node.node_type not in {"input", "operator"}:
                 raise GraphValidationError(f"unsupported graph node type: {node.node_type!r}")
             dependencies = (*node.inputs, *(value for values in node.panel_parameters.values() for value in values))
             context = tuple(parent for parents in node.metadata.get("context_dependencies", {}).values() for parent in parents)
             missing = [parent for parent in (*dependencies, *context) if parent not in seen]
             if missing:
                 raise GraphValidationError(f"graph node {node.name!r} has unresolved or forward dependencies: {missing}")
-            if node.node_type == "panel":
+            if node.node_type == "input":
                 if dependencies:
                     raise GraphValidationError(f"panel node {node.name!r} cannot have dependencies")
+                value_types[node.name] = node.config.get("value_type", node.metadata.get("value_type", "numeric"))
                 seen.add(node.name)
                 continue
             config = dict(node.config)
@@ -398,14 +444,14 @@ class Graph(Generic[OutputT]):
                 operation = OPERATOR_REGISTRY.get(operation_name)
                 operation.validate_input_count(len(node.inputs))
                 if operation.factory is not None:
-                    if node.panel_parameters:
-                        raise ValueError("model label inputs must be positional dependencies")
                     alpha_count = config.pop("alpha_count", None)
                     if not isinstance(alpha_count, int) or isinstance(alpha_count, bool) or alpha_count <= 0:
                         raise ValueError("alpha_count must be a positive integer")
                     model = operation.factory(**config)
                     model._validate_alpha_count(alpha_count)
-                    expected = alpha_count + (2 if model.supervised else 0)
+                    expected = alpha_count
+                    if set(node.panel_parameters) != set(operation.panel_parameter_kinds):
+                        raise ValueError("model auxiliary inputs do not match declared roles")
                     if len(node.inputs) != expected:
                         raise ValueError(f"expected {expected} inputs, got {len(node.inputs)}")
                 else:
@@ -421,6 +467,14 @@ class Graph(Generic[OutputT]):
                     signature(operation.operation).bind(*(object() for _ in node.inputs), **panel_arguments, **config)
             except (KeyError, TypeError, ValueError) as error:
                 raise GraphValidationError(f"invalid operator {node.name!r}: {error}") from error
+            if not validate_types:
+                seen.add(node.name)
+                continue
+            try:
+                value_types[node.name] = operation.infer_type(tuple(value_types[parent] for parent in node.inputs),
+                    {role: tuple(value_types[parent] for parent in values) for role, values in node.panel_parameters.items()}).value
+            except (TypeError, ValueError) as error:
+                raise GraphValidationError(f"invalid types for {node.name!r}: {error}") from error
             seen.add(node.name)
         missing_outputs = [name for name in spec.outputs if name not in seen]
         if missing_outputs:
@@ -445,7 +499,7 @@ class Graph(Generic[OutputT]):
         *,
         dense_output: bool = True,
     ) -> OutputT:
-        from .execution import ExecutionRuntime
+        from bagelquant_core.execution import ExecutionRuntime
 
         executor = runtime or ExecutionRuntime()
         return cast(OutputT, executor.run(self, dense_output=dense_output))
@@ -516,10 +570,10 @@ class Graph(Generic[OutputT]):
                 if not isinstance(parent, Node):
                     raise GraphValidationError(f"invalid parent on {node.name}: {type(parent)}")
             if node.node_type == "operator":
-                if node.execution_kind == "prediction_composer":
+                if node._registered.factory is not None:
                     alpha_count = node.config()["alpha_count"]
                     node.operation._validate_alpha_count(alpha_count)
-                    expected = alpha_count + (2 if node.operation.supervised else 0)
+                    expected = alpha_count
                     if len(node.spec_inputs()) != expected:
                         raise GraphValidationError(f"{node.name} requires {expected} inputs")
                 else:
@@ -531,7 +585,7 @@ class Graph(Generic[OutputT]):
     def spec(self) -> GraphSpec:
         return GraphSpec(
             outputs=tuple(node.name for node in self._outputs),
-            nodes=tuple(node.spec() for node in self._nodes),
+            nodes=tuple(node.definition() for node in self._nodes),
         )
 
 
@@ -541,17 +595,17 @@ class CompiledGraph:
 
     specification: GraphSpec
 
-    def bind(self, inputs: Mapping[str, "Panel"]) -> Graph["Panel"]:
+    def bind(self, inputs: Mapping[str, "Node"]) -> Graph["Node"]:
         return Graph._from_validated_spec(self.specification, inputs=inputs)
 
     def compute(
         self,
-        inputs: Mapping[str, "Panel"],
+        inputs: Mapping[str, "Node"],
         *,
         runtime: "ExecutionRuntime | None" = None,
         dense_output: bool = True,
-    ) -> "Panel | Mapping[str, Panel]":
-        from .execution import ExecutionRuntime
+    ) -> "Node | Mapping[str, Node]":
+        from bagelquant_core.execution import ExecutionRuntime
 
         executor = runtime or ExecutionRuntime()
         return executor.run(

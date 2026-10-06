@@ -1,23 +1,22 @@
 """Public API for BagelQuant Core graph and panel primitives.
 
 Import from this module for the stable surface used by factor workflow code:
-``Domain`` and ``Panel`` define aligned research data, ``Graph`` represents lazy
+``Domain`` and ``Node`` define aligned research data, ``Graph`` represents lazy
 operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 """
 
-from .node import Node
-from .logical import LogicalNodeSpec, LogicalGraphSpec, canonicalize_graph
-from .materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationLookup, MaterializationStatus, materialization_trace_identity
-from .operator import Operator, OperationNode, OPERATOR_REGISTRY
-from .portfolio_values import PortfolioValue, rebalance, rebalance_value, top_n, equal_weight, regularized_weights, exposure_constrained_weights
-from .execution import ExecutionRuntime
-from .graph import CompiledGraph, Graph, GraphSpec, GraphValidationError
-from .machine_learning import (
+from bagelquant_core.node import Node
+from bagelquant_core.logical import LogicalNodeSpec, LogicalGraphSpec, canonicalize_graph
+from bagelquant_core.materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationLookup, MaterializationStatus, materialization_trace_identity
+from bagelquant_core.operator import Operator, OPERATOR_REGISTRY
+from bagelquant_core.operator.portfolio import PortfolioValue, rebalance, rebalance_value, top_n, equal_weight, regularized_weights, exposure_constrained_weights
+from bagelquant_core.execution import ExecutionRuntime
+from bagelquant_core.graph import CompiledGraph, Graph, GraphSpec, GraphValidationError
+from bagelquant_core.machine_learning import (
     ElasticNetCandidate,
     ElasticNetConfig,
     ElasticNetModel,
     ElasticNetSearchMode,
-    ElasticNetPredictionComposer,
     LabelBoundary,
     WalkForwardConfig,
     WalkForwardFold,
@@ -33,38 +32,42 @@ from .machine_learning import (
     fit_elastic_net_from_moments,
     zero_preserving_rms_scaler_from_moments,
 )
-from .operation_contract import (
+from bagelquant_core.operation_contract import (
     ExecutionMode,
     InputDensity,
     OperationContract,
     TraceRule,
     causal_history_requirements,
 )
-from .panel import CategoryPanel, Domain, Panel, PredictionPanel
-from .prediction import (
-    EqualWeightPredictionComposer,
+from bagelquant_core.node import Domain
+from bagelquant_core.operator.prediction import (
+    EqualWeightPredictionOperator,
     FamaMacBethOLSResult,
-    GLSPredictionComposer,
-    ICWeightedDecayPredictionComposer,
-    ICWeightedPredictionComposer,
-    IdentityPredictionComposer,
-    OLSPredictionComposer,
-    PredictionComposer,
+    GLSPredictionOperator,
+    ICWeightedDecayPredictionOperator,
+    ICWeightedPredictionOperator,
+    IdentityPredictionOperator,
+    OLSPredictionOperator,
+    PredictionOperator,
     PredictionTrainingContext,
-    QuantileICWeightedPredictionComposer,
+    QuantileICWeightedPredictionOperator,
     fama_macbeth_ols_prediction,
     quantile_rank_information_coefficient,
 )
-from .transformer import pct_change_frame, canonicalize_values, project_domain
-from .prediction_processing import (
+from bagelquant_core.operator import pct_change_frame, canonicalize_values, project_domain
+from bagelquant_core.prediction_processing import (
     PredictionSmoothingConfig,
     PredictionSmoothingResult,
     PredictionSmoothingState,
     smooth_prediction,
 )
 
-from .operator_state import capture_operator_checkpoints
-from .training_operators import rolling_elastic_net_prediction, rolling_lightgbm_prediction, capture_training_audits, date_balanced_training_keys
+from bagelquant_core.operator_state import capture_operator_checkpoints
+from bagelquant_core.operator.training import rolling_elastic_net_prediction, rolling_lightgbm_prediction, capture_training_audits, date_balanced_training_keys
+
+from .store import CoreStore, RevisionConflict
+from .node import ValueType
+from .graph_management import MergeResult
 
 __all__ = [
     "LogicalNodeSpec", "LogicalGraphSpec", "canonicalize_graph",
@@ -73,8 +76,7 @@ __all__ = [
     "materialization_trace_identity",
     "canonicalize_values", "project_domain",
     "PortfolioValue", "rebalance", "rebalance_value", "top_n", "equal_weight", "regularized_weights",
-    "Node", "Operator", "OperationNode", "OPERATOR_REGISTRY",
-    "CategoryPanel",
+    "Node", "Operator", "OPERATOR_REGISTRY",
     "CompiledGraph",
     "Domain",
     "ExecutionMode",
@@ -88,18 +90,15 @@ __all__ = [
     "ElasticNetConfig",
     "ElasticNetModel",
     "ElasticNetSearchMode",
-    "ElasticNetPredictionComposer",
     "InputDensity",
     "LabelBoundary",
     "OperationContract",
-    "Panel",
-    "PredictionComposer",
-    "PredictionPanel",
+    "PredictionOperator",
     "PredictionSmoothingConfig",
     "PredictionSmoothingResult",
     "PredictionSmoothingState",
     "PredictionTrainingContext",
-    "QuantileICWeightedPredictionComposer",
+    "QuantileICWeightedPredictionOperator",
     "WalkForwardConfig",
     "WalkForwardFold",
     "WeightedRegressionMoments",
@@ -113,12 +112,12 @@ __all__ = [
     "fit_elastic_net",
     "fit_elastic_net_from_moments",
     "fama_macbeth_ols_prediction",
-    "IdentityPredictionComposer",
-    "EqualWeightPredictionComposer",
-    "ICWeightedDecayPredictionComposer",
-    "ICWeightedPredictionComposer",
-    "OLSPredictionComposer",
-    "GLSPredictionComposer",
+    "IdentityPredictionOperator",
+    "EqualWeightPredictionOperator",
+    "ICWeightedDecayPredictionOperator",
+    "ICWeightedPredictionOperator",
+    "OLSPredictionOperator",
+    "GLSPredictionOperator",
     "TraceRule",
     "pct_change_frame",
     "quantile_rank_information_coefficient",
@@ -129,3 +128,5 @@ __all__ = [
 __all__ += ['rolling_elastic_net_prediction', 'rolling_lightgbm_prediction', 'capture_training_audits', 'date_balanced_training_keys']
 __all__ += ['exposure_constrained_weights']
 __all__ += ['capture_operator_checkpoints']
+
+__all__ += ["CoreStore", "RevisionConflict", "ValueType", "MergeResult"]

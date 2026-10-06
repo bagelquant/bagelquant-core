@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from inspect import signature, Parameter
 from collections.abc import Mapping
 from typing import Any, Callable, TYPE_CHECKING
 
 import polars as pl
 
 if TYPE_CHECKING:
-    from .logical import LogicalGraphSpec
+    from bagelquant_core.logical import LogicalGraphSpec
 
 
 class ExecutionMode(StrEnum):
@@ -53,6 +54,8 @@ class OperationContract:
     density: InputDensity = InputDensity.SPARSE_OK
     trace_rule: TraceRule = TraceRule.PASSTHROUGH
     deterministic: bool = True
+    history: int | Callable[[Mapping[str, Any]], int | None] | None = None
+    checkpoint_replay: bool = False
     trace_function: TraceFunction | None = None
 
     def __post_init__(self) -> None:
@@ -62,7 +65,7 @@ class OperationContract:
             raise ValueError("trace_function is only valid for custom trace rules")
 
 
-_DENSE_TRANSFORMERS = {
+_DENSE_OPERATIONS = {
     "bfill",
     "constant",
     "date_age_constraint",
@@ -80,7 +83,7 @@ _DENSE_TRANSFORMERS = {
     "pct_change_from_last_change",
     "remove_repeated",
 }
-_EAGER_TRANSFORMERS = {
+_EAGER_REGRESSIONS = {
     "orthogonalize",
     "rolling_elastic_net",
     "rolling_lasso",
@@ -89,9 +92,9 @@ _EAGER_TRANSFORMERS = {
     "rolling_rank",
     "rolling_ridge",
 }
-_EAGER_COMPOSERS = {"broadcast_by_time"}
+_EAGER_ALIGNMENT = {"broadcast_by_time"}
 
-_PANEL_PARAMETER_TRANSFORMERS = {
+_AUXILIARY_OPERATIONS = {
     "group_demean",
     "group_max",
     "group_mean",
@@ -116,8 +119,6 @@ _PANEL_PARAMETER_TRANSFORMERS = {
 
 def default_operation_contract(
     operation: Callable[..., Any],
-    *,
-    kind: str,
 ) -> OperationContract:
     """Return a conservative contract for built-ins and external extensions."""
 
@@ -132,18 +133,15 @@ def default_operation_contract(
         )
 
     dense = (
-        name in _DENSE_TRANSFORMERS
+        name in _DENSE_OPERATIONS
         or name.startswith("rolling_")
         or name.startswith("ewm_")
     )
-    eager = (
-        name in _EAGER_TRANSFORMERS
-        if kind == "transformer"
-        else name in _EAGER_COMPOSERS
-    )
+    eager = name in _EAGER_REGRESSIONS | _EAGER_ALIGNMENT
+    arity = tuple(p for p in signature(operation).parameters.values() if p.kind in {Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD, Parameter.VAR_POSITIONAL})
     trace_rule = (
-        _transformer_trace_rule(name)
-        if kind == "transformer"
+        _operator_trace_rule(name)
+        if len(arity) == 1 and arity[0].kind != Parameter.VAR_POSITIONAL
         else TraceRule.PARENT_MAX
     )
     return OperationContract(
@@ -154,11 +152,13 @@ def default_operation_contract(
             InputDensity.DENSE_REQUIRED if dense else InputDensity.SPARSE_OK
         ),
         trace_rule=trace_rule,
+        history=lambda parameters: _finite_history(operation, parameters),
+        checkpoint_replay=name in {"ewm_mean", "ewm_var", "ewm_std"},
     )
 
 
-def _transformer_trace_rule(name: str) -> TraceRule:
-    if name in _PANEL_PARAMETER_TRANSFORMERS:
+def _operator_trace_rule(name: str) -> TraceRule:
+    if name in _AUXILIARY_OPERATIONS:
         return TraceRule.PARENT_MAX
     if name == "lag":
         return TraceRule.SHIFT
@@ -193,8 +193,8 @@ def causal_history_requirements(specification: LogicalGraphSpec | Mapping[str, A
     Universe gaps require a membership-based halo proof by the caller. This
     helper never proves input-prefix integrity or stateful checkpoint reuse.
     """
-    from .logical import LogicalGraphSpec
-    from .operator import OPERATOR_REGISTRY
+    from bagelquant_core.logical import LogicalGraphSpec
+    from bagelquant_core.operator import OPERATOR_REGISTRY
 
     spec = (specification if isinstance(specification, LogicalGraphSpec)
             else LogicalGraphSpec.from_dict(specification))
@@ -204,7 +204,7 @@ def causal_history_requirements(specification: LogicalGraphSpec | Mapping[str, A
             result[node.node_id] = 0
             continue
         operator = OPERATOR_REGISTRY.get(node.operator)
-        own = _finite_history(operator.operation, node.parameters)
+        own = operator.history(node.parameters)
         parents = [result[parent] for parent in (*node.inputs,
             *(parent for values in node.panel_parameters.values() for parent in values))]
         result[node.node_id] = (None if own is None or any(value is None for value in parents)
@@ -216,8 +216,8 @@ def _finite_history(operation: Callable[..., Any], parameters: Mapping[str, Any]
     module, name = operation.__module__, operation.__name__
     if not module.startswith("bagelquant_core."):
         return None
-    if name == "smooth" and module == "bagelquant_core.transformer.rolling":
-        from .transformer.rolling import _SMOOTH_WINDOW
+    if name == "smooth" and module == "bagelquant_core.operator.rolling_stats":
+        from bagelquant_core.operator.rolling_stats import _SMOOTH_WINDOW
         return _SMOOTH_WINDOW - 1
     if name in {"lag", "diff", "pct_change"}:
         return _history_parameter(parameters.get("periods", 1))
@@ -236,18 +236,18 @@ def _finite_history(operation: Callable[..., Any], parameters: Mapping[str, Any]
     pointwise_modules = {"basic", "boxcox", "logarithmic", "outlier", "normalization",
         "power", "ranking", "replace", "sign", "translation", "trigonometric",
         "variance_stabilization"}
-    if module.startswith("bagelquant_core.transformer.") and module.rsplit(".", 1)[-1] in pointwise_modules:
+    if module.startswith("bagelquant_core.operator.") and module.rsplit(".", 1)[-1] in pointwise_modules:
         return 0
-    if module == "bagelquant_core.transformer.general" and name in {
+    if module == "bagelquant_core.operator.temporal" and name in {
         "canonicalize_values", "project_domain", "notnan", "denoise", "posonly", "negonly",
         "constant", "replace_inf"}:
         return 0
-    if module == "bagelquant_core.transformer.missing" and name in {"fillna", "fillna_zero"}:
+    if module == "bagelquant_core.operator.missing" and name in {"fillna", "fillna_zero"}:
         return 0
-    if module.startswith("bagelquant_core.composer.") and module.rsplit(".", 1)[-1] in {
-        "arithmetic", "aggregation", "math", "xsectional", "scaling"}:
+    if module.startswith("bagelquant_core.operator.") and module.rsplit(".", 1)[-1] in {
+        "arithmetic", "aggregation", "comparison", "cross_sectional", "scaling"}:
         return 0
-    if module == "bagelquant_core.composer.general" and name in {"project", "mask", "coalesce"}:
+    if module == "bagelquant_core.operator.combination" and name in {"project", "mask", "coalesce"}:
         return 0
     return None
 

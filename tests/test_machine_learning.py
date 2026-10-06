@@ -8,7 +8,6 @@ import pytest
 from bagelquant_core import (
     ElasticNetConfig,
     ElasticNetModel,
-    ElasticNetPredictionComposer,
     LabelBoundary,
     WeightedRegressionMoments,
     WalkForwardConfig,
@@ -245,29 +244,3 @@ def test_moment_weight_rescaling_rejects_invalid_scale(factor: float) -> None:
     moments = WeightedRegressionMoments.empty(1)
     with pytest.raises(ValueError, match="positive and finite"):
         moments.scale_weights(factor)
-
-
-def test_elastic_net_composer_round_trips_complete_configuration() -> None:
-    composer = ElasticNetPredictionComposer(
-        walk_forward=WalkForwardConfig(),
-        coverage={
-            "minimum_all_market_observations": 2,
-            "minimum_applicable_coverage": 0.7,
-            "required_marker_unknown_policy": "reject_if_required_marker_unknown",
-        },
-        target={
-            "uuid": "target-1",
-            "revision": 2,
-            "revision_hash": "a" * 64,
-            "definition": {"frequency": "monthly"},
-        },
-        elastic_net=ElasticNetConfig(),
-        validation={"objective": "mean_ic", "minimum_valid_months": 18},
-    )
-
-    restored = ElasticNetPredictionComposer.from_dict(composer.to_dict())
-
-    assert restored.to_dict() == composer.to_dict()
-    assert restored.to_dict()["scaling"]["method"] == (
-        "weighted_rms_without_centering"
-    )

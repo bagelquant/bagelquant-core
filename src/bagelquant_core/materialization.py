@@ -1,4 +1,4 @@
-"""Generic immutable numerical results; applications own durable storage.
+"""Generic immutable numerical results persisted by CoreStore at caller paths.
 
 Logical definitions never contain these execution keys. Input identities must
 be backed by immutable content receipts supplied by the caller, not filenames
@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, runtime_checkable
 from enum import StrEnum
 
-from .hashing import hash_mapping
-from .panel import Panel
+from bagelquant_core.hashing import hash_mapping
+from bagelquant_core.node import Node
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,12 +70,12 @@ class NodeMaterialization:
     """A typed value with the evidence produced by that exact computation.
 
 Artifacts are generic named outputs (for example a decisions table), rather
-than application object metadata. Store implementations must retain Panel
+than application object metadata. Store implementations must retain Node
 type, sparse keys, Domain, traces, checkpoints and fit audits together.
 """
 
     key: MaterializationKey
-    panel: Panel
+    panel: Node
     artifacts: Mapping[str, Any] = field(default_factory=dict)
     checkpoint: Mapping[str, Any] | None = None
     training_audits: tuple[Mapping[str, Any], ...] = ()

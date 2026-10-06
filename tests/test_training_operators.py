@@ -3,7 +3,7 @@ import polars as pl
 import pytest
 from bagelquant_core import (
     Domain,
-    Panel,
+    Node,
     rolling_elastic_net_prediction,
     exposure_constrained_weights,
     capture_training_audits,
@@ -30,8 +30,8 @@ def test_training_audit_and_row_label_boundaries_are_causal():
     late = frame.with_columns(pl.lit(date(2024, 1, 10).toordinal()).alias("value"))
     with capture_training_audits() as audits:
         rolling_elastic_net_prediction(
-            Panel.from_domain(frame, domain), labels=Panel.from_domain(frame, domain),
-            label_available=Panel.from_domain(late, domain), label_end=Panel.from_domain(late, domain),
+            Node.from_domain(frame, domain), labels=Node.from_domain(frame, domain),
+            label_available=Node.from_domain(late, domain), label_end=Node.from_domain(late, domain),
             window=5, fit_every=2, min_samples=4, max_samples=7, label_maturity=2,
         ).compute().collect()
     assert all(row["sample_count"] == 0 for row in audits if row["fit_date"] < date(2024, 1, 10))
@@ -56,7 +56,7 @@ def panels():
 
 def test_training_cannot_observe_unmatured_or_future_labels():
     frame, domain = panels()
-    source = Panel.from_domain(frame, domain)
+    source = Node.from_domain(frame, domain)
     labels = frame.with_columns((pl.col("value") * 2).alias("value"))
 
     def compute(label):
@@ -64,7 +64,7 @@ def test_training_cannot_observe_unmatured_or_future_labels():
             output = (
                 rolling_elastic_net_prediction(
                     source,
-                    labels=Panel.from_domain(label, domain),
+                    labels=Node.from_domain(label, domain),
                     window=5,
                     fit_every=2,
                     min_samples=4,
@@ -99,7 +99,7 @@ def test_exposure_constraints_and_missing_coordinates_are_explicit():
     frame, domain = panels()
     frame = frame.filter(pl.col("time") == date(2024, 1, 2))
     domain = Domain(calendar=[date(2024, 1, 2)], universe=list("ABCD"))
-    source = Panel.from_domain(frame, domain)
+    source = Node.from_domain(frame, domain)
     exposure = frame.with_columns(
         pl.col("asset_id")
         .replace_strict({"A": -1.0, "B": -1.0, "C": 1.0, "D": 1.0})
@@ -115,7 +115,7 @@ def test_exposure_constraints_and_missing_coordinates_are_explicit():
             max_weight=0.5,
         )
 
-    result = operator(Panel.from_domain(exposure, domain)).compute().collect()
+    result = operator(Node.from_domain(exposure, domain)).compute().collect()
     actual = (
         result.join(exposure.rename({"value": "exposure"}), on=["time", "asset_id"])
         .select((pl.col("value") * pl.col("exposure")).sum())
@@ -124,7 +124,7 @@ def test_exposure_constraints_and_missing_coordinates_are_explicit():
     assert abs(actual) <= 0.1000001
     with pytest.raises(ValueError, match="required exposure missing"):
         operator(
-            Panel.from_domain(exposure.filter(pl.col("asset_id") != "A"), domain)
+            Node.from_domain(exposure.filter(pl.col("asset_id") != "A"), domain)
         ).compute().collect()
 
 
@@ -136,8 +136,8 @@ def test_model_checkpoint_continuation_matches_full_and_does_not_refit_prefix():
         selected_domain = Domain(
             calendar=selected["time"].unique().sort(), universe=list("ABCD")
         )
-        source = Panel.from_domain(selected, selected_domain, source_key="features")
-        labels = Panel.from_domain(
+        source = Node.from_domain(selected, selected_domain, source_key="features")
+        labels = Node.from_domain(
             selected.with_columns((pl.col("value") * 2).alias("value")), selected_domain, source_key="labels"
         )
         with (
@@ -186,8 +186,8 @@ def test_training_phase_and_label_maturity_include_empty_universe_sessions():
                 pl.lit(True).alias("active")
             ),
         )
-        source = Panel.from_domain(local, domain, source_key="features")
-        labels = Panel.from_domain(
+        source = Node.from_domain(local, domain, source_key="features")
+        labels = Node.from_domain(
             local.with_columns((pl.col("value") * 2).alias("value")), domain, source_key="labels"
         )
         with (

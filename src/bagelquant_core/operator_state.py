@@ -1,4 +1,4 @@
-"""Explicit numerical checkpoint exchange; applications own prefix proof and I/O."""
+"""Explicit numerical checkpoint exchange; Core update plans own prefix proof and I/O."""
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -42,7 +42,7 @@ def operator_input_context(node_id):
 
 
 def save_operator_artifact(name: str, value: Any) -> None:
-    """Publish a generic named numerical output alongside the primary Panel."""
+    """Publish a generic named numerical output alongside the primary Node."""
     evidence, node = _evidence.get(), _node.get()
     if evidence is not None and node is not None:
         evidence.artifacts.setdefault(node[0], {})[name] = deepcopy(value)
@@ -66,7 +66,7 @@ def replay_node_evidence(node_id, *, artifacts, checkpoint, training_audits):
     context = _context.get()
     if context is not None and checkpoint is not None:
         context.captured[node_id] = deepcopy(checkpoint)
-    from .training_operators import replay_training_audits
+    from bagelquant_core.operator.training import replay_training_audits
     replay_training_audits(training_audits)
 
 

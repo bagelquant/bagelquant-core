@@ -4,7 +4,7 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from bagelquant_core import Domain, Graph, Panel, equal_weight, rebalance, rebalance_value, top_n
+from bagelquant_core import Domain, Graph, Node, equal_weight, rebalance, rebalance_value, top_n
 from bagelquant_core.optimization import solve_regularized_weights
 import numpy as np
 
@@ -14,7 +14,7 @@ def _inputs():
     frame = pl.DataFrame([{"time": day, "asset_id": asset, "value": 1.0}
                          for day in days for asset in ("A", "B", "C")])
     domain = Domain(calendar=days, universe=["A", "B", "C"])
-    return days, frame, Panel.from_domain(frame, domain, name="prediction")
+    return days, frame, Node.from_domain(frame, domain, name="prediction")
 
 
 def test_top_n_ties_full_exit_and_insufficient_cross_section():
@@ -33,12 +33,12 @@ def test_top_n_ties_full_exit_and_insufficient_cross_section():
 
 def test_rebalance_calendar_is_explicit_and_slice_does_not_move_anchor():
     days, frame, panel = _inputs()
-    calendar = Panel.from_domain(frame, panel.domain, name="calendar")
+    calendar = Node.from_domain(frame, panel.domain, name="calendar")
     graph = rebalance(equal_weight(top_n(panel, count=2)), every=5,
                       calendar=calendar, data_start=days[0].isoformat())
     specification = graph.spec().to_dict()
     assert specification["nodes"][-1]["panel_parameters"] == {"calendar": ["calendar"]}
-    assert 'calendar' in graph.nodes[-1].mermaid()
+    assert 'calendar' in graph.mermaid()
     restored = Graph.compile(specification).compute({"prediction": panel, "calendar": calendar}, dense_output=False)
     targets = restored.collect(dense=False).filter(pl.col("value").is_not_null())
     assert targets["time"].unique().sort().to_list() == [days[0], days[5], days[10]]

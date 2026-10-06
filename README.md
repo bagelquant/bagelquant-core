@@ -14,6 +14,8 @@ Python 3.13; install with `uv add bagelquant-core`. Optional extras: `ml`, `opti
 Development: `uv sync --all-extras`, `uv run ruff check .`,
 `uv run python -m pytest`, and
 `uv run python scripts/generate_operator_reference.py --check`.
+On macOS, install the CPU ML runtime's OpenMP dependency with
+`brew install libomp` before validating all extras.
 
 Version 0.11 uses new API and storage schemas. It provides no compatibility reader
 or migration. Real data and service cutover are separate operations.

@@ -21,9 +21,8 @@ freeze authority; Core owns numerical artifacts; BT owns account/evaluation
 artifacts. Workbench owns China semantics, app metadata, governance and task
 orchestration while referencing backend artifacts through public APIs.
 BT and Workbench are downstream consumers; read their owner rules only when
-changing a shared contract. Core docs are
-collected by the website from GitHub default branches, independently of workspace
-gitlinks; change documentation here, not in generated website content.
+changing a shared contract. Core docs stay in this repository. The website
+links to package documentation and does not collect or republish it.
 
 Integration discovery and standalone fallback are in [AGENTS.md](../AGENTS.md).
 After verifying an integration root, read its

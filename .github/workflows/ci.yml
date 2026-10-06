@@ -24,9 +24,16 @@ jobs:
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@v7
+      - name: Install OpenMP for LightGBM
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install libomp
       - name: Validate package
         working-directory: bagelquant-core
         run: |
-          uv sync --locked
+          uv sync --locked --all-extras
+          uv run --no-sync python -c "import cvxpy, lightgbm"
           uv run --no-sync ruff check .
+          uv run --no-sync python -c "from pathlib import Path; Path('.test-tmp').mkdir(parents=True, exist_ok=True)"
           uv run --no-sync python -m pytest --basetemp=.test-tmp/ci -o cache_dir=.test-tmp/cache

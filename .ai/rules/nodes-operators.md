@@ -15,3 +15,9 @@
 - The safe AST DSL, versioned operator contract and generated catalog belong to Core.
   Regenerate catalogs after exports/contract changes; never edit generated pages.
 - Tests cover zero/NaN/empty/sparse/type/trace equivalence and typed downstream boundaries.
+
+CURRENT_AND_SHIFT_MAX requires current trace support. Missing current support
+produces a null trace, even if the shifted coordinate is known. An explicitly
+known null value keeps its current trace; paired operations retain session-based
+numerics and do not bridge missing observations. Runtime kernel v2 separates
+new materializations from older trace evidence; historical receipts remain.

@@ -128,3 +128,10 @@ trace propagation, history and checkpoint eligibility). Unknown histories requir
 full computation. Optional ML/optimizer dependencies are imported only as needed.
 
 See the [generated Operator catalog](reference/operators/index.md).
+
+Paired temporal operations such as `diff` and `pct_change` require current trace
+support before combining current and shifted evidence. A missing current
+coordinate cannot inherit a prior-only availability trace. Known null values
+keep their current evidence, including the first undefined change. The
+`logical_runtime.v2` implementation identity prevents reuse of older trace
+materializations without altering logical identities or historical receipts.

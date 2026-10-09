@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _TIME_ASSET_ORDER = "time_asset"
 _ASSET_TIME_ORDER = "asset_time"
-EXECUTION_KERNEL_VERSION = "logical_runtime.v1"
+EXECUTION_KERNEL_VERSION = "logical_runtime.v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1932,7 +1932,10 @@ class ExecutionRuntime:
             for trace in available:
                 prior = pl.col(trace).shift(periods).over(ASSET_ID)
                 expressions.append(
-                    pl.max_horizontal(pl.col(trace), prior).alias(trace)
+                    pl.when(pl.col(trace).is_not_null())
+                    .then(pl.max_horizontal(pl.col(trace), prior))
+                    .otherwise(None)
+                    .alias(trace)
                 )
             transformed = base.with_columns(expressions)
         elif rule == TraceRule.ROLLING_MAX and "window" in config:

@@ -24,7 +24,9 @@
   orchestration, referencing backend artifacts. Generic conversion, computation,
   numerical persistence and reuse proofs must not be reimplemented there.
 - Follow rules -> Data -> Core -> BT -> Workbench -> new database/service restart.
-  Stages 2 and 3 implement Data and Core; BT and full Workbench cleanup remain later stages. Breaking refactors remove old paths without compatibility.
+  Stages 2–5 implement Data, Core, BT and thin Workbench composition. Stage 6
+  installs the service in Setup mode; databases are created only by explicit
+  initialization. Breaking cleanup removes old paths without compatibility.
 
 ## Implementation
 

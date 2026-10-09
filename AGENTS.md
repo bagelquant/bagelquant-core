@@ -25,7 +25,7 @@ Keep this entry short; detailed owner contracts live under `.ai/rules/`.
   live writes, permitting WAL/SHM coordination without initialization/recovery;
   default inspection leaves originals/sidecars untouched. Hot recovery fails closed.
 - Receipt descriptions validate published metadata without claiming a new byte
-  audit; selected value reads verify consumed Domain/partitions. Explicit full
+  audit; selected value reads decode typed Domain/partitions without rehashing. Explicit full
   integrity APIs retain all channels. Finite read contexts expire checksum proofs.
 - Explicit initialization enables WAL. Graph/status reads never initialize or
   acquire writer ownership; mutations retain revision/publication fences.

@@ -3,14 +3,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
-from threading import RLock
+from threading import RLock, Lock
 from uuid import uuid4
 from typing import Mapping
 
 from .execution import ExecutionRuntime
 from .graph_management import parents
 from .logical import LogicalGraphSpec
-from .materialization import MaterializationStatus
 from .resources import ResourceLimits, resource_limits
 from .store import RevisionConflict
 from .incremental import finite_execution_policies, execute_finite_node, execute_checkpoint_node
@@ -20,7 +19,8 @@ from .hashing import hash_mapping
 class UpdatePlan:
     """One frozen global or branch update, with no worker/admission policy."""
 
-    def __init__(self, graph, contexts: Mapping, *, through, roots=None):
+    def __init__(self, graph, contexts: Mapping, *, through, roots=None,
+                 input_loader=None, input_proof=None):
         from .graph import Graph
         if graph._store is None:
             raise ValueError("persistent updates require an explicit CoreStore")
@@ -32,6 +32,10 @@ class UpdatePlan:
         self.through = date.fromisoformat(str(through)).isoformat()
         self._lock = RLock()
         self._in_flight = set()
+        self._input_loader, self._input_proof = input_loader, input_proof
+        self._loaded_inputs = set()
+        self._input_locks = {}
+        self._domain_proofs = {}
         self.results = {context: {} for context in contexts}
         self._values = {context: {} for context in contexts}
         if not contexts:
@@ -69,6 +73,7 @@ class UpdatePlan:
                 if not len(value.domain.times) or str(value.domain.times.max()) != self.through:
                     raise ValueError(f"context {context_id!r} source {source!r} does not cover the requested final session")
             self._inputs[context_id] = dict(bindings)
+            self._input_locks.update({(context_id, source): Lock() for source in needed})
             self._parameters[context_id] = self.state["contexts"].get(context_id, {}).get("parameters", {})
             bound = Graph.from_logical_spec(self.spec, inputs=bindings, parameter_bindings=self._parameters[context_id])
             definition = self.state["contexts"].get(context_id)
@@ -118,23 +123,28 @@ class UpdatePlan:
         try:
             guard()
             key = self.keys[context_id][node_id]
-            lookup = self.store.query(key)
-            if lookup.status == MaterializationStatus.HIT:
-                result = lookup.materialization
+            hit = self.store.describe(key.identity)
+            if hit is not None:
+                result = self.store.lookup(key, domain=self.domains[context_id][node_id], evidence=False)
             elif node_id in self.policies[context_id]:
+                self._load_inputs(context_id, node_id, guard, limits)
                 with resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
                     result, usage = execute_finite_node(self.spec, node_id, inputs=self._inputs[context_id],
                         completed=self._values[context_id], parameters=self._parameters[context_id], key=key,
                         domain=self.domains[context_id][node_id], policy=self.policies[context_id][node_id],
-                        store=self.store, check_canceled=guard)
+                        store=self.store, check_canceled=guard,
+                        input_proof=self._proof_reader(context_id))
                 self.resource_usage[context_id][node_id] = usage
             elif self._checkpoint_supported(node_id):
+                self._load_inputs(context_id, node_id, guard, limits)
                 with resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
                     result, usage = execute_checkpoint_node(self.spec, node_id, inputs=self._inputs[context_id],
                         completed=self._values[context_id], parameters=self._parameters[context_id], key=key,
-                        domain=self.domains[context_id][node_id], store=self.store, check_canceled=guard)
+                        domain=self.domains[context_id][node_id], store=self.store, check_canceled=guard,
+                        input_proof=self._proof_reader(context_id))
                 self.resource_usage[context_id][node_id] = usage
             else:
+                self._load_inputs(context_id, node_id, guard, limits)
                 local = LogicalGraphSpec({node_id: node_id}, self.spec.nodes)
                 bound = Graph.from_logical_spec(local, inputs=self._inputs[context_id],
                     parameter_bindings=self._parameters[context_id], node_bindings=self._values[context_id])
@@ -153,6 +163,58 @@ class UpdatePlan:
         finally:
             with self._lock:
                 self._in_flight.discard((context_id, node_id))
+
+    def _load_inputs(self, context_id, node_id, guard, limits):
+        """Coalesce direct source reads; completed parents already own values."""
+        if self._input_loader is None:
+            return
+        sources = {node.node_id: node.input_key for node in self.spec.nodes if node.node_type == "input"}
+        for parent in parents(self._nodes[node_id]):
+            if parent not in sources:
+                continue
+            source = sources[parent]
+            locator = (context_id, source)
+            with self._input_locks[locator]:
+                guard()
+                if locator in self._loaded_inputs:
+                    continue
+                expected = self._inputs[context_id][source]
+                with resource_limits(limits or ResourceLimits()):
+                    value = self._input_loader(context_id, source)
+                if (value.identity != expected.identity or value.domain != expected.domain
+                        or value.value_type != expected.value_type or value.trace_columns != expected.trace_columns
+                        or value.trace_identity != expected.trace_identity):
+                    raise ValueError("immutable source identity changed after planning")
+                guard()
+                self._inputs[context_id][source] = value
+                self._loaded_inputs.add(locator)
+
+    def _proof_reader(self, context_id):
+        def proof(parent, value, start, end):
+            token = self.store.interval_identity(value.identity, start=start, end=end)
+            if token is not None:
+                return token
+            if self._input_proof is not None:
+                node = next(item for item in self.spec.nodes if item.node_id == parent)
+                if node.node_type == "input":
+                    token = self._input_proof(context_id, node.input_key, start, end)
+                    if token is None:
+                        return None
+                    from .computation_index import describe, interval
+                    locator = (value.domain.signature, value.value_type, value.trace_columns, start, end)
+                    with self._lock:
+                        domain_token = self._domain_proofs.get(locator)
+                    if domain_token is None:
+                        domain = describe(value.domain.window(start, end), days={}, value_type=value.value_type,
+                                          trace_columns=value.trace_columns)
+                        domain_token = interval(domain, start, end)
+                        with self._lock:
+                            if len(self._domain_proofs) >= 4096:
+                                self._domain_proofs.pop(next(iter(self._domain_proofs)))
+                            self._domain_proofs[locator] = domain_token
+                    return hash_mapping({"source": token, "domain": domain_token})
+            return value.interval_identity(start, end)
+        return proof
 
     def _checkpoint_supported(self, node_id):
         from .operator import OPERATOR_REGISTRY

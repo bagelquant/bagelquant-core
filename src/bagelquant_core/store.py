@@ -161,6 +161,9 @@ class CoreStore:
                 "CREATE TABLE IF NOT EXISTS updates(identity TEXT PRIMARY KEY,graph_id TEXT NOT NULL REFERENCES graphs(graph_id),receipt_json TEXT NOT NULL)",
             ):
                 connection.execute(statement)
+            if not tables:
+                from .computation_index import DDL
+                connection.execute(DDL)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         with sqlite3.connect(self.meta_path, timeout=30) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -213,7 +216,10 @@ class CoreStore:
     def _decode(self, value):
         if isinstance(value, dict):
             if "$file" in value:
-                return pl.read_parquet(self._file(value["$file"]))
+                try:
+                    return pl.read_parquet(self._file(value["$file"]))
+                except pl.exceptions.PolarsError as error:
+                    raise ValueError(f"corrupt or unreadable Core artifact: {value['$file']}") from error
             if "$date" in value:
                 return date.fromisoformat(value["$date"])
             if "$datetime" in value:
@@ -225,25 +231,29 @@ class CoreStore:
             return [self._decode(item) for item in value]
         return value
 
-    def lookup(self, key: MaterializationKey) -> NodeMaterialization | None:
+    def lookup(self, key: MaterializationKey, *, domain=None, evidence=True) -> NodeMaterialization | None:
         manifest = self.manifest(key.identity)
         if manifest is None:
             return None
         if manifest["key"] != key.to_dict():
             raise ValueError("materialization identity collision")
-        self.verify(manifest)
         saved_domain = manifest["domain"]
-        calendar = self._decode(saved_domain["calendar"])["time"]
-        membership = self._decode(saved_domain["membership"])
-        universe = membership.with_columns(pl.lit(True).alias("active")) if saved_domain["dynamic"] else membership["asset_id"]
-        domain = Domain(calendar=calendar, universe=universe, identity=key.domain_identity)
+        if domain is None:
+            calendar = self._decode(saved_domain["calendar"])["time"]
+            membership = self._decode(saved_domain["membership"])
+            universe = membership.with_columns(pl.lit(True).alias("active")) if saved_domain["dynamic"] else membership["asset_id"]
+            domain = Domain(calendar=calendar, universe=universe, identity=key.domain_identity)
+        elif domain.signature != key.domain_identity:
+            raise ValueError("materialization Domain does not match its key")
         frame = pl.scan_parquet([self._file(part["$file"]) for part in manifest["partitions"]])
-        value = Node.from_domain(frame, domain, name=key.node_id, source_key=key.node_id,
-            value_type=manifest["value_type"], identity=key.identity,
+        # This is an already published typed plan. Defer Parquet schema/value
+        # I/O until a caller actually consumes it.
+        value = Node._from_plan(frame, domain=domain, name=key.node_id, metadata=None,
+            value_type=manifest["value_type"], identity=key.identity, dense_output=False,
             trace_columns=manifest["trace_columns"], trace_identity=manifest["trace_identity"])
-        return NodeMaterialization(key, value, artifacts=self._decode(manifest["artifacts"]),
-            checkpoint=self._decode(manifest["checkpoint"]),
-            training_audits=tuple(self._decode(manifest["training_audits"])))
+        return NodeMaterialization(key, value, artifacts=self._decode(manifest["artifacts"]) if evidence else {},
+            checkpoint=self._decode(manifest["checkpoint"]) if evidence else None,
+            training_audits=tuple(self._decode(manifest["training_audits"])) if evidence else ())
 
     def query(self, key: MaterializationKey) -> MaterializationLookup:
         exact = self.lookup(key)
@@ -317,19 +327,26 @@ class CoreStore:
                 "checkpoint": encode(value.checkpoint), "training_audits": encode(value.training_audits),
                 "execution_policy": execution_policy}
             manifest["content_identity"] = hash_mapping(_manifest_content(manifest))
+            from . import computation_index
+            indexed = computation_index.describe(domain, days=days, value_type=manifest["value_type"],
+                                                  trace_columns=manifest["trace_columns"])
             serialized = _json(manifest)
             final.parent.mkdir(parents=True, exist_ok=True)
             with self.transaction() as connection:
+                connection.execute(computation_index.DDL)
                 old = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (value.key.identity,)).fetchone()
                 if old is not None:
                     existing = json.loads(old[0])
-                    self.verify(existing)
                     if existing.get("content_identity") != manifest["content_identity"]:
                         raise ValueError("immutable materialization conflict: different results or evidence for the same key")
+                    if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
+                        computation_index.save(connection, value.key.identity, existing["content_identity"], indexed)
                     return
                 os.replace(temporary, final)
                 connection.execute("INSERT INTO materializations VALUES(?,?,?,?)",
                     (value.key.identity, value.key.node_id, _json(value.key.to_dict()), serialized))
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
+                    computation_index.save(connection, value.key.identity, manifest["content_identity"], indexed)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
@@ -352,17 +369,92 @@ class CoreStore:
         manifest = self.manifest(identity)
         if manifest is None:
             return None
-        return {key: manifest[key] for key in ("identity", "node_id", "key", "value_type", "through",
-            "coverage_start", "days", "logical_hash", "trace_columns", "execution_policy")}
+        from .computation_index import read
+        with self.read_transaction() as connection:
+            indexed = read(connection, manifest)
+        return {**{key: manifest[key] for key in ("identity", "node_id", "key", "value_type", "through",
+            "coverage_start", "days", "logical_hash", "trace_columns", "execution_policy")},
+            "calendar": None if indexed is None else indexed["calendar"]}
+
+    def interval_identity(self, identity: str, *, start, end) -> str | None:
+        """Prove selected values, full calendar and membership from index records."""
+        from .computation_index import read, interval
+        manifest = self.manifest(identity)
+        if manifest is None:
+            return None
+        with self.read_transaction() as connection:
+            indexed = read(connection, manifest)
+        return None if indexed is None else interval(indexed, start, end)
+
+    def index_plan(self) -> dict[str, Any]:
+        """Freeze explicit historical proof-index maintenance using metadata."""
+        from .computation_index import VERSION
+        return {"version": VERSION, "meta_path": str(self.meta_path), "identities": [
+            {"identity": item["identity"], "content_identity": self.manifest(item["identity"])["content_identity"]}
+            for item in self.inventory()]}
+
+    def build_index(self, plan, *, check_canceled=lambda: None, progress=lambda *_: None):
+        from . import computation_index
+        from .resources import admit_parquet_materialization
+        if plan.get("version") != computation_index.VERSION or plan.get("meta_path") != str(self.meta_path):
+            raise ValueError("Core computation index plan belongs to another authority/version")
+        if not plan["identities"]:
+            return {"status": "complete", "materializations": 0, "unknown_materializations": 0}
+        completed, unknown = 0, 0
+        with self.transaction() as connection:
+            connection.execute(computation_index.DDL)
+        for position, item in enumerate(plan["identities"], 1):
+            check_canceled()
+            manifest = self.manifest(item["identity"])
+            if manifest is None or manifest["content_identity"] != item["content_identity"]:
+                raise RevisionConflict("Core index plan changed")
+            self.verify(manifest)
+            if not all(admit_parquet_materialization(self._file(manifest["domain"][name]["$file"]))
+                       for name in ("calendar", "membership")):
+                unknown += 1
+                progress(position, len(plan["identities"]))
+                continue
+            value = self.lookup(MaterializationKey.from_dict(manifest["key"]), evidence=False)
+            indexed = computation_index.describe(value.panel.domain, days=manifest["days"],
+                value_type=manifest["value_type"], trace_columns=manifest["trace_columns"])
+            with self.transaction() as connection:
+                check_canceled()
+                current = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (item["identity"],)).fetchone()
+                if current is None or json.loads(current[0])["content_identity"] != item["content_identity"]:
+                    raise RevisionConflict("Core index plan changed")
+                computation_index.save(connection, item["identity"], item["content_identity"], indexed)
+            completed += 1
+            progress(position, len(plan["identities"]))
+        return {"status": "partial" if unknown else "complete", "materializations": completed,
+                "unknown_materializations": unknown}
 
     def verify_identity(self, identity: str) -> None:
         manifest = self.manifest(identity)
         if manifest is None:
             raise ValueError(f"missing Core materialization: {identity}")
         self.verify(manifest)
+        from . import computation_index
+        with self.read_transaction() as connection:
+            indexed = computation_index.read(connection, manifest)
+            if indexed is None and connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
+                row = connection.execute("SELECT version FROM computation_index WHERE identity=?", (identity,)).fetchone()
+                if row is not None and row[0] == computation_index.VERSION:
+                    raise ValueError("Core computation index source binding differs")
+        if indexed is not None:
+            value = self.lookup(MaterializationKey.from_dict(manifest["key"]), evidence=False)
+            expected = computation_index.describe(value.panel.domain, days=manifest["days"],
+                value_type=manifest["value_type"], trace_columns=manifest["trace_columns"])
+            if indexed != expected:
+                raise ValueError("Core computation index differs from original evidence")
 
     def read_values(self, identity: str, *, start=None, end=None, include_traces=False) -> pl.DataFrame:
-        """Verify and decode only selected value partitions and their Domain."""
+        """Decode only selected typed value partitions and their Domain."""
+        try:
+            return self._read_values(identity, start=start, end=end, include_traces=include_traces)
+        except pl.exceptions.PolarsError as error:
+            raise ValueError("corrupt or unreadable Core artifact") from error
+
+    def _read_values(self, identity: str, *, start=None, end=None, include_traces=False) -> pl.DataFrame:
         if self._verification is None:
             with self.read_context() as reader:
                 return reader.read_values(identity, start=start, end=end, include_traces=include_traces)
@@ -376,9 +468,6 @@ class CoreStore:
         selected = [part for part in manifest["partitions"]
             if (lower is None or "end" not in part or date.fromisoformat(part["end"]) >= lower)
             and (upper is None or "start" not in part or date.fromisoformat(part["start"]) <= upper)]
-        receipt = manifest["content_identity"]
-        self._verify_files(manifest["domain"], receipt=receipt)
-        self._verify_files(selected, receipt=receipt)
         saved = manifest["domain"]
         calendar = self._decode(saved["calendar"])["time"]
         membership = self._decode(saved["membership"])
@@ -388,7 +477,6 @@ class CoreStore:
             frame = pl.scan_parquet([self._file(part["$file"]) for part in selected])
         else:
             # An empty window still needs the original typed schema.
-            self._verify_files(manifest["partitions"][0], receipt=receipt)
             frame = pl.DataFrame(schema=pl.read_parquet_schema(self._file(manifest["partitions"][0]["$file"]))).lazy()
         if start is not None:
             frame = frame.filter(pl.col("time") >= start)
@@ -398,30 +486,26 @@ class CoreStore:
             value_type=manifest["value_type"], trace_columns=manifest["trace_columns"],
             trace_identity=manifest["trace_identity"])
         result = panel.collect(dense=False, include_traces=include_traces)
-        self._verify_files(manifest["domain"], receipt=receipt)
-        self._verify_files(selected or [manifest["partitions"][0]], receipt=receipt)
         return result
 
-    def evidence(self, identity: str) -> dict[str, Any]:
+    def evidence(self, identity: str, *, channels=None) -> dict[str, Any]:
         """Read typed auxiliary artifacts, checkpoints and fit audits recursively."""
         if self._verification is None:
             with self.read_context() as reader:
-                return reader.evidence(identity)
+                return reader.evidence(identity, channels=channels)
         visited, audits, checkpoints, artifacts = set(), [], {}, {}
         def visit(current):
             if current in visited or self.manifest(current) is None:
                 return
             visited.add(current)
             manifest = self.manifest(current)
-            self._verify_files({key: manifest[key] for key in ("artifacts", "checkpoint", "training_audits")},
-                receipt=manifest["content_identity"])
-            for name, value in self._decode(manifest["artifacts"]).items():
-                artifacts.setdefault(name, value)
-            audits.extend({**audit, "node_id": manifest["node_id"]} for audit in self._decode(manifest["training_audits"]))
-            if manifest["checkpoint"] is not None:
+            for name, value in manifest["artifacts"].items():
+                if channels is None or name in channels:
+                    artifacts.setdefault(name, self._decode(value))
+            if channels is None or "training_audits" in channels:
+                audits.extend({**audit, "node_id": manifest["node_id"]} for audit in self._decode(manifest["training_audits"]))
+            if manifest["checkpoint"] is not None and (channels is None or "checkpoints" in channels):
                 checkpoints[manifest["node_id"]] = self._decode(manifest["checkpoint"])
-            self._verify_files({key: manifest[key] for key in ("artifacts", "checkpoint", "training_audits")},
-                receipt=manifest["content_identity"])
             for parent in manifest["key"]["inputs"]:
                 visit(parent)
         visit(identity)
@@ -618,10 +702,10 @@ class CoreStore:
             for node_id, identity in values.items():
                 if state["statuses"].get(node_id) != "active":
                     raise RevisionConflict("a result belongs to an inactive node")
-                record = self.read(identity)
-                if not len(record.panel.domain.times) or str(record.panel.domain.times.max()) != through:
+                record = self.describe(identity)
+                if record is None or record["coverage_start"] == "None" or record["through"] != through:
                     raise ValueError("result Domain does not cover the requested final session")
-                if record.key.node_id != node_id:
+                if record["node_id"] != node_id:
                     raise ValueError("result receipt belongs to a different node")
         body = {"request_id": request_id, "graph_id": graph_id, "revision": revision, "state_revision": state_revision,
                 "previous": expected_previous, "results": {k: dict(v) for k, v in results.items()}, "through": through, "mode": mode}
@@ -646,7 +730,7 @@ class CoreStore:
         matches = [json.loads(row[0]) for row in rows if json.loads(row[0]).get("request_id") == request_id]
         if len(matches) > 1:
             raise RevisionConflict("request token names more than one update")
-        return self.verify_update(matches[0]["identity"]) if matches else None
+        return self.describe_update(matches[0]["identity"]) if matches else None
 
     @contextmanager
     def reference_publication(self, identity: str):
@@ -656,7 +740,7 @@ class CoreStore:
         transaction succeeds or fails independently and Core evidence survives.
         Historical reads should use verify_update without a live-state fence.
         """
-        receipt = self.verify_update(identity)
+        receipt = self.describe_update(identity)
         with self.transaction() as connection:
             row = connection.execute("SELECT revision,state_revision,current_update FROM graphs WHERE graph_id=?", (receipt["graph_id"],)).fetchone()
             if row is None or tuple(row[:2]) != (receipt["revision"], receipt["state_revision"]):
@@ -669,6 +753,7 @@ class CoreStore:
         receipt = self.describe_update(identity)
         for results in receipt["results"].values():
             for materialization in results.values():
+                self.verify_identity(materialization)
                 self.read(materialization)
         return receipt
 

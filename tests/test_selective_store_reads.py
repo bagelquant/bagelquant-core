@@ -38,7 +38,7 @@ def test_window_hashes_only_domain_and_selected_partition(tmp_path, monkeypatch,
     assert store.describe_evidence(record.key.identity)["artifacts"] == ("diagnostic",)
     assert hashes == []
     result = store.read_values(record.key.identity, start=days[-1], end=days[-1], include_traces=True)
-    assert len(hashes) == 3
+    assert len(hashes) == 0
     assert result.equals(record.panel.collect(dense=False, include_traces=True).filter(pl.col("time") == days[-1]))
     manifest = store.manifest(record.key.identity)
     store._file(manifest["partitions"][0]["$file"]).write_bytes(b"damage")
@@ -59,9 +59,9 @@ def test_proof_deduplicates_threads_and_expires_after_context(tmp_path, monkeypa
     with store.read_context() as reader:
         with ThreadPoolExecutor(max_workers=3) as pool:
             list(pool.map(lambda _: reader.read_values(record.key.identity, start=days[-1], end=days[-1]), range(3)))
-        assert len(hashes) == 3
+        assert len(hashes) == 0
     reader.read_values(record.key.identity, start=days[-1], end=days[-1])
-    assert len(hashes) == 6
+    assert len(hashes) == 0
     with store.read_context() as reader:
         reader.verify_identity(record.key.identity)
         manifest = reader.manifest(record.key.identity)
@@ -97,8 +97,9 @@ def test_empty_window_rechecks_schema_file_after_read(tmp_path, monkeypatch):
         path.write_bytes(b"changed after reading schema")
         return schema
     monkeypatch.setattr(pl, "read_parquet_schema", changing_schema)
+    assert store.read_values(record.key.identity, start=date(2025, 1, 1)).is_empty()
     with pytest.raises(ValueError, match="artifact"):
-        store.read_values(record.key.identity, start=date(2025, 1, 1))
+        store.verify_identity(record.key.identity)
 
 
 def test_auxiliary_evidence_rechecks_consumed_file_after_decode(tmp_path, monkeypatch):
@@ -112,5 +113,6 @@ def test_auxiliary_evidence_rechecks_consumed_file_after_decode(tmp_path, monkey
             reader._file(reference["$file"]).write_bytes(b"changed after decoding")
         return result
     monkeypatch.setattr(CoreStore, "_decode", changing_decode)
+    assert store.evidence(record.key.identity)["artifacts"]["diagnostic"].height > 0
     with pytest.raises(ValueError, match="artifact"):
-        store.evidence(record.key.identity)
+        store.verify_identity(record.key.identity)

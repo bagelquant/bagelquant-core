@@ -158,4 +158,4 @@ def test_optional_damaged_checkpoint_falls_back_but_history_stays_invalid(
     )
     assert plan.resource_usage["main"][root]["checkpoint_through"] is None
     with pytest.raises((ValueError, OSError)):
-        store.read(old_identity)
+        store.verify_identity(old_identity)

@@ -16,14 +16,14 @@ from .domain import Domain
 from .execution import ExecutionRuntime
 from .graph import Graph
 from .graph_management import parents
-from .hashing import hash_dataframe, hash_mapping
+from .hashing import hash_mapping
 from .logical import LogicalGraphSpec
 from .materialization import MaterializationKey, NodeMaterialization, materialization_trace_identity
 from .node import Node
 from .operator import OPERATOR_REGISTRY
 
 CANONICAL_SESSIONS = 32
-FINITE_EXECUTION_POLICY = "finite_causal_blocks.v2"
+FINITE_EXECUTION_POLICY = "finite_causal_blocks.v3"
 
 
 def finite_execution_policies(spec, *, anchor):
@@ -70,7 +70,7 @@ def scoped_domain(domain, start, end):
 
 
 def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed: Mapping[str, Node],
-                        parameters, key, domain, policy, store, check_canceled):
+                        parameters, key, domain, policy, store, check_canceled, input_proof=None):
     """Execute one admitted node, verifying content proofs before reusing blocks."""
     declared = {node.node_id: node for node in spec.nodes}
     node = declared[node_id]
@@ -90,21 +90,27 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         check_canceled()
         last = calendar[min(begin+CANONICAL_SESSIONS, len(calendar))-1]
         warm = halos[begin]
-        scoped = {}
         proofs = []
         for parent, value in direct.items():
-            frame = value.lazy(include_traces=True).filter(pl.col("time").is_between(warm, last)).collect().sort("time", "asset_id")
             own = scoped_domain(value.domain, warm, last)
-            proof = hash_mapping({"frame": hash_dataframe(frame), "domain": own.signature,
+            token = None if input_proof is None else input_proof(parent, value, warm, last)
+            # An unknown interval uses the full durable source token. It can
+            # conservatively miss after an append, but cannot reuse changed rows.
+            proof = hash_mapping({"version": FINITE_EXECUTION_POLICY,
+                "content": token or {"source": value.identity, "start": str(warm), "end": str(last)}, "domain": own.signature,
                 "type": value.value_type.value, "traces": value.trace_columns})
-            scoped[parent] = Node.from_domain(frame, own, identity=proof, value_type=value.value_type,
-                trace_columns=value.trace_columns, trace_identity=proof if value.trace_columns else None)
             proofs.append(proof)
         output_domain = scoped_domain(domain, calendar[begin], last)
         block_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature,
             hash_mapping({"block": policy, "start": str(calendar[begin]), "end": str(last), "parameters": parameters}))
-        record = store.lookup(block_key)
+        record = store.lookup(block_key, domain=output_domain, evidence=False)
         if record is None:
+            scoped = {}
+            for (parent, value), proof in zip(direct.items(), proofs, strict=True):
+                frame = value.lazy(include_traces=True).filter(pl.col("time").is_between(warm, last)).collect().sort("time", "asset_id")
+                own = scoped_domain(value.domain, warm, last)
+                scoped[parent] = Node.from_domain(frame, own, identity=proof, value_type=value.value_type,
+                    trace_columns=value.trace_columns, trace_identity=proof if value.trace_columns else None)
             bindings = {declared[parent].input_key: value for parent, value in scoped.items() if declared[parent].node_type == "input"}
             retained = {parent: value for parent, value in scoped.items() if declared[parent].node_type == "operator"}
             bound = Graph.from_logical_spec(local, inputs=bindings, node_bindings=retained, parameter_bindings=parameters)
@@ -118,7 +124,7 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                 trace_identity=materialization_trace_identity(block_key, result.trace_columns))
             check_canceled()
             store.publish(NodeMaterialization(block_key, value), execution_policy=policy)
-            record = store.lookup(block_key)
+            record = store.lookup(block_key, domain=output_domain, evidence=False)
             computed += 1
         else:
             reused += 1
@@ -128,10 +134,10 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         trace_identity=materialization_trace_identity(key, blocks[0].trace_columns))
     check_canceled()
     store.publish(NodeMaterialization(key, result), execution_policy=policy)
-    return store.lookup(key), {"computed_blocks": computed, "reused_blocks": reused, "canonical_sessions": CANONICAL_SESSIONS}
+    return store.lookup(key, domain=domain, evidence=False), {"computed_blocks": computed, "reused_blocks": reused, "canonical_sessions": CANONICAL_SESSIONS}
 
 
-def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key, domain, store, check_canceled):
+def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key, domain, store, check_canceled, input_proof=None):
     """Restore only when every direct parent's complete prefix is byte-proven.
 
     The full observation calendar remains available to training windows and
@@ -145,14 +151,14 @@ def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key
     def proofs(end):
         result = {}
         for parent, value in direct.items():
-            selected = value.lazy(include_traces=True).filter(pl.col("time") <= end).collect().sort("time", "asset_id")
-            calendar = value.domain.times.filter(value.domain.times <= end)
-            membership = value.domain.grid_lazy().filter(pl.col("time") <= end).collect().sort("time", "asset_id")
-            result[parent] = hash_mapping({"values": hash_dataframe(selected), "calendar": hash_dataframe(pl.DataFrame({"time": calendar})),
-                "membership": hash_dataframe(membership), "type": value.value_type.value, "traces": value.trace_columns})
+            token = None if input_proof is None else input_proof(parent, value, domain.times.min(), end)
+            if token is None:
+                return None
+            result[parent] = token
         return result
-    policy = {"name": "checkpoint_prefix.v1", "parameters": parameters, "parent_proofs": proofs(domain.times.max())}
+    policy = {"name": "checkpoint_prefix.v2", "parameters": parameters, "parent_proofs": proofs(domain.times.max())}
     previous = None
+    previous_frame = None
     manifests = []
     for item in store.inventory():
         if item["node_id"] == node_id and item["key"]["implementation_id"] == key.implementation_id:
@@ -165,15 +171,18 @@ def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key
     for manifest in sorted(manifests, key=lambda item: item["through"], reverse=True):
         check_canceled()
         end = date.fromisoformat(manifest["through"])
-        if manifest["execution_policy"]["parent_proofs"] != proofs(end):
+        current_proofs = proofs(end)
+        if current_proofs is None or manifest["execution_policy"]["parent_proofs"] != current_proofs:
             continue
         try:
             candidate = store.read(manifest["identity"])
-        except (ValueError, OSError):
+            candidate_frame = candidate.panel.collect(dense=False, include_traces=True)
+        except (ValueError, OSError, pl.exceptions.PolarsError):
             # A damaged optional checkpoint does not invalidate new source evidence.
             continue
         if candidate.checkpoint.get("state", {}).get("through") == str(end):
             previous = candidate
+            previous_frame = candidate_frame
             break
     local = LogicalGraphSpec({node_id: node_id}, spec.nodes)
     bound = Graph.from_logical_spec(local, inputs=inputs, node_bindings=completed, parameter_bindings=parameters)
@@ -187,7 +196,7 @@ def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key
     through = None
     if previous is not None:
         through = date.fromisoformat(previous.checkpoint["state"]["through"])
-        frame = pl.concat([previous.panel.collect(dense=False, include_traces=True), frame.filter(pl.col("time") > through)]).sort("time", "asset_id")
+        frame = pl.concat([previous_frame, frame.filter(pl.col("time") > through)]).sort("time", "asset_id")
         audits = (*previous.training_audits, *audits)
         for name in set(previous.artifacts) | set(artifacts):
             old, new = previous.artifacts.get(name), artifacts.get(name)

@@ -68,6 +68,32 @@ def active_resource_limits() -> ResourceLimits:
     return selected
 
 
+def admit_parquet_materialization(path) -> bool:
+    """Explicit maintenance admission before collecting a complete typed table.
+
+    Count fixed-width storage from metadata and variable strings/binary with a
+    streaming reduction. Unsupported nested schemas remain unknown. Reserve
+    headroom for sorting, hashing, Domain construction and native buffers.
+    """
+    import polars as pl
+    schema = pl.read_parquet_schema(path)
+    widths, lengths = 0, []
+    for index, (name, dtype) in enumerate(schema.items()):
+        if dtype == pl.String:
+            widths += 32
+            lengths.append(pl.col(name).str.len_bytes().sum().alias(f"bytes_{index}"))
+        elif dtype == pl.Binary:
+            widths += 32
+            lengths.append(pl.col(name).bin.size().sum().alias(f"bytes_{index}"))
+        elif dtype.is_numeric() or dtype.is_temporal() or dtype in {pl.Boolean, pl.Null}:
+            widths += 16
+        else:
+            return False
+    totals = pl.scan_parquet(path).select(pl.len().alias("rows"), *lengths).collect(engine="streaming").row(0)
+    needed = totals[0] * widths + sum(value or 0 for value in totals[1:])
+    return needed <= active_resource_limits().memory_target_mib * 1024 * 1024 // 8
+
+
 @contextmanager
 def resource_limits(limits: ResourceLimits):
     """Provide numerical operators with execution-only limits in this context."""

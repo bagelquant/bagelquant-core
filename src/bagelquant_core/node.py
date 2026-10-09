@@ -75,6 +75,7 @@ class Node(NodeDefinition):
         self._exact_domain = _exact_domain
         self._key_identity = _key_identity or self._identity
         self._source_key = _source_key or f"input:{uuid4().hex}"
+        self._interval_index = None
 
     @classmethod
     def from_domain(
@@ -100,9 +101,16 @@ class Node(NodeDefinition):
             and domain._contains_exact_keys(data)
         )
         frame = domain.apply_membership_lazy(frame)
+        indexed = None
         if identity is None and isinstance(data, pl.DataFrame):
-            identity = "content:" + hash_dataframe(frame.sort([TIME, ASSET_ID]).collect())
-        return cls(
+            from .computation_index import describe
+            collected = frame.sort([TIME, ASSET_ID]).collect()
+            identity = "content:" + hash_dataframe(collected)
+            days = {str(part[TIME][0]): hash_dataframe(part)
+                    for part in collected.partition_by(TIME, maintain_order=True)}
+            indexed = describe(domain, days=days, value_type=ValueType(value_type).value,
+                               trace_columns=traces)
+        panel = cls(
             frame,
             value_type=value_type,
             name=name,
@@ -121,6 +129,8 @@ class Node(NodeDefinition):
             ),
             _source_key=source_key,
         )
+        panel._interval_index = indexed
+        return panel
 
     @classmethod
     def _from_plan(
@@ -181,6 +191,11 @@ class Node(NodeDefinition):
     @property
     def identity(self) -> str:
         return self._identity
+
+    def interval_identity(self, start, end) -> str | None:
+        """Describe an eager input's interval from its construction-time record."""
+        from .computation_index import interval
+        return None if self._interval_index is None else interval(self._interval_index, start, end)
 
     @property
     def source_key(self) -> str:

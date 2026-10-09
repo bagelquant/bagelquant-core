@@ -63,6 +63,6 @@ membership、数值、traces 和物化身份不变；此优化不替代完整性
 
 ## 发布完整性与读取
 
-CoreStore 拥有不可变 manifest 和已提交的 graph/update receipt。`describe`、`describe_update`、`describe_evidence` 检查元数据身份，不扫描 artifact 字节；发布与显式完整性审计仍验证全部保留通道。`read_values` 验证 Domain 和请求日期涉及的月分区，保留稀疏值、类型与 trace；`evidence` 仅加载辅助证据。
+CoreStore 拥有不可变 manifest 和已提交的 graph/update receipt。`describe`、`describe_update`、`describe_evidence` 检查元数据身份，不扫描 artifact 字节；发布检查不可变身份和事务边界；显式完整性审计检查全部保留通道及派生索引。`read_values` 解码 Domain 和请求日期涉及的月分区，不重新计算字节哈希，保留稀疏值、类型与 trace；`evidence` 仅加载辅助证据。
 
 `read_context` 在一次操作中共享有界、线程安全的 checksum 证明。证明绑定 receipt、预期 checksum 和文件身份；文件修改、替换或 context 结束后不能复用。它不是永久的全局有效标签。检查和 graph 元数据读取不创建缺失的 store/graph；显式初始化启用 SQLite WAL，读取使用已提交、只读事务，发布继续检查最新 revision/CAS。

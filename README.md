@@ -21,3 +21,5 @@ Version 0.11 uses new API and storage schemas. It provides no compatibility read
 or migration. Real data and service cutover are separate operations.
 
 Supported platforms: macOS and Linux. Windows support is retired.
+
+[Calculation records](docs/en/calculation_records.md) · [计算记录](docs/cn/calculation_records.md)

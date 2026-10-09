@@ -174,6 +174,7 @@ class GraphManagement:
             self._contexts = {**getattr(self, "_contexts", {}), context_id: {"parameters": dict(parameters or {}), "anchor": str(anchor), "information_cutoff": None if information_cutoff is None else str(information_cutoff)}}
             self._revision = getattr(self, "_revision", 0) + 1
 
-    def plan_update(self, contexts, *, through, roots=None):
+    def plan_update(self, contexts, *, through, roots=None, input_loader=None, input_proof=None):
         from .update import UpdatePlan
-        return UpdatePlan(self, contexts, through=through, roots=roots)
+        return UpdatePlan(self, contexts, through=through, roots=roots,
+                          input_loader=input_loader, input_proof=input_proof)

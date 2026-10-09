@@ -6,6 +6,14 @@ inputs use a fixed seed and include nulls and repeated values.
 Rolling cases use `min_periods` equal to 80% of the selected window so the
 null-bearing input still produces representative output.
 
+Persisted parents keep already-canonical `Date` columns unchanged during input
+normalization. A redundant `Date` cast prevents Polars from pushing a finite
+window predicate into a Parquet scan, causing repeated historical decompression
+for 32-session blocks. The identity expression permits row-group pruning while
+preserving actual String/Datetime conversion, membership, values, traces and
+materialization identities. File metadata inspection and required proof work
+remain; this optimization does not replace full integrity verification.
+
 ```bash
 uv run python scripts/benchmark_efficiency.py --profile smoke --json
 uv run python scripts/benchmark_efficiency.py --profile comparison --json

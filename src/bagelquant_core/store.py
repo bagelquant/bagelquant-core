@@ -62,18 +62,20 @@ class CoreStore:
         if self.meta_path == self.artifact_path:
             raise ValueError("metadata and artifact paths must be distinct")
 
-    def inspect(self) -> dict[str, Any]:
+    def inspect(self, *, runtime: bool = False) -> dict[str, Any]:
         """Inspect schema readiness without creating storage or recovering work.
 
         This reports the metadata contract, not artifact integrity. Call
         ``check_integrity`` explicitly to inspect committed numerical evidence.
+        Runtime inspection uses SQLite read coordination during live writes;
+        default inspection preserves every original file and sidecar unchanged.
         """
         if not self.meta_path.exists():
             return {"status": "uninitialized", "schema_version": None, "reason": "metadata_missing"}
         if not self.meta_path.is_file():
             return {"status": "incompatible", "schema_version": None, "reason": "metadata_not_file"}
         try:
-            with open_metadata_snapshot(self.meta_path) as connection:
+            with open_metadata_snapshot(self.meta_path, runtime=runtime) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                 required = {

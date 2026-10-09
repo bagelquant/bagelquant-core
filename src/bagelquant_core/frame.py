@@ -18,6 +18,8 @@ def normalize_date_expression(column: str, dtype: pl.DataType) -> pl.Expr:
     """Normalize a known-schema date column without deprecated string casts."""
 
     expression = pl.col(column)
+    if dtype == pl.Date:
+        return expression
     return (
         expression.str.to_date(format="%Y-%m-%d", strict=False)
         if dtype == pl.String

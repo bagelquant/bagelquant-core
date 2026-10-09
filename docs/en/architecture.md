@@ -63,6 +63,16 @@ Reopen `CoreStore` at the same two paths and `Graph` with the same graph ID to r
 saved definitions, states and results. No default storage discovery or service is
 installed. The new schema rejects incompatible databases; no migration is provided.
 
+`CoreStore.inspect()` reports schema readiness without initializing, recovering
+or changing original storage/sidecars; its offline metadata snapshot rejects
+active/hot rollback journals. Live applications may explicitly use
+`inspect(runtime=True)` to read one committed SQLite transaction with ordinary
+WAL/SHM coordination during concurrent writes, without copying metadata.
+`inspection.open_metadata_snapshot(path, runtime=True)` exposes the same generic
+read-view primitive to downstream backends. Runtime views respect committed WAL,
+permit coordination sidecars, forbid writes and fail closed when an abandoned hot
+journal would require recovery. Readiness is separate from artifact integrity.
+
 ## Graph and identity
 
 `Graph.from_dsl` builds a local graph. `add_dsl` validates and atomically merges

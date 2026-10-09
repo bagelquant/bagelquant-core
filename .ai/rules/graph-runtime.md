@@ -15,6 +15,9 @@ Declared checkpoint replay requires unchanged complete parent prefixes, preserve
 full calendar/training context and merges audits/artifacts. Unknown or unsafe
 history falls back to required full computation. Never substitute observation
 endpoints for information cutoffs. Worker counts and physical batches are neutral.
+Canonical Date columns keep an identity normalization expression so observation
+window predicates reach persisted Parquet scans before decompression. Real String/
+Datetime conversions remain explicit; values, traces and material keys are unchanged.
 
 Global updates freeze graph/state revisions and every registered Domain context.
 All active computed nodes must succeed before the global pointer advances. Branch
@@ -43,3 +46,10 @@ are removed after inspection and never become a second storage authority.
 Active/hot rollback journals are unreadable without explicit owner recovery;
 never accept spilled uncommitted schema pages. Include journal identity in
 snapshot stability checks; invalidated zero-header PERSIST journals are readable.
+
+`CoreStore.inspect(runtime=True)` and `open_metadata_snapshot(..., runtime=True)`
+explicitly use ordinary mode=ro SQLite coordination, query_only and one pinned
+committed read transaction, respecting WAL and concurrent writer locks. Runtime
+callers permit SQLite WAL/SHM coordination; no copy, initialization or recovery.
+Abandoned hot journals requiring recovery fail closed on the read-only connection.
+Default offline inspection remains source-untouched and rejects active/hot journals.

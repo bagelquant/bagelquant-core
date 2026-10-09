@@ -2,10 +2,13 @@
 
 from contextlib import closing
 import sqlite3
+import subprocess
+import sys
 
 import pytest
 
 from bagelquant_core import CoreStore
+from bagelquant_core.inspection import open_metadata_snapshot
 
 
 def test_inspect_missing_store_is_read_only(tmp_path):
@@ -155,3 +158,87 @@ def test_cold_persist_journal_is_readable_without_recovery(tmp_path):
     assert {
         path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()
     } == before
+
+
+def test_runtime_inspection_reads_committed_wal_without_copying(tmp_path, monkeypatch):
+    import bagelquant_core.inspection as inspection
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
+    store.initialize()
+    with closing(sqlite3.connect(store.meta_path)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("PRAGMA user_version=2")
+        writer.commit()
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        writer.execute("PRAGMA user_version=1")
+        writer.commit()
+        before = store.meta_path.read_bytes()
+        monkeypatch.setattr(inspection.shutil, "copyfile", lambda *args: pytest.fail("runtime copied metadata"))
+        assert store.inspect(runtime=True) == {"status": "ready", "schema_version": 1, "reason": None}
+        assert store.meta_path.read_bytes() == before
+        assert list(store.artifact_path.iterdir()) == []
+
+
+def test_runtime_read_view_stays_consistent_across_concurrent_wal_commit(tmp_path):
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
+    store.initialize()
+    with closing(sqlite3.connect(store.meta_path)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE marker(value INTEGER)")
+        writer.execute("INSERT INTO marker VALUES(1)")
+        writer.commit()
+        with open_metadata_snapshot(store.meta_path, runtime=True) as reader:
+            assert reader.in_transaction
+            assert reader.execute("PRAGMA query_only").fetchone()[0] == 1
+            writer.execute("UPDATE marker SET value=2")
+            writer.execute("PRAGMA user_version=2")
+            writer.commit()
+            assert reader.execute("SELECT value FROM marker").fetchone()[0] == 1
+            assert reader.execute("PRAGMA user_version").fetchone()[0] == 1
+            with pytest.raises(sqlite3.OperationalError):
+                reader.execute("UPDATE marker SET value=3")
+        assert store.inspect(runtime=True)["schema_version"] == 2
+
+
+def test_runtime_allows_reserved_rollback_writer_but_never_uncommitted_schema(tmp_path):
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
+    store.initialize()
+    with closing(sqlite3.connect(store.meta_path)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("PRAGMA user_version=2")
+        assert store.inspect(runtime=True)["status"] == "ready"
+        writer.rollback()
+        assert store.inspect()["status"] == "ready"
+
+
+def test_runtime_hot_abandoned_journal_fails_closed_without_recovery(tmp_path):
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
+    store.initialize()
+    script = """
+import os, sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute('CREATE TABLE pressure(payload BLOB)')
+db.commit()
+db.execute('PRAGMA cache_size=1')
+db.execute('PRAGMA cache_spill=ON')
+db.execute('BEGIN IMMEDIATE')
+db.execute('PRAGMA user_version=2')
+db.executemany('INSERT INTO pressure VALUES(?)', [(b'x' * 65536,)] * 40)
+os._exit(0)
+"""
+    subprocess.run([sys.executable, "-c", script, str(store.meta_path)], check=True)
+    journal = store.meta_path.with_name(store.meta_path.name + "-journal")
+    assert any(journal.read_bytes()[:8])
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()}
+    assert store.inspect(runtime=True)["reason"] == "metadata_unreadable"
+    assert store.inspect()["reason"] == "metadata_unreadable"
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()} == before
+
+
+def test_runtime_missing_store_does_not_initialize(tmp_path):
+    store = CoreStore(tmp_path / "missing" / "meta.sqlite", tmp_path / "artifacts")
+    assert store.inspect(runtime=True)["status"] == "uninitialized"
+    with pytest.raises(sqlite3.OperationalError):
+        with open_metadata_snapshot(store.meta_path, runtime=True):
+            pass
+    assert list(tmp_path.iterdir()) == []

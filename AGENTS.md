@@ -21,6 +21,9 @@ Keep this entry short; detailed owner contracts live under `.ai/rules/`.
   prediction boundary and a separate saved-target boundary.
 - Accept neutral input data and immutable evidence through public APIs; Core
   owns conversion and numerical persistence, Data owns frozen input authority.
+- `CoreStore.inspect(runtime=True)` uses coordinated committed SQLite reads during
+  live writes, permitting WAL/SHM coordination without initialization/recovery;
+  default inspection leaves originals/sidecars untouched. Hot recovery fails closed.
 - Regenerate operation references from their generator after catalog changes;
   coordinate separate Workbench catalog updates when the public contract changes.
 

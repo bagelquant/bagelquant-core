@@ -41,6 +41,17 @@ numeric、category、prediction、weights。派生节点未计算时不可读取
 Core 先提交，应用随后使用 `reference_publication` 状态保护，在自己的事务中绑定凭据；
 中断后按稳定 request_id 找回并幂等绑定，不模拟跨库事务。
 
+`CoreStore.inspect()` 只报告 schema 就绪状态，不初始化、恢复或修改原始文件/sidecar；
+默认离线元数据快照拒绝活动或 hot 回滚日志。在线应用可显式使用
+`inspect(runtime=True)`，通过普通 SQLite WAL/SHM 协调在并发写入时读取一个已提交
+事务，不复制元数据。`inspection.open_metadata_snapshot(path, runtime=True)` 向
+下游 backend 提供相同通用读取原语。运行态允许协调 sidecar、禁止写入，遇到需要
+恢复的遗留 hot journal 时拒绝读取。此接口不替代产物完整性校验。
+
+已为 Date 的时间列保持恒等表达式，让有限窗口过滤下推到持久 Parquet 扫描，
+避免每个 32-session 块反复解压全历史。真实 String/Datetime 转换保持不变，
+membership、数值、traces 和物化身份不变；此优化不替代完整性证明。
+
 新版存储拒绝旧格式，没有兼容读写或迁移。真实数据库和服务切换属于第 6 步。
 英文[完整 API 用例](../en/architecture.md)与[算子目录](../en/reference/operators/index.md)
 提供可执行示例。验证使用临时数据根和假输入；可选 LightGBM 运行还需对应原生库。

@@ -66,6 +66,7 @@ from bagelquant_core.operator_state import capture_operator_checkpoints
 from bagelquant_core.operator.training import rolling_elastic_net_prediction, rolling_lightgbm_prediction, capture_training_audits, date_balanced_training_keys
 
 from .store import CoreStore, RevisionConflict
+from .artifact_verification import ArtifactVerification
 from .node import ValueType
 from .graph_management import MergeResult
 
@@ -129,4 +130,4 @@ __all__ += ['rolling_elastic_net_prediction', 'rolling_lightgbm_prediction', 'ca
 __all__ += ['exposure_constrained_weights']
 __all__ += ['capture_operator_checkpoints']
 
-__all__ += ["CoreStore", "RevisionConflict", "ValueType", "MergeResult"]
+__all__ += ["CoreStore", "RevisionConflict", "ValueType", "MergeResult", "ArtifactVerification"]

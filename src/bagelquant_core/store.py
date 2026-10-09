@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import copy
 from datetime import date, datetime
 import hashlib
 import json
@@ -14,6 +15,7 @@ import uuid
 
 import polars as pl
 from .inspection import open_metadata_snapshot
+from .artifact_verification import ArtifactVerification
 
 from .domain import Domain
 from .hashing import hash_mapping, hash_dataframe
@@ -61,6 +63,35 @@ class CoreStore:
         self.artifact_path = Path(artifact_path).resolve()
         if self.meta_path == self.artifact_path:
             raise ValueError("metadata and artifact paths must be distinct")
+        self._verification: ArtifactVerification | None = None
+
+    @contextmanager
+    def read_context(self) -> Iterator[CoreStore]:
+        """Share finite checksum proofs across this operation's worker threads.
+
+        Each metadata read owns its SQLite connection; graph revision guards
+        always read fresh committed state. The returned reader expires on exit.
+        """
+        reader = copy(self)
+        reader._verification = ArtifactVerification()
+        try:
+            yield reader
+        finally:
+            reader._verification.close()
+            reader._verification = None
+
+    @contextmanager
+    def read_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Read committed metadata without initialization or writer ownership."""
+        connection = sqlite3.connect(self.meta_path.as_uri() + "?mode=ro", uri=True, timeout=30)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("BEGIN")
+            yield connection
+        finally:
+            connection.rollback()
+            connection.close()
 
     def inspect(self, *, runtime: bool = False) -> dict[str, Any]:
         """Inspect schema readiness without creating storage or recovering work.
@@ -131,6 +162,8 @@ class CoreStore:
             ):
                 connection.execute(statement)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        with sqlite3.connect(self.meta_path, timeout=30) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
 
     def _file(self, relative: str) -> Path:
         path = (self.artifact_path / relative).resolve()
@@ -139,25 +172,43 @@ class CoreStore:
         return path
 
     def manifest(self, identity: str) -> dict[str, Any] | None:
-        with self.transaction() as connection:
+        if not self.meta_path.is_file():
+            return None
+        with self.read_transaction() as connection:
             row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
-        return None if row is None else json.loads(row[0])
+        if row is None:
+            return None
+        manifest = json.loads(row[0])
+        self._verify_metadata(manifest, identity)
+        return manifest
+
+    @staticmethod
+    def _verify_metadata(manifest: Mapping[str, Any], identity: str) -> None:
+        key = MaterializationKey.from_dict(manifest["key"])
+        if (manifest.get("content_identity") != hash_mapping(_manifest_content(manifest))
+                or manifest.get("identity") != identity or key.identity != identity
+                or manifest.get("node_id") != key.node_id):
+            raise ValueError("corrupt Core manifest metadata")
 
     def verify(self, manifest: Mapping[str, Any]) -> None:
-        if manifest.get("content_identity") != hash_mapping(_manifest_content(manifest)):
-            raise ValueError("corrupt Core manifest metadata")
+        self._verify_metadata(manifest, manifest["identity"])
+        self._verify_files(manifest, receipt=manifest["content_identity"])
+
+    def _verify_files(self, value, *, receipt: str) -> None:
+        verification = self._verification or ArtifactVerification()
         def visit(value):
             if isinstance(value, Mapping):
                 if "$file" in value:
                     path = self._file(value["$file"])
-                    if not path.is_file() or _checksum(path) != value["sha256"]:
+                    if not path.is_file():
                         raise ValueError(f"corrupt Core artifact: {value['$file']}")
+                    verification.verify(path, value["sha256"], receipt=receipt, checksum=_checksum)
                 for child in value.values():
                     visit(child)
             elif isinstance(value, (tuple, list)):
                 for child in value:
                     visit(child)
-        visit(manifest)
+        visit(value)
 
     def _decode(self, value):
         if isinstance(value, dict):
@@ -198,7 +249,9 @@ class CoreStore:
         exact = self.lookup(key)
         if exact is not None:
             return MaterializationLookup(MaterializationStatus.HIT, exact)
-        with self.transaction() as connection:
+        if not self.meta_path.is_file():
+            return MaterializationLookup(MaterializationStatus.MISS)
+        with self.read_transaction() as connection:
             row = connection.execute("SELECT key_json FROM materializations WHERE node_id=? ORDER BY identity LIMIT 1", (key.node_id,)).fetchone()
         if row is not None:
             return MaterializationLookup(MaterializationStatus.PARTIAL, None, "different context or coverage; reuse requires proof")
@@ -290,7 +343,7 @@ class CoreStore:
     def inventory(self) -> tuple[dict[str, Any], ...]:
         if not self.meta_path.is_file():
             return ()
-        with self.transaction() as connection:
+        with self.read_transaction() as connection:
             rows = connection.execute("SELECT identity,node_id,key_json FROM materializations ORDER BY identity").fetchall()
         return tuple({"identity": row[0], "node_id": row[1], "key": json.loads(row[2])} for row in rows)
 
@@ -309,31 +362,91 @@ class CoreStore:
         self.verify(manifest)
 
     def read_values(self, identity: str, *, start=None, end=None, include_traces=False) -> pl.DataFrame:
-        value = self.read(identity).panel
-        frame = value.lazy(include_traces=include_traces)
+        """Verify and decode only selected value partitions and their Domain."""
+        if self._verification is None:
+            with self.read_context() as reader:
+                return reader.read_values(identity, start=start, end=end, include_traces=include_traces)
+        manifest = self.manifest(identity)
+        if manifest is None:
+            raise KeyError(f"unknown Core materialization: {identity}")
+        lower = None if start is None else date.fromisoformat(str(start))
+        upper = None if end is None else date.fromisoformat(str(end))
+        if lower is not None and upper is not None and lower > upper:
+            raise ValueError("end precedes start")
+        selected = [part for part in manifest["partitions"]
+            if (lower is None or "end" not in part or date.fromisoformat(part["end"]) >= lower)
+            and (upper is None or "start" not in part or date.fromisoformat(part["start"]) <= upper)]
+        receipt = manifest["content_identity"]
+        self._verify_files(manifest["domain"], receipt=receipt)
+        self._verify_files(selected, receipt=receipt)
+        saved = manifest["domain"]
+        calendar = self._decode(saved["calendar"])["time"]
+        membership = self._decode(saved["membership"])
+        universe = membership.with_columns(pl.lit(True).alias("active")) if saved["dynamic"] else membership["asset_id"]
+        domain = Domain(calendar=calendar, universe=universe, identity=manifest["key"]["domain_identity"])
+        if selected:
+            frame = pl.scan_parquet([self._file(part["$file"]) for part in selected])
+        else:
+            # An empty window still needs the original typed schema.
+            self._verify_files(manifest["partitions"][0], receipt=receipt)
+            frame = pl.DataFrame(schema=pl.read_parquet_schema(self._file(manifest["partitions"][0]["$file"]))).lazy()
         if start is not None:
             frame = frame.filter(pl.col("time") >= start)
         if end is not None:
             frame = frame.filter(pl.col("time") <= end)
-        return frame.collect()
+        panel = Node.from_domain(frame, domain, name=manifest["node_id"],
+            value_type=manifest["value_type"], trace_columns=manifest["trace_columns"],
+            trace_identity=manifest["trace_identity"])
+        result = panel.collect(dense=False, include_traces=include_traces)
+        self._verify_files(manifest["domain"], receipt=receipt)
+        self._verify_files(selected or [manifest["partitions"][0]], receipt=receipt)
+        return result
 
     def evidence(self, identity: str) -> dict[str, Any]:
         """Read typed auxiliary artifacts, checkpoints and fit audits recursively."""
+        if self._verification is None:
+            with self.read_context() as reader:
+                return reader.evidence(identity)
         visited, audits, checkpoints, artifacts = set(), [], {}, {}
         def visit(current):
             if current in visited or self.manifest(current) is None:
                 return
             visited.add(current)
-            record = self.read(current)
-            for name, value in record.artifacts.items():
+            manifest = self.manifest(current)
+            self._verify_files({key: manifest[key] for key in ("artifacts", "checkpoint", "training_audits")},
+                receipt=manifest["content_identity"])
+            for name, value in self._decode(manifest["artifacts"]).items():
                 artifacts.setdefault(name, value)
-            audits.extend({**audit, "node_id": record.key.node_id} for audit in record.training_audits)
-            if record.checkpoint is not None:
-                checkpoints[record.key.node_id] = record.checkpoint
-            for parent in record.key.inputs:
+            audits.extend({**audit, "node_id": manifest["node_id"]} for audit in self._decode(manifest["training_audits"]))
+            if manifest["checkpoint"] is not None:
+                checkpoints[manifest["node_id"]] = self._decode(manifest["checkpoint"])
+            self._verify_files({key: manifest[key] for key in ("artifacts", "checkpoint", "training_audits")},
+                receipt=manifest["content_identity"])
+            for parent in manifest["key"]["inputs"]:
                 visit(parent)
         visit(identity)
         return {"artifacts": artifacts, "checkpoints": checkpoints, "training_audits": tuple(audits)}
+
+    def describe_evidence(self, identity: str) -> dict[str, Any]:
+        """Describe published auxiliary channels without decoding their values."""
+        visited, artifacts, checkpoints, audits = set(), set(), set(), 0
+        def visit(current):
+            nonlocal audits
+            if current in visited:
+                return
+            visited.add(current)
+            manifest = self.manifest(current)
+            if manifest is None:
+                return
+            artifacts.update(manifest["artifacts"])
+            audits += len(manifest["training_audits"])
+            if manifest["checkpoint"] is not None:
+                checkpoints.add(manifest["node_id"])
+            for parent in manifest["key"]["inputs"]:
+                visit(parent)
+        visit(identity)
+        return {"artifacts": tuple(sorted(artifacts)), "checkpoint_nodes": tuple(sorted(checkpoints)),
+            "training_audit_count": audits}
 
     def check_integrity(self, identities=None) -> tuple[dict[str, Any], ...]:
         selected = [item["identity"] for item in self.inventory()] if identities is None else identities
@@ -443,18 +556,24 @@ class CoreStore:
         return result
 
     def graph_state(self, graph_id: str) -> dict[str, Any]:
-        self.initialize()
-        with self.transaction() as connection:
-            connection.execute("INSERT OR IGNORE INTO graphs VALUES(?,0,0,?,NULL)",
-                (graph_id, _json(LogicalGraphSpec({}, ()).to_dict())))
+        empty = {"revision": 0, "state_revision": 0, "spec": LogicalGraphSpec({}, ()),
+            "statuses": {}, "contexts": {}, "current_update": None}
+        if not self.meta_path.is_file():
+            return empty
+        with self.read_transaction() as connection:
             row = connection.execute("SELECT * FROM graphs WHERE graph_id=?", (graph_id,)).fetchone()
+            if row is None:
+                return empty
             status = dict(connection.execute("SELECT node_id,status FROM graph_nodes WHERE graph_id=?", (graph_id,)).fetchall())
             contexts = {item[0]: json.loads(item[1]) for item in connection.execute("SELECT context_id,definition_json FROM contexts WHERE graph_id=? ORDER BY context_id", (graph_id,))}
         return {"revision": row["revision"], "state_revision": row["state_revision"], "spec": LogicalGraphSpec.from_dict(json.loads(row["spec_json"])),
                 "statuses": status, "contexts": contexts, "current_update": row["current_update"]}
 
     def save_graph(self, graph_id, specification, statuses, *, expected_revision, expected_state_revision, state_change=False):
+        self.initialize()
         with self.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO graphs VALUES(?,0,0,?,NULL)",
+                (graph_id, _json(LogicalGraphSpec({}, ()).to_dict())))
             row = connection.execute("SELECT revision,state_revision FROM graphs WHERE graph_id=?", (graph_id,)).fetchone()
             if row is None or tuple(row) != (expected_revision, expected_state_revision):
                 raise RevisionConflict("graph or node state changed")
@@ -467,9 +586,11 @@ class CoreStore:
     def register_context(self, graph_id: str, context_id: str, definition: Mapping[str, Any]) -> None:
         if not context_id:
             raise ValueError("context_id must be nonempty")
-        self.graph_state(graph_id)
+        self.initialize()
         serialized = _json(definition)
         with self.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO graphs VALUES(?,0,0,?,NULL)",
+                (graph_id, _json(LogicalGraphSpec({}, ()).to_dict())))
             old = connection.execute("SELECT definition_json FROM contexts WHERE graph_id=? AND context_id=?", (graph_id, context_id)).fetchone()
             if old is None or old[0] != serialized:
                 connection.execute("INSERT INTO contexts VALUES(?,?,?) ON CONFLICT(graph_id,context_id) DO UPDATE SET definition_json=excluded.definition_json", (graph_id, context_id, serialized))
@@ -520,7 +641,7 @@ class CoreStore:
         """Recover a committed receipt by the caller's stable request token."""
         if not self.meta_path.is_file():
             return None
-        with self.transaction() as connection:
+        with self.read_transaction() as connection:
             rows = connection.execute("SELECT receipt_json FROM updates WHERE graph_id=?", (graph_id,)).fetchall()
         matches = [json.loads(row[0]) for row in rows if json.loads(row[0]).get("request_id") == request_id]
         if len(matches) > 1:
@@ -545,14 +666,23 @@ class CoreStore:
             yield receipt
 
     def verify_update(self, identity: str) -> dict[str, Any]:
-        with self.transaction() as connection:
+        receipt = self.describe_update(identity)
+        for results in receipt["results"].values():
+            for materialization in results.values():
+                self.read(materialization)
+        return receipt
+
+    def describe_update(self, identity: str) -> dict[str, Any]:
+        """Validate a committed completion receipt without reading artifact bytes.
+
+        Publication completeness is distinct from a current full integrity audit.
+        Historical receipts do not require the current graph revision to match.
+        """
+        with self.read_transaction() as connection:
             row = connection.execute("SELECT receipt_json FROM updates WHERE identity=?", (identity,)).fetchone()
         if row is None:
             raise KeyError(f"unknown update receipt: {identity}")
         receipt = json.loads(row[0])
         if hash_mapping({k: v for k, v in receipt.items() if k != "identity"}) != identity:
             raise ValueError("update receipt identity mismatch")
-        for results in receipt["results"].values():
-            for materialization in results.values():
-                self.read(materialization)
         return receipt

@@ -113,6 +113,7 @@ def test_active_rollback_journal_never_confers_uncommitted_readiness(
     store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
     store.initialize()
     with closing(sqlite3.connect(store.meta_path)) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute("CREATE TABLE pressure(payload BLOB)")
         version = committed_version
         connection.execute(f"PRAGMA user_version={version}")
@@ -217,6 +218,7 @@ def test_runtime_hot_abandoned_journal_fails_closed_without_recovery(tmp_path):
     script = """
 import os, sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
+db.execute('PRAGMA journal_mode=DELETE')
 db.execute('CREATE TABLE pressure(payload BLOB)')
 db.commit()
 db.execute('PRAGMA cache_size=1')

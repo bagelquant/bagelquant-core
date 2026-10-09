@@ -250,3 +250,7 @@ cross-sectional 20-layer chains contain no runtime-generated sort nodes.
 Core accepts explicit ResourceLimits and executes admitted nodes. Workbench owns
 machine detection, DAG admission and memory-pressure response. Historical
 measurements above are not a performance claim for the refactored storage path.
+
+## Selective artifact verification
+
+Metadata inspection performs zero artifact hashes. A six-month typed value fixture with two Domain files requires three hashes for a one-day read: the Domain files and one monthly partition. Repeated reads in one `read_context` reuse those proofs while rechecking file identity; a new context verifies bytes again. Unselected corruption is detected by an explicit full audit or when that partition is consumed. These structural counts are tested; they are not a wall-time guarantee or a change to numerical kernels.

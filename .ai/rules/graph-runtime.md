@@ -28,6 +28,17 @@ upstream prerequisites. Cached values never bypass sleep; historical reads remai
 
 CoreStore owns type/Domain/trace/checkpoint/audit/artifact integrity, inventory,
 recovery and cleanup. Public receipt APIs hide backend file locations from apps.
+`describe`, `describe_update` and `describe_evidence` validate committed metadata
+without hashing numerical files or claiming a current byte audit. `read_values`
+verifies the required Domain and selected monthly partitions, including file
+identity after collection; auxiliary evidence is checked only when consumed.
+Explicit full integrity and update verification still cover every saved channel.
+`read_context` shares bounded thread-safe proofs only during one operation,
+binding receipt/checksum and device/inode/size/mtime/ctime; exit or failure clears
+proofs. Actual cached Node execution remains verified and typed, never admitted
+from metadata-only hits. Graph revision guards always read fresh committed state.
+Initialization enables WAL explicitly; metadata and graph reads use mode=ro,
+query_only transactions and never create graphs or perform recovery.
 reference_publication fences Core state while an application commits an immutable
 receipt reference in its own transaction; no distributed commit or rollback.
 Cleanup preserves committed historical evidence and only reclaims verified

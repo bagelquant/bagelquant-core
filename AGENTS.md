@@ -24,6 +24,11 @@ Keep this entry short; detailed owner contracts live under `.ai/rules/`.
 - `CoreStore.inspect(runtime=True)` uses coordinated committed SQLite reads during
   live writes, permitting WAL/SHM coordination without initialization/recovery;
   default inspection leaves originals/sidecars untouched. Hot recovery fails closed.
+- Receipt descriptions validate published metadata without claiming a new byte
+  audit; selected value reads verify consumed Domain/partitions. Explicit full
+  integrity APIs retain all channels. Finite read contexts expire checksum proofs.
+- Explicit initialization enables WAL. Graph/status reads never initialize or
+  acquire writer ownership; mutations retain revision/publication fences.
 - Regenerate operation references from their generator after catalog changes;
   coordinate separate Workbench catalog updates when the public contract changes.
 

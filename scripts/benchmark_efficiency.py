@@ -617,7 +617,7 @@ def _peak_rss_bytes() -> int:
     import resource
 
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return int(value if sys.platform == "darwin" else value * 1024)
+    return int(value)
 
 
 def _run_worker(args: argparse.Namespace) -> None:

@@ -28,3 +28,6 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.uv]
+environments = ["sys_platform == 'darwin'"]

@@ -22,6 +22,6 @@ or migration. Real data and service cutover are separate operations.
 Core metadata schema 3 uses indexed update/node relations and compact candidate
 headers. A schema 2 store requires an explicitly initialized fresh location.
 
-Supported platforms: macOS and Linux. Windows support is retired.
+Supported platform: macOS. Validation runs locally; GitHub Actions is disabled.
 
 [Calculation records](docs/en/calculation_records.md)

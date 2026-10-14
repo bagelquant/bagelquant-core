@@ -130,7 +130,7 @@ def _registry_item(name: str, *, kind: str) -> Any:
 
 
 def _panels(name: str) -> tuple[Node, Node]:
-    if name.startswith("group_") or name == "orthogonalize":
+    if name.startswith("group_") or name in {"orthogonalize", "cross_sectional_residual", "mad_zscore", "cross_sectional_weighted_mean"}:
         times = [date(2024, 1, 2)]
         assets = ["a", "b", "c", "d"]
         source_values = [1.0, 3.0, 6.0, 10.0]

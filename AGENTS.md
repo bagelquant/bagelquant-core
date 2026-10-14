@@ -3,8 +3,18 @@
 This repository owns Domain, typed Node, Operator and Graph, safe DSL, deterministic
 numerical/ML primitives and CoreStore graph/cache/checkpoint/artifact persistence.
 Caller-supplied paths, source evidence, cutoffs and resource budgets are explicit.
+Calculation changes must prove actual incremental intervals and historical reuse
+for Alpha, Prediction/training and Portfolio, with metadata-only prerequisites;
+follow graph/runtime acceptance, including explicit calendar checkpoints,
+per-period supervised Prediction evidence and original artifact references.
 Core has no BagelQuant package dependency; Workbench owns global scheduling and
 machine policy. Do not add providers, accounts, China rules or governance here.
+Core schema 2 owns one compact successful-node completion per graph/context/node;
+normal repeat planning reads these flags and never opens numerical values.
+Publish completion after each durable node; interrupted retries retain the frontier.
+Generic causal-version inputs use the same Graph/UpdatePlan/CoreStore path.
+Separate source observation coverage from causal output membership; retain
+bounded version halos, shared reads and original completed output references.
 
 Before work, read [`.ai/README.md`](.ai/README.md), the mandatory development
 rules, the affected topic rules, [`README.md`](README.md), [`pyproject.toml`](pyproject.toml)

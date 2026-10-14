@@ -9,6 +9,7 @@ import pytest
 
 from bagelquant_core import CoreStore
 from bagelquant_core.inspection import open_metadata_snapshot
+from bagelquant_core.store import SCHEMA_VERSION
 
 
 def test_inspect_missing_store_is_read_only(tmp_path):
@@ -21,7 +22,7 @@ def test_inspect_ready_store_keeps_bytes_and_artifacts(tmp_path):
     store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
     store.initialize()
     before = store.meta_path.read_bytes()
-    assert store.inspect() == {"status": "ready", "schema_version": 1, "reason": None}
+    assert store.inspect() == {"status": "ready", "schema_version": SCHEMA_VERSION, "reason": None}
     assert store.meta_path.read_bytes() == before
     assert list(store.artifact_path.iterdir()) == []
 
@@ -50,7 +51,7 @@ def test_matching_version_with_incomplete_columns_is_incompatible(tmp_path):
     before = store.meta_path.read_bytes()
     assert store.inspect() == {
         "status": "incompatible",
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "reason": "schema_incompatible",
     }
     assert store.meta_path.read_bytes() == before
@@ -69,7 +70,7 @@ def test_checkpointed_wal_inspection_creates_no_sidecars(tmp_path, version):
         path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()
     }
     assert set(before) == {"meta.sqlite"}
-    assert store.inspect()["status"] == ("ready" if version == 1 else "incompatible")
+    assert store.inspect()["status"] == ("ready" if version == SCHEMA_VERSION else "incompatible")
     assert {
         path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()
     } == before
@@ -97,7 +98,7 @@ def test_active_wal_inspection_reads_committed_version_without_touching_index(
             if path.is_file()
         }
         assert store.inspect()["status"] == (
-            "ready" if version == 1 else "incompatible"
+            "ready" if version == SCHEMA_VERSION else "incompatible"
         )
         assert {
             path.name: path.read_bytes()
@@ -139,7 +140,7 @@ def test_active_rollback_journal_never_confers_uncommitted_readiness(
         } == before
         connection.rollback()
         assert store.inspect()["status"] == (
-            "ready" if committed_version == 1 else "incompatible"
+            "ready" if committed_version == SCHEMA_VERSION else "incompatible"
         )
 
 
@@ -168,14 +169,14 @@ def test_runtime_inspection_reads_committed_wal_without_copying(tmp_path, monkey
     with closing(sqlite3.connect(store.meta_path)) as writer:
         writer.execute("PRAGMA journal_mode=WAL")
         writer.execute("PRAGMA wal_autocheckpoint=0")
-        writer.execute("PRAGMA user_version=2")
+        writer.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
         writer.commit()
         writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        writer.execute("PRAGMA user_version=1")
+        writer.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         writer.commit()
         before = store.meta_path.read_bytes()
         monkeypatch.setattr(inspection.shutil, "copyfile", lambda *args: pytest.fail("runtime copied metadata"))
-        assert store.inspect(runtime=True) == {"status": "ready", "schema_version": 1, "reason": None}
+        assert store.inspect(runtime=True) == {"status": "ready", "schema_version": SCHEMA_VERSION, "reason": None}
         assert store.meta_path.read_bytes() == before
         assert list(store.artifact_path.iterdir()) == []
 
@@ -192,13 +193,13 @@ def test_runtime_read_view_stays_consistent_across_concurrent_wal_commit(tmp_pat
             assert reader.in_transaction
             assert reader.execute("PRAGMA query_only").fetchone()[0] == 1
             writer.execute("UPDATE marker SET value=2")
-            writer.execute("PRAGMA user_version=2")
+            writer.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
             writer.commit()
             assert reader.execute("SELECT value FROM marker").fetchone()[0] == 1
-            assert reader.execute("PRAGMA user_version").fetchone()[0] == 1
+            assert reader.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
             with pytest.raises(sqlite3.OperationalError):
                 reader.execute("UPDATE marker SET value=3")
-        assert store.inspect(runtime=True)["schema_version"] == 2
+        assert store.inspect(runtime=True)["schema_version"] == SCHEMA_VERSION + 1
 
 
 def test_runtime_allows_reserved_rollback_writer_but_never_uncommitted_schema(tmp_path):
@@ -206,7 +207,7 @@ def test_runtime_allows_reserved_rollback_writer_but_never_uncommitted_schema(tm
     store.initialize()
     with closing(sqlite3.connect(store.meta_path)) as writer:
         writer.execute("BEGIN IMMEDIATE")
-        writer.execute("PRAGMA user_version=2")
+        writer.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
         assert store.inspect(runtime=True)["status"] == "ready"
         writer.rollback()
         assert store.inspect()["status"] == "ready"

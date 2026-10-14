@@ -2,6 +2,8 @@
 
 Always read [development rules](rules/development.md). Then load the rows that
 match the task; rules are authoritative instructions, linked docs explain use.
+Every calculation/update change also reads [Graph and runtime](rules/graph-runtime.md)
+for recorded prerequisites, incremental work and historical-reuse acceptance.
 
 | Task topic | Owner rules | Relevant docs |
 | --- | --- | --- |

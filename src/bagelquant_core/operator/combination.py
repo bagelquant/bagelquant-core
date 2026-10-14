@@ -104,6 +104,7 @@ def _broadcast_by_time_traces(
 @operator(
     contract=OperationContract(
         execution=ExecutionMode.EAGER_BARRIER,
+        history=0,
         trace_rule=TraceRule.CUSTOM,
         trace_function=_broadcast_by_time_traces,
     )

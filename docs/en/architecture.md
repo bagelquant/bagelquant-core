@@ -5,6 +5,17 @@ package. Callers supply data, Domain coordinates, immutable source evidence,
 SQLite and artifact paths, observation dates, information cutoff and resource
 limits. Workbench owns machine inspection, global scheduling and China semantics.
 
+Core metadata schema 2 retains one small successful-node row per graph, execution
+context and logical node. `CoreStore.node_completions(graph_id, context_id)` reads
+the definition/upstream digests, completed observation/check dates and immutable
+result reference in one metadata query. Exact repeat plans are already complete:
+they invoke no value lookup, source proof callback or numerical kernel. Missing
+children load only their direct completed parents as lazy typed plans. Each node
+advances its completion after durable result publication, so an interrupted run
+resumes its remaining frontier. Global/branch publication still requires complete
+coverage and revision fences; historical updates preserve a later completion row.
+Use a fresh store for schema 2; no schema 1 migration/reader is provided.
+
 ## Objects and types
 
 - `Domain(calendar=..., universe=...)` defines trading sessions and static or
@@ -101,14 +112,72 @@ Finite-history operators use fixed 32-session mathematical blocks with a supplie
 anchor. Dynamic membership halos count admitted observations. Block proofs include
 all parent values, traces, coordinates and membership. Append and revisions reuse
 only proven blocks; cross-sectional changes affect complete dates. Unsupported
-projections and unknown histories conservatively use required full history.
+projections and unknown histories still have implementation gaps in the stateful
+path described below. Finite execution with a completed matching graph/context
+requires explicit interval-index maintenance when its reuse proof is unknown.
 
-Declared stateful operators can restore checkpoints after all parent prefixes
-are proven unchanged. Revisions, maturity and membership changes invalidate that
-proof. Full observation calendars remain available to training windows and trace
-propagation; checkpoints skip completed state transitions. Damaged optional
-checkpoint candidates fall back to computation; explicitly reading corrupt
-historical evidence still fails. Physical batches and worker counts do not change
+`Graph.plan_update(input_window_loader=...)` may load only each missing block's
+direct input window. Core validates the full frozen identity, type and traces,
+and the window's actual calendar/membership coordinates. A completed canonical
+partial block continues by publishing its new output tail. Pointwise kernels
+consume new sessions only. The built-in `pct_change` and `smooth` kernels read
+only the required admitted lookback of assets occurring in the missing output,
+including nulls and historical observations needed after reentry. Retained
+canonical proof scopes and material keys stay unchanged. Other rolling kernels
+reconstruct the canonical warm state to preserve floating-point arithmetic.
+`computed_output_sessions`, `kernel_sessions` and
+`input_sessions` report these distinct amounts of work.
+
+`CoreStore.publish(value_references=...)` composes registered numerical partitions
+without decoding, rehashing or rewriting old values. Indexed ordered calendar,
+membership/type/trace and exact once-only coverage proofs are required. Reusable
+Domain files are fenced again inside the publication writer transaction. Missing
+optional indexes require explicit maintenance; they never trigger an audit or
+backfill during publication. When several registered receipts share a Domain,
+publication prefers a receipt with an index bound to its original content in
+both preparation and the closing transaction. It still validates actual
+coordinates; a damaged selected proof fails and never causes implicit repair.
+`completed_materializations` reads successful scoped
+update receipts, rather than interpreting interrupted cache fragments as a
+completed context.
+
+Declared stateful operators restore checkpoints after every parent's complete
+prefix is proven unchanged. Missing proof or a missing valid preceding state
+for completed history blocks with explicit maintenance; it never starts a cold
+historical replay. Candidates validate numerical signatures and declared state
+shape, trying earlier proven states when an optional candidate is malformed.
+Revisions, maturity and membership changes invalidate their actual prefix proof.
+Same-boundary enclosing receipts reuse values/state without input consumption.
+
+Training `checkpoint_parent_scopes` declares each label auxiliary's consumed
+observation prefix and the last scheduled fit's information cutoff. A caller's
+`input_scope_proof` can prove economic endpoints were ineligible at that cutoff;
+calendar extensions do not invalidate old fits for such endpoints. This does
+not change the sampling window or maturity parameter. The original scoped
+proof/cutoff is retained in the checkpoint policy; legacy proofs keep their
+original scope and cannot be narrowed implicitly. Newly available labels
+outside that prefix preserve old fits. Positional features retain their complete
+prediction prefix, including a source also aliased as a label. The complete output
+calendar/membership prefix is checked independently. Auxiliary sources with
+fused trace proofs still use the full prefix; separate trace evidence and finer
+fit-boundary checkpoints remain required for more precise historical repair.
+
+Finite updates preflight completed blocks before any kernel. If changed opaque
+proofs invalidate the entire completed prefix, execution blocks for explicit
+impact resolution/proof maintenance. A proof-format change never permits
+historical numerical replay or constitutes a numerical definition change.
+
+`OperationContract.checkpoint_history` declares a continuation read halo: EWM
+uses new sessions, weight state includes the preceding session, and training
+uses its window plus label maturity. The full execution calendar retains fit
+anchors and embargo semantics. Cumulative traces retain a per-asset checkpoint
+carry; older states derive this carry from saved output traces when consumed.
+Continuation publishes only its typed tail and references original partitions.
+Relevant `$` parameter bindings enter state/block policy; unrelated parameters
+do not invalidate completed work. Unprovable legacy policy/parameter scope needs
+explicit maintenance. Reading corrupt historical values or auditing them still
+fails; reference-only publication does not audit those bytes.
+Physical batches and worker counts do not change
 mathematical policy, identity or results. Observation endpoints never replace the
 frozen information cutoff.
 
@@ -134,8 +203,8 @@ Run `uv run ruff check .`, `uv run python -m pytest` and
 `uv run python scripts/generate_operator_reference.py --check` from Core. Tests use
 synthetic inputs and temporary stores. Register custom operators with explicit
 input/output/auxiliary types, version and OperationContract (execution, density,
-trace propagation, history and checkpoint eligibility). Unknown histories require
-full computation. Optional ML/optimizer dependencies are imported only as needed.
+trace propagation, history and checkpoint eligibility). Unknown histories cannot
+authorize replay of completed results. Optional ML/optimizer dependencies are imported only as needed.
 
 See the [generated Operator catalog](reference/operators/index.md).
 
@@ -148,6 +217,96 @@ materializations without altering logical identities or historical receipts.
 
 ## Published integrity and reads
 
-CoreStore owns immutable manifests and committed graph/update receipts. `describe`, `describe_update` and `describe_evidence` check metadata identity without hashing artifact bytes. Publication validates immutable identity and transaction fences; explicit integrity audits verify every retained channel and derived index. `read_values` validates the Domain and only monthly partitions intersecting the requested dates, preserving sparse values, types and traces. `evidence` reads auxiliary evidence without loading the value history.
+CoreStore owns immutable manifests and committed graph/update receipts. `describe`, `describe_update` and `describe_evidence` check metadata identity without hashing artifact bytes. Publication validates immutable identity and transaction fences; explicit integrity audits verify every retained channel and derived index. Bounded `read_values` selects persisted calendar and dynamic membership rows before Domain validation and reads only monthly partitions intersecting the requested dates, preserving sparse values, types and traces. Canonical Domain footer schemas and invalid null observation keys remain checked; empty selections return typed empty frames. Unbounded reads still validate the complete Domain. `evidence` reads auxiliary evidence without loading the value history.
 
 `read_context` shares bounded, thread-safe checksum proofs within one operation. Proofs bind receipt, expected checksum and file identity; replacement, modification or context exit discards reuse. They are not a persistent global validity label. Inspection and graph metadata reads create no missing store or graph. Explicit initialization enables SQLite WAL; readers use query-only committed transactions, while publication retains fresh revision/CAS checks.
+
+## Explicit input proof format maintenance
+
+`CoreStore.plan_input_proof_rebind(spec, identity, **source_bindings)` validates
+one original canonical finite block against frozen source-owner projections and
+registers an immutable admission record. Despite its planning name, this is an
+explicit metadata mutation, never a normal readiness check or graph update step.
+The caller supplies actual original parameter bindings, direct parent Domains,
+fully bound interval tokens, and `ConsumedInputEvidence` for both sources. Each
+projection binds its immutable source receipt/digest, exact consumed content,
+read bounds, Domain, value type and every consumed trace channel. Scalar-only
+evidence cannot establish equivalence of a traced input. Output equality alone
+does not establish input equivalence. Unknown original bindings require source
+owner maintenance rather than a guessed current receipt.
+
+`Node.source_interval_identity(source_token, start, end)` supplies the same Core
+Domain/type/trace binding used by Graph for external source proofs. Bounds are
+`datetime.date` values; the source owner proves the consumed channels. The
+method reads only actual coordinates and metadata, without numerical reads or
+publication. Graph memoization distinguishes actual immutable Domain objects,
+even when callers supply equal opaque Domain identities.
+
+`apply_input_proof_rebind(plan)` checks the exact registered plan before a cache
+hit and in the publication transaction, then references original numerical
+partitions. It does not execute historical kernels or rehash original files.
+Original receipts, numerical keys/context, parameters and execution policy remain
+unchanged; the replacement changes only proven input identities and may record
+verified relevant parameter bindings. Reads and explicit audits validate the
+entire retained original/admission chain. Missing or altered authority blocks
+reuse; no normal path rebuilds it implicitly. Cancellation before admission
+leaves no positive authority; cancellation afterward may retain planned metadata
+without publishing a numerical result or advancing a graph pointer.
+
+
+Rebalance checkpoint continuation uses the actual named calendar Node's complete
+Domain date axis, including sessions with empty membership. The saved anchor and
+complete consumed prefix must match before restoring state; only new sessions
+are read and calculated. CoreStore.read_checkpoint reads the state channel alone.
+CoreStore.compose_artifact references original uniquely dated decision artifacts
+and appends a same-schema, nonoverlapping tail, preserving historical files.
+Legacy completions without checkpoint/calendar or dated-artifact metadata require
+explicit owner maintenance before continuation.
+
+### External input proof windows
+
+The five supervised `prediction:*` factories use independent-period checkpoints.
+They retain original IC vectors or OLS coefficients/covariance and diagnostics,
+sample identities, availability, pending periods and the complete Domain date
+axis, including empty sessions. `OperationContract.checkpoint_periods` selects
+new, revised and newly mature samples from day-level source proofs. Core's
+checkpoint executor uses the same Runtime for a statistics phase and the exact
+dependent prediction dates. This preserves arbitrary label delays without a
+fixed lookback assumption. Historical fits and unchanged value partitions are
+reused; committed statistics survive an interrupted prediction/publication.
+Legacy results lacking original statistics require explicit evidence maintenance
+from saved IC/regression records; output values cannot establish that evidence.
+Missing proofs or changes affecting all completed history remain explicit blocks.
+
+`UpdatePlan.input_proof_windows(context_id)` returns a typed Polars metadata table
+with `context_id`, `input_key`, `consumer`, Date `start`/`end`, optional Date
+`consumption_cutoff`, `strategy` and `status`. A null consumption cutoff means
+no override of the caller's actual frozen global information cutoff. It uses the plan's actual bound
+Domains and supported finite policies. Finite scopes use the execution engine's
+32-session blocks and membership-aware observation halos, including retained
+same-policy partial block endpoints. Named auxiliary external parents participate.
+Checkpoint scopes use the same configuration/role/trace rules and relevant
+parameter candidate selection as execution. Retained original `parent_ends` and
+`parent_cutoffs` are preserved; absent legacy fields mean the original full prefix,
+not a newly shortened consumed-label contract.
+
+`required` describes current proof requests; `candidate` describes conditional
+retained-prefix prerequisites, whose proof and checkpoint validity are still
+checked during execution. `empty` consumed prefixes need no scalar token.
+`unknown` identifies a generic or unsupported incremental strategy, with null
+bounds; it never promises a finite replay window. Exact materialization hits
+produce no input proof requests. The table describes direct external parents
+only; completed operator parents are proven by Core's own receipts. Independent
+period checkpoints return `strategy="checkpoint_periods"` and one required
+Date interval per source period, including empty days, with no cutoff override.
+
+This API reads metadata and actual coordinate state only. It does not invoke proof
+callbacks, load source values, run kernels, audit original bytes, merge graphs,
+publish records or warm indexes. Callers may explicitly prepare exactly these
+scopes through the source owner's maintenance API, preserving real information
+cutoffs and coordinate selectors. Candidate scopes are a conservative union,
+not a claim that every candidate is read or reused. Inventory can grow through
+other publications; new missing scope proofs remain an explicit execution block.
+Monthly hashes cannot replace a different block/halo/Domain scope or be joined
+into a new canonical hash. Scope planning is not live acceptance or authority to
+perform maintenance.

@@ -27,6 +27,7 @@ from bagelquant_core.operator.arithmetic import add, div, mul, sub
 from bagelquant_core.operator.combination import broadcast_by_time, coalesce
 from bagelquant_core.operator.comparison import and_, equal, greater, greater_equal, less, less_equal, or_, power_df, xand, xor
 from bagelquant_core.operator.regression import rolling_corr, rolling_cov
+from bagelquant_core.operator.robust import mad_zscore, cross_sectional_residual, cross_sectional_weighted_mean
 
 from .portfolio import top_n, equal_weight, rebalance, regularized_weights, exposure_constrained_weights
 from .training import rolling_elastic_net_prediction, rolling_lightgbm_prediction
@@ -37,6 +38,7 @@ __all__ = ['OPERATOR_REGISTRY', 'Operator', 'prediction_signal', 'operation_cate
 
 __all__ += ["top_n", "equal_weight", "rebalance", "regularized_weights", "exposure_constrained_weights",
             "rolling_elastic_net_prediction", "rolling_lightgbm_prediction"]
+__all__ += ["mad_zscore", "cross_sectional_residual", "cross_sectional_weighted_mean"]
 for _kind in ("identity", "equal_weight", "ic_weighted", "ic_weighted_decay", "quantile_ic_weighted", "ols", "gls"):
     _name = _kind + "_prediction"
     globals()[_name] = OPERATOR_REGISTRY.get("prediction:" + _kind)

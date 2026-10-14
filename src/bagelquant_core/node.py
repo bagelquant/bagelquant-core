@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from datetime import date
 from .hashing import hash_dataframe
 from typing import Any, Mapping, Sequence
 
@@ -196,6 +197,25 @@ class Node(NodeDefinition):
         """Describe an eager input's interval from its construction-time record."""
         from .computation_index import interval
         return None if self._interval_index is None else interval(self._interval_index, start, end)
+
+    def source_interval_identity(self, source_token: str, start: date, end: date) -> str:
+        """Bind a caller's consumed-input proof to this typed interval Domain.
+
+        The source owner proves every consumed value/trace channel; Core binds
+        its actual calendar, membership, value type and trace declarations.
+        This metadata operation neither reads values nor publishes an index.
+        """
+        from .computation_index import describe, interval
+        from .hashing import hash_mapping
+        if not isinstance(source_token, str) or not source_token:
+            raise ValueError("Source interval proof requires a nonempty content token")
+        if type(start) is not date or type(end) is not date:
+            raise ValueError("Source interval proof requires Date bounds")
+        if end < start:
+            raise ValueError("Source interval proof end precedes start")
+        domain = describe(self.domain.window(start, end), days={}, value_type=self.value_type,
+            trace_columns=self.trace_columns)
+        return hash_mapping({"source": source_token, "domain": interval(domain, start, end)})
 
     @property
     def source_key(self) -> str:
@@ -394,6 +414,7 @@ class Node(NodeDefinition):
             signature(registered.operation).bind(*node._inputs,
                 **{role: values if registered.panel_parameter_kinds[role] else values[0] for role, values in node._panel_parameters.items()}, **node._config)
         node._domain = node._parents[-1].domain if registered.registry_name.endswith(".project_domain") else node._parents[0].domain
+        node._checkpoint_calendar_axis(allow_unbound=True)
         return node
 
     @property
@@ -410,6 +431,22 @@ class Node(NodeDefinition):
     def spec_panel_parameters(self):
         return self._panel_parameters if self.node_type == "operator" else {}
 
+    def _checkpoint_calendar_axis(self, *, allow_unbound=False):
+        role = self.contract.checkpoint_calendar_role
+        if role is None:
+            return None
+        calendars = self._panel_parameters.get(role, ())
+        if len(calendars) != 1:
+            raise ValueError("checkpoint calendar role requires one explicit auxiliary Node")
+        if self.domain is None or calendars[0].domain is None:
+            if allow_unbound:
+                return None
+            raise ValueError("checkpoint calendar axis requires bound Node Domains")
+        axis = tuple(calendars[0].domain.times.to_list())
+        if tuple(day for day in axis if self.domain.times.min() <= day <= self.domain.times.max()) != tuple(self.domain.times.to_list()):
+            raise ValueError("explicit checkpoint calendar axis differs from actual execution calendar")
+        return axis
+
     def evaluate_frames(self, *frames):
         if len(frames) != len(self.parents):
             raise ValueError(f"{self.name} requires {len(self.parents)} dependency frames")
@@ -419,13 +456,13 @@ class Node(NodeDefinition):
             values = frames[offset:offset + len(nodes)]
             offset += len(nodes)
             auxiliary[parameter] = tuple(values) if self._registered.panel_parameter_kinds[parameter] else values[0]
-        if self._registered.factory is not None:
-            return self.operation._compute_frames(*frames[:len(self._inputs)], **auxiliary)
-        from .operator_state import operator_checkpoint_node
-        from .logical import normalized_operator_config
-        signature = {"operator": self._registered.registry_name, "version": self._registered.version,
-                     "parameters": normalized_operator_config(self._registered.registry_name, self._config)}
-        with operator_checkpoint_node(self.logical_id, signature):
+        from .operator_state import operator_checkpoint_node, operator_checkpoint_signature
+        signature = operator_checkpoint_signature(self._registered, self._config)
+        anchor_calendar = self._checkpoint_calendar_axis()
+        with operator_checkpoint_node(self.logical_id, signature, anchor_calendar=anchor_calendar,
+                execution_calendar=self.domain.times.to_list() if self.contract.checkpoint_replay else ()):
+            if self._registered.factory is not None:
+                return self.operation._compute_frames(*frames[:len(self._inputs)], **auxiliary)
             return self._registered.operation(*frames[:len(self._inputs)], **auxiliary, **self._config)
 
     def spec(self):

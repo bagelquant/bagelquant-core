@@ -14,11 +14,11 @@ def log(frame: pl.DataFrame) -> pl.DataFrame:
     return unary(frame, pl.when(value > 0).then(value.log()).otherwise(None))
 
 
-@operator
+@operator(version="2")
 def log1p(frame: pl.DataFrame) -> pl.DataFrame:
     value = pl.col(VALUE)
     return unary(
-        frame, pl.when(value > -1).then((1.0 + value).log()).otherwise(None)
+        frame, pl.when(value > -1).then(value.log1p()).otherwise(None)
     )
 
 

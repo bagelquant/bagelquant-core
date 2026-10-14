@@ -7,6 +7,9 @@ from typing import Any
 
 
 OPERATION_DESCRIPTIONS = {
+    "mad_zscore": "Clip each finite cross-section by median/MAD and standardize with population variance.",
+    "cross_sectional_residual": "Return full-rank cross-sectional OLS residuals with explicit controls and intercept.",
+    "cross_sectional_weighted_mean": "Broadcast each date's finite positive-weighted mean to its admitted asset coordinates.",
     "prediction_signal": "Declare a numeric signal as a typed prediction, preserving coordinates and availability.",
     "canonicalize_values": "Round numerical values to explicit significant digits at a semantic boundary.",
     "project_domain": "Restrict an upstream value to an explicit membership Domain after computing its source universe.",
@@ -146,7 +149,7 @@ OPERATION_DESCRIPTIONS = {
 def operation_category(name: str, *, kind: str) -> str:
     """Return the stable functional category shared by generated catalogs."""
 
-    if name.startswith("group_") or name == "orthogonalize":
+    if name.startswith("group_") or name in {"orthogonalize", "cross_sectional_residual"}:
         return "Group & neutralization"
     if name in {
         "rolling_ols",
@@ -211,6 +214,8 @@ def operation_category(name: str, *, kind: str) -> str:
         "rankpct",
         "nrank",
         "zscore",
+        "mad_zscore",
+        "cross_sectional_weighted_mean",
         "winsorize",
         "normalize",
         "min_max_scale",

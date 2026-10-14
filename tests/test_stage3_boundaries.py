@@ -124,7 +124,7 @@ def test_retained_binding_cannot_upgrade_transient_source_evidence(tmp_path):
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
-def test_optional_damaged_checkpoint_falls_back_but_history_stays_invalid(
+def test_reference_continuation_checks_file_existence_without_original_byte_audit(
     tmp_path, damage
 ):
     from bagelquant_core.operator import ewm_mean
@@ -144,18 +144,17 @@ def test_optional_damaged_checkpoint_falls_back_but_history_stays_invalid(
         file.write_bytes(b"corrupt optional candidate")
     x = source(45, dynamic=True)
     plan = graph.plan_update({"main": {"x": x}}, through=x.domain.times.max())
-    result = finish(plan)
-    cold, fresh, cold_root = global_graph(tmp_path / "cold", ewm_mean(x, alpha=0.4))
-    expected = finish(
-        cold.plan_update({"main": {"x": x}}, through=x.domain.times.max())
-    )
-    assert_frame_equal(
-        store.read(result["results"]["main"][root]).panel.collect(include_traces=True),
-        fresh.read(expected["results"]["main"][cold_root]).panel.collect(
-            include_traces=True
-        ),
-        check_exact=True,
-    )
-    assert plan.resource_usage["main"][root]["checkpoint_through"] is None
+    if damage == "missing":
+        with pytest.raises(ValueError, match="file missing"):
+            finish(plan)
+        assert store.graph_state("global")["current_update"] == old["identity"]
+        identity = old_identity
+    else:
+        updated = finish(plan)
+        assert plan.resource_usage["main"][root]["checkpoint_through"] == str(first.domain.times.max())
+        assert plan.resource_usage["main"][root]["replayed_sessions"] == 10
+        identity = updated["results"]["main"][root]
+    with pytest.raises((ValueError, OSError)):
+        store.read_values(identity)
     with pytest.raises((ValueError, OSError)):
         store.verify_identity(old_identity)

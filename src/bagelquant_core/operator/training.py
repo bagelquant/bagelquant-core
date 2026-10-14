@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
+from collections.abc import Mapping
 from datetime import date
 import hashlib
 import json
@@ -102,10 +103,36 @@ def replay_training_audits(records):
     if collector is not None:
         collector.extend(deepcopy(list(records)))
 
+def _training_parent_scopes(config, calendar, through):
+    index = calendar.index(through)
+    fit_index = index - ((index + int(config.get("anchor_offset", 0))) % int(config.get("fit_every", 20)))
+    label_index = fit_index - int(config.get("label_maturity", 2))
+    end = None if label_index < 0 else calendar[label_index]
+    cutoff = None if fit_index < 0 else calendar[fit_index]
+    return {name: (end, cutoff) for name in ("labels", "label_end", "label_available")}
+
+
 def _register(function):
+    def valid_state(state):
+        if "model" not in state:
+            return False
+        model = state["model"]
+        if model is None:
+            return True
+        if not isinstance(model, Mapping) or not isinstance(model.get("estimator"), Mapping):
+            return False
+        if function.__name__ == "rolling_elastic_net_prediction":
+            try:
+                ZeroPreservingRmsScaler.from_dict(model["scaler"])
+                ElasticNetModel.from_dict(model["estimator"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return False
+        return True
     operator = Operator(function, minimum_inputs=1, maximum_inputs=None, version="2", output_type="prediction", input_types=("numeric",),
         contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER,
-            density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.PARENT_MAX, checkpoint_replay=True))
+            density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.PARENT_MAX, checkpoint_replay=True,
+            checkpoint_history=lambda config: int(config.get("window", 252)) + int(config.get("label_maturity", 2)),
+            checkpoint_validator=valid_state, checkpoint_parent_scopes=_training_parent_scopes))
     OPERATOR_REGISTRY.add(operator.registry_name, operator)
     return operator
 

@@ -3,7 +3,6 @@ from datetime import timedelta
 
 import polars as pl
 import pytest
-from polars.testing import assert_frame_equal
 
 from bagelquant_core import Domain, Node
 from bagelquant_core import computation_index
@@ -50,12 +49,8 @@ def test_equal_external_content_token_cannot_hide_changed_prefix_domain(tmp_path
     else:
         second = opaque(full, traces=("other_available",))
     plan = graph.plan_update({"main": {"x": second}}, through=second.domain.times.max(), input_proof=proof)
-    updated = finish(plan)
-    cold, fresh, cold_root = global_graph(tmp_path / "cold", ewm_mean(second, alpha=0.4))
-    expected = finish(cold.plan_update({"main": {"x": second}}, through=second.domain.times.max(), input_proof=proof))
-    assert plan.resource_usage["main"][root]["checkpoint_through"] is None
-    assert_frame_equal(store.read_values(updated["results"]["main"][root], include_traces=True),
-        fresh.read_values(expected["results"]["main"][cold_root], include_traces=True), check_exact=True)
+    with pytest.raises(ValueError, match="proven preceding state"):
+        finish(plan)
 
 
 def test_index_missing_is_unknown_and_explicit_build_does_not_rewrite_receipt(tmp_path):
@@ -68,6 +63,36 @@ def test_index_missing_is_unknown_and_explicit_build_does_not_rewrite_receipt(tm
     assert store.manifest(record.key.identity) == original
     assert store.interval_identity(record.key.identity, start=days[0], end=days[-1]) is not None
     store.verify_identity(record.key.identity)
+
+
+@pytest.mark.parametrize("missing", ["row", "version"])
+def test_domain_publication_uses_existing_indexed_evidence_without_warming_older_receipts(tmp_path, monkeypatch, missing):
+    from dataclasses import replace
+    import bagelquant_core.store as owner
+    from bagelquant_core import NodeMaterialization
+    store, record, days = fixture(tmp_path, dynamic=True)
+    old = store.manifest(record.key.identity)
+    second_key = replace(record.key, inputs=("another-original-source",))
+    store.publish(NodeMaterialization(second_key, record.panel))
+    second = store.manifest(second_key.identity)
+    with store.transaction() as db:
+        if missing == "row":
+            db.execute("DELETE FROM computation_index WHERE identity=?", (record.key.identity,))
+        else:
+            db.execute("UPDATE computation_index SET version='old-index' WHERE identity=?", (record.key.identity,))
+    def forbidden(*args, **kwargs):
+        pytest.fail("record-backed Domain publication audited or warmed old history")
+    monkeypatch.setattr(owner, "_checksum", forbidden)
+    monkeypatch.setattr(store, "build_index", forbidden)
+    new_key = replace(record.key, inputs=("reference-publication",))
+    store.publish(NodeMaterialization(new_key, record.panel), value_references=(second_key.identity,))
+    result = store.manifest(new_key.identity)
+    assert result["partitions"] == second["partitions"]
+    assert result["domain"] == second["domain"]
+    assert store.manifest(record.key.identity) == old
+    assert store.interval_identity(record.key.identity, start=days[0], end=days[-1]) is None
+    assert store.interval_identity(new_key.identity, start=days[0], end=days[-1]) == store.interval_identity(
+        second_key.identity, start=days[0], end=days[-1])
 
 
 def test_full_audit_rejects_self_consistent_index_change(tmp_path):
@@ -92,7 +117,15 @@ def test_new_publication_indexes_only_new_result_in_index_free_store(tmp_path):
     assert store.interval_identity(record.key.identity, start=days[0], end=days[-1]) is None
     key = MaterializationKey(record.key.node_id, record.key.implementation_id,
         ("new-input",), record.key.domain_identity)
-    store.publish(NodeMaterialization(key, record.panel))
+    with pytest.raises(ValueError, match="Domain identity needs explicit"):
+        store.publish(NodeMaterialization(key, record.panel))
+    from bagelquant_core import Domain, Node
+    domain = Domain(calendar=days, universe=["different-asset"])
+    panel = Node.from_domain(pl.DataFrame({"time": days, "asset_id": ["different-asset"]*len(days),
+        "value": [1.0]*len(days)}), domain)
+    key = MaterializationKey(record.key.node_id, record.key.implementation_id,
+        ("new-input",), domain.signature)
+    store.publish(NodeMaterialization(key, panel))
     assert store.interval_identity(key.identity, start=days[0], end=days[-1]) is not None
     assert store.interval_identity(record.key.identity, start=days[0], end=days[-1]) is None
 
@@ -115,3 +148,36 @@ def test_index_maintenance_admission_returns_partial_before_full_decode(tmp_path
     result = store.build_index(store.index_plan())
     assert result["status"] == "partial"
     assert result["materializations"] == 0 and result["unknown_materializations"] == 1
+def test_source_proof_memo_distinguishes_actual_domains_with_same_opaque_identity(monkeypatch):
+    from datetime import date, datetime
+    from threading import RLock
+    from types import SimpleNamespace
+    from bagelquant_core import Domain, Node
+    from bagelquant_core.update import UpdatePlan
+    from bagelquant_core.computation_index import describe, interval
+    from bagelquant_core.hashing import hash_mapping
+
+    days = [date(2024, 1, 2), date(2024, 1, 3)]
+    frame = pl.DataFrame({"time": days, "asset_id": ["A", "A"], "value": [1., 2.]})
+    values = [Node.from_domain(frame, Domain(calendar=days, universe=assets, identity="same-opaque-id"))
+        for assets in (["A"], ["A", "B"])]
+    def forbidden(*args, **kwargs):
+        pytest.fail("source proof read numerical values")
+    monkeypatch.setattr(Node, "collect", forbidden)
+    expected = [hash_mapping({"source": "token", "domain": interval(
+        describe(value.domain.window(*days), days={}, value_type=value.value_type,
+            trace_columns=value.trace_columns), *days)}) for value in values]
+    assert expected[0] != expected[1]
+    plan = object.__new__(UpdatePlan)
+    plan.store = SimpleNamespace(interval_identity=lambda *a, **k: None)
+    plan.spec = SimpleNamespace(nodes=[SimpleNamespace(node_id="source", node_type="input", input_key="x")])
+    plan._input_proof = lambda *a: "token"
+    plan._domain_proofs, plan._lock = {}, RLock()
+    for context, value, token in zip(("first", "second"), values, expected, strict=True):
+        assert value.source_interval_identity("token", *days) == token
+        assert plan._proof_reader(context)("source", value, *days) == token
+    for first, last in ((str(days[0]), str(days[1])), (datetime(2024, 1, 2), days[0])):
+        with pytest.raises(ValueError, match="Date bounds"):
+            values[0].source_interval_identity("token", first, last)
+    with pytest.raises(ValueError, match="end precedes"):
+        values[0].source_interval_identity("token", days[1], days[0])

@@ -4,7 +4,7 @@ Return `log(1 + value)` for values greater than `-1` and mask invalid inputs.
 
 ## Contract
 
-Registry: `bagelquant_core.operator.logarithmic.log1p`. Version: `1`.
+Registry: `bagelquant_core.operator.logarithmic.log1p`. Version: `2`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 

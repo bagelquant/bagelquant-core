@@ -174,7 +174,12 @@ class GraphManagement:
             self._contexts = {**getattr(self, "_contexts", {}), context_id: {"parameters": dict(parameters or {}), "anchor": str(anchor), "information_cutoff": None if information_cutoff is None else str(information_cutoff)}}
             self._revision = getattr(self, "_revision", 0) + 1
 
-    def plan_update(self, contexts, *, through, roots=None, input_loader=None, input_proof=None):
+    def plan_update(self, contexts, *, through, roots=None, input_loader=None, input_proof=None,
+                    input_window_loader=None, input_scope_proof=None, causal_inputs=(), input_version_loader=None,
+                    causal_output_domains=None, input_definition_identities=None):
         from .update import UpdatePlan
         return UpdatePlan(self, contexts, through=through, roots=roots,
-                          input_loader=input_loader, input_proof=input_proof)
+                          input_loader=input_loader, input_proof=input_proof, input_window_loader=input_window_loader,
+                          input_scope_proof=input_scope_proof, causal_inputs=causal_inputs,
+                          input_version_loader=input_version_loader, causal_output_domains=causal_output_domains,
+                          input_definition_identities=input_definition_identities)

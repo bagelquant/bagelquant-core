@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from copy import deepcopy
+from datetime import date, timedelta
 from typing import Any, ClassVar, Mapping
 
 import numpy as np
@@ -27,6 +28,11 @@ from bagelquant_core.operation_contract import (
     TraceRule,
 )
 from bagelquant_core.operator import Operator, OPERATOR_REGISTRY
+from bagelquant_core.hashing import hash_dataframe
+from bagelquant_core.operator_state import (
+    checkpoint_capture_enabled, operator_execution_calendar, operator_period_work,
+    restored_operator_state, save_operator_state,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +84,7 @@ class PredictionOperator(ABC):
 
     @property
     def contract(self) -> OperationContract:
-        return _PREDICTION_CONTRACT
+        return _prediction_contract(type(self))
 
     @property
     def window(self) -> int | None:
@@ -128,6 +134,8 @@ class PredictionOperator(ABC):
         if self.supervised:
             if targets is None or availability is None:
                 raise ValueError("supervised model requires targets and availability")
+            if checkpoint_capture_enabled():
+                return _checkpoint_prediction(self, wide, targets, availability)
             return self._compose_supervised(wide, targets, availability)
         if targets is not None or availability is not None:
             raise ValueError("unsupervised model does not accept training inputs")
@@ -429,6 +437,13 @@ def _rank_weighted_prediction(
 ) -> pl.DataFrame:
     data = _join_training(wide, targets, availability)
     alpha_names = _alpha_names(wide)
+    records = _rank_records(data, alpha_names, metric=metric, quantiles=quantiles)
+    return _rank_prediction_from_records(wide, records, window=window,
+        all_periods=_prediction_periods(wide), half_life=half_life)
+
+
+def _rank_records(data, alpha_names, *, metric, quantiles=None):
+    """Single per-period IC primitive for initialization and continuation."""
     records: list[tuple[date, int, np.ndarray]] = []
     for period in _training_periods(data):
         sample = data.filter(pl.col(TIME) == period)
@@ -455,10 +470,13 @@ def _rank_weighted_prediction(
             ):
                 metric_values[index] = _spearman(values[valid], target[valid])
         records.append((period, _period_availability(sample), metric_values))
+    return records
 
+
+def _rank_prediction_from_records(wide, records, *, window, all_periods, half_life=None):
+    alpha_names = _alpha_names(wide)
     rows: list[dict[str, object]] = []
-    all_periods = _prediction_periods(wide)
-    for period in all_periods:
+    for period in _prediction_periods(wide):
         history = _available_history(records, period, window, all_periods)
         if history is None:
             continue
@@ -508,9 +526,13 @@ def _gls_prediction(
     data = _join_training(wide, targets, availability)
     alpha_names = _alpha_names(wide)
     records, _ = _cross_sectional_regression_records(data, alpha_names)
+    return _gls_prediction_from_records(wide, records, window=window,
+        all_periods=_prediction_periods(wide))
 
+
+def _gls_prediction_from_records(wide, records, *, window, all_periods):
+    alpha_names = _alpha_names(wide)
     rows: list[dict[str, object]] = []
-    all_periods = _prediction_periods(wide)
     for period in _prediction_periods(wide):
         history = _available_history(records, period, window, all_periods)
         if history is None or any(item[2] is None for item in history):
@@ -593,6 +615,14 @@ def _fama_macbeth_ols_from_wide(
         data,
         alpha_names,
     )
+    return _ols_prediction_from_records(wide, records, window=window,
+        factor_names=factor_names, all_periods=_prediction_periods(wide),
+        period_diagnostics=period_diagnostics)
+
+
+def _ols_prediction_from_records(wide, records, *, window, factor_names, all_periods,
+                                 period_diagnostics):
+    alpha_names = _alpha_names(wide)
     terms = ("intercept", *factor_names)
     factor_rows: list[dict[str, object]] = []
     for period, available_at, estimate in records:
@@ -618,8 +648,7 @@ def _fama_macbeth_ols_from_wide(
 
     prediction_rows: list[dict[str, object]] = []
     rolling_rows: list[dict[str, object]] = []
-    all_periods = _prediction_periods(wide)
-    for period in all_periods:
+    for period in _prediction_periods(wide):
         history = _available_history(records, period, window, all_periods)
         if history is None or any(item[2] is None for item in history):
             continue
@@ -780,7 +809,7 @@ def _fama_macbeth_period_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=schema).sort(TIME)
 
 
-def _available_history(records, period: date, window: int, all_periods: list[date]):
+def _available_history(records, period: date, window: int, all_periods: list[date], *, positions=None):
     eligible = [
         record
         for record in records
@@ -789,7 +818,7 @@ def _available_history(records, period: date, window: int, all_periods: list[dat
     if len(eligible) < window:
         return None
     selected = eligible[-window:]
-    positions = {value: index for index, value in enumerate(all_periods)}
+    positions = {value: index for index, value in enumerate(all_periods)} if positions is None else positions
     selected_positions = [positions[record[0]] for record in selected]
     if selected_positions != list(
         range(selected_positions[0], selected_positions[0] + window)
@@ -847,6 +876,179 @@ def _rows_frame(rows: list[dict[str, object]]) -> pl.DataFrame:
     return pl.DataFrame(rows, schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}).sort([TIME, ASSET_ID])
 
 
+def _prediction_period_work(state, calendar, changes):
+    """Select new/revised samples and retained samples that just matured."""
+    periods = set(changes)
+    if state is None:
+        return tuple(calendar)
+    periods.update(day for day in calendar if str(day) not in state["records"])
+    last = calendar[-1].toordinal()
+    periods.update(date.fromisoformat(day) for day, record in state["records"].items()
+        if record["status"] == "pending" and record["available_at"] is not None
+        and record["available_at"] <= last and date.fromisoformat(day) in calendar)
+    return tuple(day for day in calendar if day in periods)
+
+
+def _valid_prediction_state(state):
+    """Reject missing original statistics, incomplete axes and malformed fits."""
+    try:
+        calendar = [date.fromisoformat(day) for day in state["calendar"]]
+        count = state["alpha_count"]
+        if (not calendar or calendar != sorted(set(calendar)) or state["through"] != str(calendar[-1])
+                or isinstance(count, bool) or not isinstance(count, int) or count < 2
+                or set(state["records"]) != set(state["calendar"])
+                or set(state["fit_windows"]) != set(state["calendar"])):
+            return False
+        for day, record in state["records"].items():
+            if (not isinstance(record, Mapping) or record["status"] not in {"pending", "fitted"}
+                    or not isinstance(record["has_features"], bool)):
+                return False
+            available = record["available_at"]
+            if available is not None and (isinstance(available, bool) or not isinstance(available, int)
+                    or not 1 <= available <= date.max.toordinal()):
+                return False
+            statistics = record["statistics"]
+            if record["status"] == "fitted":
+                if available is None or not isinstance(record["input_identity"], str):
+                    return False
+                if isinstance(statistics, list):
+                    if len(statistics) != count or any(value is not None and not np.isfinite(value) for value in statistics):
+                        return False
+                elif statistics is not None:
+                    beta, covariance = np.asarray(statistics["beta"]), np.asarray(statistics["covariance"])
+                    if (beta.shape != (count + 1,) or covariance.shape != (count + 1, count + 1)
+                            or not np.isfinite(beta).all() or not np.isfinite(covariance).all()):
+                        return False
+            elif statistics is not None:
+                return False
+            history = state["fit_windows"][day]
+            if history is not None and (not isinstance(history, list) or history != sorted(set(history))
+                    or any(item not in state["records"] or item >= day
+                        or state["records"][item]["status"] != "fitted"
+                        or state["records"][item]["available_at"] > date.fromisoformat(day).toordinal()
+                        for item in history)):
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _saved_records(state):
+    records = []
+    for day, item in state["records"].items():
+        if item["status"] != "fitted":
+            continue
+        statistics = item["statistics"]
+        if isinstance(statistics, list):
+            estimate = np.asarray(statistics, dtype=float)
+        elif statistics is None:
+            estimate = None
+        else:
+            estimate = (np.asarray(statistics["beta"], dtype=float),
+                        np.asarray(statistics["covariance"], dtype=float))
+        records.append((date.fromisoformat(day), item["available_at"], estimate))
+    return sorted(records, key=lambda item: item[0])
+
+
+def _update_prediction_statistics(operator, wide, targets, availability, state, calendar, work):
+    data = _join_training(wide, targets, availability)
+    alpha_names = _alpha_names(wide)
+    old = deepcopy(state)
+    records = {} if state is None else {day: deepcopy(record) for day, record in state["records"].items()
+                                      if date.fromisoformat(day) in calendar}
+    requested = tuple(calendar) if work is None else tuple(date.fromisoformat(day) for day in work["input_periods"])
+    changed = set(requested)
+    for period in requested:
+        sample = data.filter(pl.col(TIME) == period)
+        training = bool(_training_periods(sample))
+        available_at = _period_availability(sample) if training else None
+        record = {"has_features": bool(sample.height), "available_at": available_at,
+                  "status": "pending", "statistics": None, "diagnostic": None,
+                  "input_identity": None}
+        if training and available_at <= calendar[-1].toordinal():
+            if operator.kind in {"ols", "gls"}:
+                fitted, diagnostic = _cross_sectional_regression_records(sample, alpha_names)
+                estimate = fitted[0][2]
+                record["statistics"] = (None if estimate is None else
+                    {"beta": estimate[0].tolist(), "covariance": estimate[1].tolist()})
+                record["diagnostic"] = diagnostic.to_dicts()[0]
+            else:
+                metric = "quantile_rank" if operator.kind == "quantile_ic_weighted" else "spearman"
+                fitted = _rank_records(sample, alpha_names, metric=metric, quantiles=operator.quantiles)
+                record["statistics"] = [float(value) if np.isfinite(value) else None for value in fitted[0][2]]
+            record.update(status="fitted", input_identity=hash_dataframe(sample))
+        records[str(period)] = record
+    result = {"through": str(calendar[-1]), "calendar": [str(day) for day in calendar],
+              "alpha_count": len(alpha_names), "records": records, "fit_windows": {}}
+    fitted = _saved_records(result)
+    outputs = []
+    influences = []
+    if old is not None:
+        influences.extend(date.fromisoformat(day) for day in set(old["calendar"]) ^ set(result["calendar"]))
+        for period in requested:
+            for record in (old["records"].get(str(period)), records[str(period)]):
+                if record is not None and record["status"] == "fitted":
+                    influences.append(max(period + timedelta(days=1), date.fromordinal(record["available_at"])))
+    first_influence = min(influences) if influences else None
+    positions = {day: index for index, day in enumerate(calendar)}
+    changed_features = (set(calendar) if old is None else
+        {date.fromisoformat(day) for day, roles in (work or {}).get("changes", {}).items() if "features" in roles})
+    for period in calendar:
+        if old is not None and str(period) in old["fit_windows"] and (first_influence is None or period < first_influence):
+            selected = old["fit_windows"][str(period)]
+        else:
+            history = _available_history(fitted, period, operator.window, list(calendar), positions=positions)
+            selected = None if history is None else [str(item[0]) for item in history]
+        result["fit_windows"][str(period)] = selected
+        original = None if old is None else old["fit_windows"].get(str(period))
+        if (old is None or str(period) not in old["records"] or period in changed_features
+                or original != selected or selected is not None and any(date.fromisoformat(day) in changed for day in selected)):
+            outputs.append(str(period))
+    result["repaired_output_periods"] = outputs
+    return result
+
+
+def _checkpoint_prediction(operator, wide, targets, availability):
+    """Exchange per-period numerical evidence through Core's checkpoint runtime."""
+    calendar = tuple(operator_execution_calendar()) or tuple(_prediction_periods(wide))
+    if not calendar:
+        return _rows_frame([])
+    saved = restored_operator_state()
+    if saved is not None and (not _valid_prediction_state(saved)
+            or saved["alpha_count"] != len(_alpha_names(wide))):
+        raise ValueError("Prediction needs original per-period statistical evidence maintenance")
+    work = operator_period_work()
+    if work is None or work["phase"] == "statistics":
+        state = _update_prediction_statistics(operator, wide, targets, availability, saved, calendar, work)
+        if work is not None:
+            save_operator_state(state)
+            return _rows_frame([])
+    else:
+        if saved is None:
+            raise ValueError("Prediction phase requires admitted per-period statistics")
+        state = deepcopy(saved)
+    records = _saved_records(state)
+    if operator.kind == "ols":
+        result = _ols_prediction_from_records(wide, records, window=operator.window,
+            factor_names=tuple(_alpha_names(wide)), all_periods=list(calendar),
+            period_diagnostics=_fama_macbeth_period_frame([])).prediction
+    elif operator.kind == "gls":
+        result = _gls_prediction_from_records(wide, records, window=operator.window, all_periods=list(calendar))
+    else:
+        result = _rank_prediction_from_records(wide, records, window=operator.window,
+            all_periods=list(calendar), half_life=operator.half_life)
+    state.pop("repaired_output_periods", None)
+    save_operator_state(state)
+    return result
+
+
+def _prediction_contract(operator_type: type[PredictionOperator]) -> OperationContract:
+    if operator_type in {IdentityPredictionOperator, EqualWeightPredictionOperator}:
+        return replace(_PREDICTION_CONTRACT, history=0)
+    return replace(_PREDICTION_CONTRACT, checkpoint_replay=True,
+        checkpoint_validator=_valid_prediction_state, checkpoint_periods=_prediction_period_work)
+
+
 for _operator_type in (
     IdentityPredictionOperator,
     EqualWeightPredictionOperator,
@@ -858,7 +1060,8 @@ for _operator_type in (
 ):
     _name = "prediction:" + _operator_type.kind
     OPERATOR_REGISTRY.add(_name, Operator(_operator_type._compute_frames, registry_name=_name,
-        contract=_PREDICTION_CONTRACT, minimum_inputs=1, maximum_inputs=None,
+        contract=_prediction_contract(_operator_type),
+        minimum_inputs=1, maximum_inputs=None,
         output_type="prediction", factory=_operator_type))
 
 

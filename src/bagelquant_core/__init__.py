@@ -8,6 +8,7 @@ operations, and ``ExecutionRuntime`` evaluates graph outputs with memoization.
 from bagelquant_core.node import Node
 from bagelquant_core.logical import LogicalNodeSpec, LogicalGraphSpec, canonicalize_graph
 from bagelquant_core.materialization import MaterializationKey, MaterializationStore, NodeMaterialization, MaterializationLookup, MaterializationStatus, materialization_trace_identity
+from bagelquant_core.proof_maintenance import ConsumedInputEvidence
 from bagelquant_core.operator import Operator, OPERATOR_REGISTRY
 from bagelquant_core.operator.portfolio import PortfolioValue, rebalance, rebalance_value, top_n, equal_weight, regularized_weights, exposure_constrained_weights
 from bagelquant_core.execution import ExecutionRuntime
@@ -69,10 +70,11 @@ from .store import CoreStore, RevisionConflict
 from .artifact_verification import ArtifactVerification
 from .node import ValueType
 from .graph_management import MergeResult
+from .causal import CAUSAL_EXECUTION_POLICY, CausalInputWindow
 
 __all__ = [
     "LogicalNodeSpec", "LogicalGraphSpec", "canonicalize_graph",
-    "MaterializationKey", "MaterializationStore", "NodeMaterialization",
+    "MaterializationKey", "MaterializationStore", "NodeMaterialization", "ConsumedInputEvidence",
     "MaterializationLookup", "MaterializationStatus",
     "materialization_trace_identity",
     "canonicalize_values", "project_domain",
@@ -131,3 +133,4 @@ __all__ += ['exposure_constrained_weights']
 __all__ += ['capture_operator_checkpoints']
 
 __all__ += ["CoreStore", "RevisionConflict", "ValueType", "MergeResult", "ArtifactVerification"]
+__all__ += ["CAUSAL_EXECUTION_POLICY", "CausalInputWindow"]

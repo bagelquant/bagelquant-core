@@ -8,6 +8,7 @@ insert dense or eager barriers only when the operation's semantics require it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from inspect import signature, Parameter
 from collections.abc import Mapping
@@ -56,9 +57,25 @@ class OperationContract:
     deterministic: bool = True
     history: int | Callable[[Mapping[str, Any]], int | None] | None = None
     checkpoint_replay: bool = False
+    checkpoint_history: int | Callable[[Mapping[str, Any]], int] | None = None
+    checkpoint_validator: Callable[[Mapping[str, Any]], bool] | None = None
+    # This named auxiliary consumes its immutable Domain date axis, including
+    # admitted sessions with no rows. It is not inferred from positional inputs.
+    checkpoint_calendar_role: str | None = None
+    checkpoint_parent_scopes: Callable[[Mapping[str, Any], tuple[date, ...], date], Mapping[str, tuple[date | None, date | None]]] | None = None
+    # Independent-period statistics use the same checkpoint/runtime/publication
+    # path, with a statistics phase followed by exactly the affected predictions.
+    # The owner selects source periods, including arbitrarily delayed maturity.
+    checkpoint_periods: Callable[[Mapping[str, Any] | None, tuple[date, ...], Mapping[date, tuple[str, ...]]], tuple[date, ...]] | None = None
     trace_function: TraceFunction | None = None
 
     def __post_init__(self) -> None:
+        if self.checkpoint_periods is not None and not self.checkpoint_replay:
+            raise ValueError("period checkpoints require checkpoint replay")
+        if self.checkpoint_calendar_role is not None and (
+                not self.checkpoint_replay or not isinstance(self.checkpoint_calendar_role, str)
+                or not self.checkpoint_calendar_role):
+            raise ValueError("checkpoint calendar role requires a named auxiliary and checkpoint replay")
         if self.trace_rule == TraceRule.CUSTOM and self.trace_function is None:
             raise ValueError("custom trace rules require trace_function")
         if self.trace_rule != TraceRule.CUSTOM and self.trace_function is not None:

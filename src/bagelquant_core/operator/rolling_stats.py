@@ -8,7 +8,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from bagelquant_core.frame import ASSET_ID, TIME, VALUE, panel_like
 from bagelquant_core.operation_contract import ExecutionMode, InputDensity, OperationContract, TraceRule
-from bagelquant_core.exponential_state import checkpoint_ewm
+from bagelquant_core.exponential_state import checkpoint_ewm, valid_ewm_state
 from bagelquant_core.resources import kernel_batch_rows
 from bagelquant_core.operator._definition import operator
 
@@ -239,7 +239,7 @@ def _alpha(
     return 1.0 - float(np.exp(np.log(0.5) / float(halflife)))
 
 
-@operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX, checkpoint_replay=True))
+@operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX, checkpoint_replay=True, checkpoint_history=0, checkpoint_validator=valid_ewm_state))
 def ewm_mean(
     frame: pl.DataFrame,
     *,
@@ -272,7 +272,7 @@ def ewm_mean(
     )
 
 
-@operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX, checkpoint_replay=True))
+@operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX, checkpoint_replay=True, checkpoint_history=0, checkpoint_validator=valid_ewm_state))
 def ewm_var(
     frame: pl.DataFrame,
     *,
@@ -307,7 +307,7 @@ def ewm_var(
     )
 
 
-@operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX, checkpoint_replay=True))
+@operator(contract=OperationContract(execution=ExecutionMode.EAGER_BARRIER, density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CUMULATIVE_MAX, checkpoint_replay=True, checkpoint_history=0, checkpoint_validator=valid_ewm_state))
 def ewm_std(
     frame: pl.DataFrame,
     *,

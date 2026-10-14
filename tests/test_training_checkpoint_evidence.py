@@ -118,6 +118,97 @@ def finish(graph, s):
     return plan, plan.publish()
 
 
+def test_new_unconsumed_labels_preserve_old_fits_with_complete_feature_proof(tmp_path):
+    from bagelquant_core.operator.training import capture_training_audits
+    def inputs(count, change=None):
+        values = sources(count, change)
+        for key in ("labels", "label_end", "label_available"):
+            node = values[key]
+            values[key] = Node.from_domain(node.collect().select("time", "asset_id", "value"),
+                node.domain, source_key=key)
+        return values
+    first = inputs(18)
+    graph, store, root = create(tmp_path / "incremental", first)
+    finish(graph, first)
+    current = inputs(26, "matured_labels")
+    with capture_training_audits() as new_fits:
+        plan, updated = finish(graph, current)
+    assert plan.resource_usage["main"][root]["checkpoint_through"] == str(first["x"].domain.times.max())
+    assert new_fits and all(audit["fit_date"] > first["x"].domain.times.max() for audit in new_fits)
+    reference, fresh, reference_root = create(tmp_path / "reference", current)
+    _, complete = finish(reference, current)
+    assert_frame_equal(store.read_values(updated["results"]["main"][root], include_traces=True),
+        fresh.read_values(complete["results"]["main"][reference_root], include_traces=True), check_exact=True)
+    assert store.evidence(updated["results"]["main"][root])["training_audits"] == fresh.evidence(
+        complete["results"]["main"][reference_root])["training_audits"]
+
+
+def test_training_feature_aliased_as_label_keeps_complete_prediction_prefix(tmp_path):
+    def input(count, revise=False):
+        source = sources(count)["x"]
+        frame = source.collect().select("time", "asset_id", "value")
+        if revise:
+            frame = frame.with_columns(pl.when(pl.col("time") == source.domain.times[16])
+                .then(pl.col("value") + 5).otherwise(pl.col("value")).alias("value"))
+        return Node.from_domain(frame, source.domain, source_key="x")
+    first = input(18)
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "values")
+    graph = Graph(store=store, graph_id="alias")
+    graph.merge(rolling_elastic_net_prediction(first, labels=first, window=8, fit_every=3,
+        min_samples=4, max_samples=20, label_maturity=2, alpha=0.01))
+    graph.register_context("main", anchor="2024-01-01")
+    finish(graph, {"x": first})
+    with pytest.raises(ValueError, match="proven preceding state"):
+        finish(graph, {"x": input(26, revise=True)})
+
+
+def test_consumption_cutoff_proof_preserves_fits_when_future_label_endpoints_extend(tmp_path):
+    from bagelquant_core.hashing import hash_dataframe
+    from bagelquant_core.operator.training import capture_training_audits
+    def inputs(count):
+        result = sources(count)
+        last = result["x"].domain.times.max().toordinal()
+        ends = result["label_end"].collect().select("time", "asset_id",
+            (pl.col("value") + 3).alias("value"))
+        visible = ends.with_columns(pl.when(pl.col("value") <= last).then(pl.col("value")).otherwise(None).alias("value"))
+        labels = result["labels"].collect().select("time", "asset_id", "value").join(
+            visible.rename({"value": "end"}), on=["time", "asset_id"]).with_columns(
+            pl.when(pl.col("end").is_not_null()).then(pl.col("value")).otherwise(None).alias("value")).drop("end")
+        for key, frame in {"labels": labels, "label_end": visible, "label_available": visible}.items():
+            result[key] = Node.from_domain(frame, result[key].domain, source_key=key)
+        return result
+    def finish_scoped(graph, values):
+        def scoped(_context, key, start, end, cutoff):
+            if key == "x":
+                return values[key].interval_identity(start, end)
+            frame = values[key].collect().filter(pl.col("time").is_between(start, end))
+            maturity = values["label_end"].collect().select("time", "asset_id", pl.col("value").alias("end"))
+            return hash_dataframe(frame.join(maturity, on=["time", "asset_id"]).filter(
+                pl.col("end") <= cutoff.toordinal()).drop("end"))
+        plan = graph.plan_update({"main": values}, through=values["x"].domain.times.max(),
+            input_proof=lambda _context, key, start, end: values[key].interval_identity(start, end),
+            input_scope_proof=scoped)
+        while not plan.complete:
+            for node in plan.ready("main"):
+                plan.execute("main", node)
+        return plan, plan.publish()
+    before, after = inputs(18), inputs(26)
+    assert before["labels"].interval_identity(date(2024, 1, 1), date(2024, 1, 14)) != after["labels"].interval_identity(
+        date(2024, 1, 1), date(2024, 1, 14))
+    graph, store, root = create(tmp_path / "incremental", before)
+    finish_scoped(graph, before)
+    with capture_training_audits() as fits:
+        plan, updated = finish_scoped(graph, after)
+    assert plan.resource_usage["main"][root]["checkpoint_through"] == "2024-01-18"
+    assert fits and all(row["fit_date"] > date(2024, 1, 18) for row in fits)
+    reference, fresh, reference_root = create(tmp_path / "reference", after)
+    _, full = finish_scoped(reference, after)
+    assert_frame_equal(store.read_values(updated["results"]["main"][root], include_traces=True),
+        fresh.read_values(full["results"]["main"][reference_root], include_traces=True), check_exact=True)
+    assert store.evidence(updated["results"]["main"][root])["training_audits"] == fresh.evidence(
+        full["results"]["main"][reference_root])["training_audits"]
+
+
 @pytest.mark.parametrize(
     "scenario",
     (
@@ -130,12 +221,20 @@ def finish(graph, s):
         "matured_labels",
     ),
 )
-def test_training_checkpoint_reuse_requires_all_parent_evidence(tmp_path, scenario):
+@pytest.mark.parametrize("preceding_checkpoint", [False, True])
+def test_training_checkpoint_reuse_requires_all_parent_evidence(tmp_path, scenario, preceding_checkpoint):
     root = tmp_path
     first = sources(18)
     g, store, node = create(root / "inc", first)
+    if preceding_checkpoint:
+        finish(g, sources(3))
     firstplan, old = finish(g, first)
     current = sources(26, None if scenario == "append" else scenario)
+    if scenario != "append" and not preceding_checkpoint:
+        with pytest.raises(ValueError, match="proven preceding state"):
+            finish(g, current)
+        assert store.graph_state("test")["current_update"] == old["identity"]
+        return
     plan, receipt = finish(g, current)
     actual = store.read(receipt["results"]["main"][node])
     fresh, fs, fn = create(root / "fresh", current)
@@ -154,7 +253,4 @@ def test_training_checkpoint_reuse_requires_all_parent_evidence(tmp_path, scenar
         if audit.get("maximum_label_available")
     )
     use = plan.resource_usage["main"][node]
-    assert (use["checkpoint_through"] is not None) == (scenario == "append"), (
-        scenario,
-        use,
-    )
+    assert use["checkpoint_through"] == ("2024-01-18" if scenario == "append" else "2024-01-03")

@@ -14,6 +14,17 @@ preserving actual String/Datetime conversion, membership, values, traces and
 materialization identities. File metadata inspection and required proof work
 remain; this optimization does not replace full integrity verification.
 
+`CoreStore.read_values(start=..., end=...)` also pushes observation bounds into
+the persisted calendar and dynamic membership scans before constructing and
+validating the selected Domain. A small value window therefore avoids sorting
+and checking every historical membership coordinate. Canonical footer types and
+selected key uniqueness remain validated; null observation keys are retained
+so pruning cannot hide an invalid date. Static asset vectors remain complete.
+An empty or calendar-gap view returns typed empty values and traces without a
+synthetic calendar. Unbounded reads and explicit full integrity audits retain
+the complete Domain and original-byte checks. Receipts and numerical identities
+are unchanged; this is a bounded read improvement, not a new cache.
+
 ```bash
 uv run python scripts/benchmark_efficiency.py --profile smoke --json
 uv run python scripts/benchmark_efficiency.py --profile comparison --json

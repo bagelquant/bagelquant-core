@@ -2,6 +2,14 @@
 
 ## Causality and training
 
+Saved training parent scopes must cover actual consumed labels through the last
+scheduled fit and maturity lag, and complete features through every prediction.
+Unconsumed newly mature labels do not invalidate old fits. A positional feature
+also aliased as a label keeps its full prefix. Independently validate complete
+output calendar/membership and all availability traces; fused trace/value proofs
+cannot be narrowed by ignoring an unconsumed value channel. Unknown scopes or
+legacy checkpoints require explicit proof maintenance, never silent old refits.
+
 - Explicitly distinguish observation, publication/information cutoff,
   signal-effective and execution dates. Never replace PIT joins with latest
   values or admit information unavailable at decision time.
@@ -23,6 +31,14 @@
   belong to Data/Core; Workbench supplies source declarations and scheduling.
 
 ## IC and OLS
+
+- Public supervised Prediction checkpoints persist each period's original IC
+  vector or single OLS beta/covariance and diagnostics, availability, sample
+  identity, complete calendar and pending status. Append processes new and newly
+  mature periods; local revisions replace only affected period statistics and
+  dependent prediction windows. Source proofs include values, coordinates,
+  membership and every trace channel. Statistical caches never certify output
+  coverage; cancellation/retry reuses completed fits without advancing pointers.
 
 - Core owns the single quantile-rank-IC formula and public
   `QuantileICWeightedPredictionOperator`. Form quantiles from every finite Alpha

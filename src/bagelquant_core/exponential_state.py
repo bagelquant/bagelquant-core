@@ -2,11 +2,32 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from datetime import date
 
 import polars as pl
 
 from bagelquant_core.operator_state import checkpoint_capture_enabled, restored_operator_state, save_operator_state
+
+
+def valid_ewm_state(state):
+    assets = state.get("assets")
+    if not isinstance(assets, Mapping):
+        return False
+    for asset, value in assets.items():
+        if not isinstance(asset, str) or not isinstance(value, Mapping):
+            return False
+        observations = value.get("observations")
+        if isinstance(observations, bool) or not isinstance(observations, int) or observations < 0:
+            return False
+        for name in ("cov", "weight", "sum_weight", "sum_squared_weight"):
+            number = value.get(name)
+            if isinstance(number, bool) or not isinstance(number, (float, int)) or not math.isfinite(number):
+                return False
+        mean = value.get("mean")
+        if mean is not None and (isinstance(mean, bool) or not isinstance(mean, (float, int)) or not math.isfinite(mean)):
+            return False
+    return True
 
 
 def checkpoint_ewm(frame, *, alpha, min_periods, adjust, ignore_na, moment, bias=False):

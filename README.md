@@ -7,6 +7,7 @@ Core has no BagelQuant package dependency and no global scheduling policy.
 Python 3.13; install with `uv add bagelquant-core`. Optional extras: `ml`, `optimizer`.
 
 - [Architecture and runnable standalone example](docs/en/architecture.md)
+- [Causal version inputs and bounded replay](docs/en/causal-inputs.md)
 - [中文架构](docs/cn/architecture.md)
 - [Generated Operator catalog](docs/en/reference/operators/index.md)
 - [AI workflow](.ai/README.md)

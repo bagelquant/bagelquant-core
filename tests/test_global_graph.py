@@ -40,6 +40,43 @@ def finish(plan, **kwargs):
     return plan.publish()
 
 
+@pytest.mark.parametrize("change", ["graph", "context", "sleep"])
+def test_revision_guard_reads_only_fixed_fences_and_detects_public_changes(tmp_path, monkeypatch, change):
+    value = source(5)
+    graph, store, root = global_graph(tmp_path, negate(value))
+    plan = graph.plan_update({"main": {"x": value}}, through=value.domain.times.max())
+    def forbidden(*args, **kwargs):
+        pytest.fail("execution guard decoded the complete graph")
+    with monkeypatch.context() as pulse:
+        pulse.setattr(store, "graph_state", forbidden)
+        plan.guard()
+    if change == "graph":
+        graph.merge(rolling_mean(value, window=3))
+    elif change == "context":
+        graph.register_context("main", anchor="2024-01-02", information_cutoff="2024-01-05")
+    else:
+        graph.sleep(root)
+    with monkeypatch.context() as pulse:
+        pulse.setattr(store, "graph_state", forbidden)
+        with pytest.raises(RevisionConflict, match="graph/state changed"):
+            plan.guard()
+
+
+def test_revision_guard_preserves_missing_store_and_graph_semantics(tmp_path, monkeypatch):
+    store = CoreStore(tmp_path/"core.sqlite", tmp_path/"values")
+    def forbidden(*args, **kwargs):
+        pytest.fail("execution guard decoded the complete graph")
+    monkeypatch.setattr(store, "graph_state", forbidden)
+    store.assert_revision("missing", 0, 0)
+    assert not store.meta_path.exists()
+    with pytest.raises(RevisionConflict, match="graph/state changed"):
+        store.assert_revision("missing", 1, 0)
+    store.initialize()
+    store.assert_revision("missing", 0, 0)
+    with pytest.raises(RevisionConflict, match="graph/state changed"):
+        store.assert_revision("missing", 0, 1)
+
+
 def test_standalone_dsl_merge_restart_exact_hit_and_branch(tmp_path, monkeypatch):
     x = source()
     local = Graph.from_dsl("a = rolling_mean(x, window=3)\noutput = zscore(a)", inputs={"x": x})
@@ -149,7 +186,8 @@ def test_publish_checks_values_and_all_evidence(tmp_path):
 
 
 @pytest.mark.parametrize("operation", ["ewm_mean", "ewm_var", "ewm_std", "regularized_weights"])
-def test_checkpoint_append_and_revised_prefix_match_cold(tmp_path, operation):
+@pytest.mark.parametrize("preceding_checkpoint", [False, True])
+def test_checkpoint_append_and_revision_need_proven_preceding_state(tmp_path, operation, preceding_checkpoint):
     from bagelquant_core import OPERATOR_REGISTRY
     registered = next(OPERATOR_REGISTRY.get(name) for name in OPERATOR_REGISTRY.names() if name.endswith("." + operation))
     def expression(x):
@@ -161,9 +199,18 @@ def test_checkpoint_append_and_revised_prefix_match_cold(tmp_path, operation):
         return registered(equal_weight(top_n(prediction_signal(x), count=2)), every=3, anchor="2024-01-01")
     first = source(35, dynamic=True)
     graph, store, root = global_graph(tmp_path/"incremental", expression(first))
+    early_domain = first.domain.window(first.domain.times.min(), first.domain.times[4])
+    early = Node.from_domain(first.collect(dense=False, include_traces=True).filter(pl.col("time") <= first.domain.times[4]),
+        early_domain, source_key="x", trace_columns=first.trace_columns)
+    if preceding_checkpoint:
+        finish(graph.plan_update({"main": {"x": early}}, through=early.domain.times.max()))
     finish(graph.plan_update({"main": {"x": first}}, through=first.domain.times.max()))
     for index, x in enumerate((source(45, dynamic=True), source(50, revision=10, dynamic=True))):
         plan = graph.plan_update({"main": {"x": x}}, through=x.domain.times.max())
+        if index == 1 and not preceding_checkpoint:
+            with pytest.raises(ValueError, match="proven preceding state"):
+                finish(plan)
+            continue
         updated = finish(plan)
         reference_graph, reference_store, reference_root = global_graph(tmp_path/f"reference-{index}", expression(x))
         reference = finish(reference_graph.plan_update({"main": {"x": x}}, through=x.domain.times.max()))
@@ -171,4 +218,5 @@ def test_checkpoint_append_and_revised_prefix_match_cold(tmp_path, operation):
         expected = reference_store.read(reference["results"]["main"][reference_root])
         assert_frame_equal(actual.panel.collect(include_traces=True), expected.panel.collect(include_traces=True), check_exact=True)
         assert actual.checkpoint == expected.checkpoint
-        assert plan.resource_usage["main"][root]["checkpoint_through"] == (str(first.domain.times.max()) if index == 0 else None)
+        assert plan.resource_usage["main"][root]["checkpoint_through"] == str(
+            first.domain.times.max() if index == 0 else early.domain.times.max())

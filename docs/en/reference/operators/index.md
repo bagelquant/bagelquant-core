@@ -24,9 +24,11 @@ All calls accept typed Nodes and return a deferred Node. Scalar parameters never
 ## Cross-sectional
 
 - [`anscombe`](./anscombe.md)
+- [`cross_sectional_weighted_mean`](./cross_sectional_weighted_mean.md)
 - [`demean`](./demean.md)
 - [`inv_log_sqrt_rank`](./inv_log_sqrt_rank.md)
 - [`log_rank`](./log_rank.md)
+- [`mad_zscore`](./mad_zscore.md)
 - [`min_max_scale`](./min_max_scale.md)
 - [`net_scale`](./net_scale.md)
 - [`normalize`](./normalize.md)
@@ -81,6 +83,7 @@ All calls accept typed Nodes and return a deferred Node. Scalar parameters never
 
 ## Group & neutralization
 
+- [`cross_sectional_residual`](./cross_sectional_residual.md)
 - [`group_demean`](./group_demean.md)
 - [`group_max`](./group_max.md)
 - [`group_mean`](./group_mean.md)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from collections.abc import Mapping
 from datetime import date
 
 import numpy as np
@@ -10,14 +11,36 @@ import polars as pl
 from bagelquant_core.operator import Operator, OPERATOR_REGISTRY
 from bagelquant_core.operation_contract import ExecutionMode, InputDensity, OperationContract, TraceRule
 from bagelquant_core.optimization import project_capped_simplex, solve_regularized_weights, solve_exposure_weights
-from bagelquant_core.operator_state import restored_operator_state, save_operator_state, save_operator_artifact, operator_execution_calendar
+from bagelquant_core.operator_state import restored_operator_state, save_operator_state, save_operator_artifact, operator_execution_calendar, operator_anchor_calendar
+
+def _valid_target_state(state):
+    targets = state.get("targets")
+    return isinstance(targets, Mapping) and all(isinstance(asset, str)
+        and not isinstance(value, bool) and isinstance(value, (int, float)) and np.isfinite(value)
+        for asset, value in targets.items())
+
+
+def _valid_rebalance_state(state):
+    through = state.get("through")
+    try:
+        return isinstance(through, str) and date.fromisoformat(through).isoformat() == through
+    except ValueError:
+        return False
+
 
 _CONTRACT = OperationContract(execution=ExecutionMode.EAGER_BARRIER,
-    density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.PARENT_MAX, checkpoint_replay=True)
+    density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.PARENT_MAX, checkpoint_replay=True, checkpoint_history=1,
+    checkpoint_validator=_valid_target_state)
 
 
 def _register(function):
-    operation = Operator(function, contract=replace(_CONTRACT, checkpoint_replay=function.__name__ in {"regularized_weights", "exposure_constrained_weights"}), output_type="weights")
+    rebalance_contract = function.__name__ == "rebalance"
+    operation = Operator(function, contract=replace(_CONTRACT,
+        history=0 if function.__name__ in {"top_n", "equal_weight"} else None,
+        checkpoint_replay=function.__name__ in {"rebalance", "regularized_weights", "exposure_constrained_weights"},
+        checkpoint_history=0 if rebalance_contract else 1,
+        checkpoint_calendar_role="calendar" if rebalance_contract else None,
+        checkpoint_validator=_valid_rebalance_state if rebalance_contract else _valid_target_state), output_type="weights")
     OPERATOR_REGISTRY.add(operation.registry_name, operation)
     return operation
 
@@ -211,8 +234,16 @@ def rebalance(frame: pl.DataFrame, *, every: int = 5, anchor: str = "data_start"
     # The explicit calendar includes empty-universe sessions. Preserve every
     # hold/unavailable decision as a named result, not just sparse targets.
     execution_calendar = operator_execution_calendar()
+    checkpoint = restored_operator_state()
+    if checkpoint is not None:
+        execution_calendar = tuple(day for day in execution_calendar if str(day) > checkpoint["through"])
+    anchor_calendar = operator_anchor_calendar()
+    if anchor_calendar:
+        calendar = pl.DataFrame({"time": anchor_calendar}, schema={"time": pl.Date})
     coverage = pl.DataFrame({"time": execution_calendar}) if execution_calendar else frame.select("time").unique()
     value = rebalance_value(frame, calendar=calendar, data_start=data_start,
         every=every, anchor=anchor, coverage_calendar=coverage)
     save_operator_artifact("decisions", value.decisions)
+    if execution_calendar:
+        save_operator_state({"through": str(execution_calendar[-1])})
     return value.weights

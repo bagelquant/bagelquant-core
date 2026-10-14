@@ -8,7 +8,6 @@ Python 3.13; install with `uv add bagelquant-core`. Optional extras: `ml`, `opti
 
 - [Architecture and runnable standalone example](docs/en/architecture.md)
 - [Causal version inputs and bounded replay](docs/en/causal-inputs.md)
-- [中文架构](docs/cn/architecture.md)
 - [Generated Operator catalog](docs/en/reference/operators/index.md)
 - [AI workflow](.ai/README.md)
 
@@ -25,4 +24,4 @@ headers. A schema 2 store requires an explicitly initialized fresh location.
 
 Supported platforms: macOS and Linux. Windows support is retired.
 
-[Calculation records](docs/en/calculation_records.md) · [计算记录](docs/cn/calculation_records.md)
+[Calculation records](docs/en/calculation_records.md)

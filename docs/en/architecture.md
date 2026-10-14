@@ -5,7 +5,7 @@ package. Callers supply data, Domain coordinates, immutable source evidence,
 SQLite and artifact paths, observation dates, information cutoff and resource
 limits. Workbench owns machine inspection, global scheduling and China semantics.
 
-Core metadata schema 2 retains one small successful-node row per graph, execution
+Core metadata schema 3 retains one small successful-node row per graph, execution
 context and logical node. `CoreStore.node_completions(graph_id, context_id)` reads
 the definition/upstream digests, completed observation/check dates and immutable
 result reference in one metadata query. Exact repeat plans are already complete:
@@ -14,7 +14,20 @@ children load only their direct completed parents as lazy typed plans. Each node
 advances its completion after durable result publication, so an interrupted run
 resumes its remaining frontier. Global/branch publication still requires complete
 coverage and revision fences; historical updates preserve a later completion row.
-Use a fresh store for schema 2; no schema 1 migration/reader is provided.
+Updates store their scalar header, admitted contexts (including empty contexts)
+and node-result relations once. Indexed request/result lookups reconstruct the
+same public receipt and identity without scanning historical receipt JSON.
+`CoreStore.materialization_candidates(node_id, implementation_id, ...)` selects
+compact policy, parameter and date headers before opening original manifests or
+checkpoints. Finite and causal blocks consume headers; checkpoint selection stops
+at the newest valid boundary. Canonical 32-session mathematics is unchanged.
+`CoreStore.read_context(max_metadata_bytes=..., metadata_observer=...)` shares a
+bounded immutable metadata memo across workers and expires on exit. The optional
+observer receives `(event_name, amount)` on the calling worker; callers provide a
+thread-safe collector. Revision guards always read fresh state; explicit audits
+read original metadata and numerical evidence. There is no numerical-window cache.
+Use a fresh store for schema 3; older stores, including schema 2, are rejected
+without a migration/compatibility reader.
 
 ## Objects and types
 

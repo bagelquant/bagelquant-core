@@ -11,12 +11,14 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
-from typing import Any, Iterator, Mapping, Sequence
+from threading import RLock
+from typing import Any, Callable, Iterator, Mapping, Sequence
 import uuid
 
 import polars as pl
 from .inspection import open_metadata_snapshot
 from .artifact_verification import ArtifactVerification
+from .metadata_memo import MetadataMemo
 
 from .domain import Domain
 from .hashing import hash_mapping, hash_dataframe
@@ -26,7 +28,7 @@ from .materialization import (
 )
 from .node import Node, ValueType
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class RevisionConflict(RuntimeError):
@@ -67,6 +69,21 @@ def _result_content(manifest):
         "artifacts", "checkpoint", "training_audits", "execution_policy")}
 
 
+def _candidate_header(manifest):
+    policy = manifest.get("execution_policy") or {}
+    header = {"identity": manifest["identity"], "node_id": manifest["node_id"],
+        "implementation_id": manifest["key"]["implementation_id"],
+        "domain_identity": manifest["key"]["domain_identity"],
+        "context_identity": manifest["key"]["context_identity"],
+        "content_identity": manifest["content_identity"],
+        "coverage_start": manifest["coverage_start"], "through": manifest["through"],
+        "policy_name": policy.get("name"),
+        "policy_key": hash_mapping({key: value for key, value in policy.items() if key != "parameter_bindings"}),
+        "parameter_key": hash_mapping(policy.get("parameters", policy.get("parameter_bindings"))),
+        "policy_role": policy.get("role"), "has_checkpoint": int(manifest.get("checkpoint") is not None)}
+    return {**header, "header_identity": hash_mapping(header)}
+
+
 class CoreStore:
     """Own Core state at two explicit paths; never discover application storage.
 
@@ -81,21 +98,34 @@ class CoreStore:
         if self.meta_path == self.artifact_path:
             raise ValueError("metadata and artifact paths must be distinct")
         self._verification: ArtifactVerification | None = None
+        self._metadata_memo: MetadataMemo | None = None
+        self._metadata_observer: Callable[[str, int], None] | None = None
+        self._initialization_lock = RLock()
 
     @contextmanager
-    def read_context(self) -> Iterator[CoreStore]:
-        """Share finite checksum proofs across this operation's worker threads.
+    def read_context(self, *, max_metadata_bytes: int = 16 * 1024 * 1024,
+                     metadata_observer: Callable[[str, int], None] | None = None) -> Iterator[CoreStore]:
+        """Share bounded immutable metadata and proofs across worker threads.
 
         Each metadata read owns its SQLite connection; graph revision guards
         always read fresh committed state. The returned reader expires on exit.
         """
         reader = copy(self)
         reader._verification = ArtifactVerification()
+        reader._metadata_memo = MetadataMemo(max_metadata_bytes)
+        reader._metadata_observer = metadata_observer
         try:
             yield reader
         finally:
             reader._verification.close()
             reader._verification = None
+            reader._metadata_memo.close()
+            reader._metadata_memo = None
+            reader._metadata_observer = None
+
+    def _metadata_event(self, name: str, amount: int = 1) -> None:
+        if self._metadata_observer is not None:
+            self._metadata_observer(name, amount)
 
     @contextmanager
     def read_transaction(self) -> Iterator[sqlite3.Connection]:
@@ -105,6 +135,8 @@ class CoreStore:
         try:
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
+            if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise ValueError("incompatible Core database; use a new explicit storage location")
             yield connection
         finally:
             connection.rollback()
@@ -132,7 +164,10 @@ class CoreStore:
                     "graph_nodes": {"graph_id", "node_id", "status"},
                     "contexts": {"graph_id", "context_id", "definition_json"},
                     "cleanup_receipts": {"identity", "result_json"},
-                    "updates": {"identity", "graph_id", "receipt_json"},
+                    "updates": {"identity", "graph_id", "revision", "state_revision", "previous", "through", "mode", "request_id"},
+                    "update_contexts": {"update_id", "context_id"},
+                    "update_results": {"update_id", "context_id", "node_id", "materialization_id"},
+                    "materialization_headers": {"identity", "node_id", "implementation_id", "domain_identity", "context_identity", "content_identity", "coverage_start", "through", "policy_name", "policy_key", "parameter_key", "policy_role", "has_checkpoint", "header_identity"},
                     "node_completions": {"graph_id", "context_id", "node_id", "identity", "definition_digest", "upstream_digest", "through", "checked_through"},
                 }
                 if not tables and version == 0:
@@ -153,6 +188,8 @@ class CoreStore:
         connection.execute("PRAGMA foreign_keys=ON")
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, SCHEMA_VERSION):
+                raise ValueError("incompatible Core database; use a new explicit storage location")
             yield connection
             connection.commit()
         except BaseException:
@@ -162,6 +199,12 @@ class CoreStore:
             connection.close()
 
     def initialize(self) -> None:
+        # The journal transition follows the DDL transaction. Serialize both
+        # phases for workers sharing this store, including finite reader copies.
+        with self._initialization_lock:
+            self._initialize()
+
+    def _initialize(self) -> None:
         self.meta_path.parent.mkdir(parents=True, exist_ok=True)
         self.artifact_path.mkdir(parents=True, exist_ok=True)
         with self.transaction() as connection:
@@ -176,7 +219,15 @@ class CoreStore:
                 "CREATE TABLE IF NOT EXISTS graph_nodes(graph_id TEXT NOT NULL REFERENCES graphs(graph_id),node_id TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('active','sleeping')),PRIMARY KEY(graph_id,node_id))",
                 "CREATE TABLE IF NOT EXISTS contexts(graph_id TEXT NOT NULL REFERENCES graphs(graph_id),context_id TEXT NOT NULL,definition_json TEXT NOT NULL,PRIMARY KEY(graph_id,context_id))",
                 "CREATE TABLE IF NOT EXISTS cleanup_receipts(identity TEXT PRIMARY KEY,result_json TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS updates(identity TEXT PRIMARY KEY,graph_id TEXT NOT NULL REFERENCES graphs(graph_id),receipt_json TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS updates(identity TEXT PRIMARY KEY,graph_id TEXT NOT NULL REFERENCES graphs(graph_id),revision INTEGER NOT NULL,state_revision INTEGER NOT NULL,previous TEXT,through TEXT NOT NULL,mode TEXT NOT NULL CHECK(mode IN ('branch','global')),request_id TEXT NOT NULL)",
+                "CREATE INDEX IF NOT EXISTS update_request ON updates(graph_id,request_id)",
+                "CREATE TABLE IF NOT EXISTS update_contexts(update_id TEXT NOT NULL REFERENCES updates(identity),context_id TEXT NOT NULL,PRIMARY KEY(update_id,context_id))",
+                "CREATE TABLE IF NOT EXISTS update_results(update_id TEXT NOT NULL,context_id TEXT NOT NULL,node_id TEXT NOT NULL,materialization_id TEXT NOT NULL REFERENCES materializations(identity),PRIMARY KEY(update_id,context_id,node_id),FOREIGN KEY(update_id,context_id) REFERENCES update_contexts(update_id,context_id))",
+                "CREATE INDEX IF NOT EXISTS update_result_node ON update_results(context_id,node_id,update_id)",
+                "CREATE TABLE IF NOT EXISTS materialization_headers(identity TEXT PRIMARY KEY REFERENCES materializations(identity),node_id TEXT NOT NULL,implementation_id TEXT NOT NULL,domain_identity TEXT NOT NULL,context_identity TEXT NOT NULL,content_identity TEXT NOT NULL,coverage_start TEXT NOT NULL,through TEXT NOT NULL,policy_name TEXT,policy_key TEXT NOT NULL,parameter_key TEXT NOT NULL,policy_role TEXT,has_checkpoint INTEGER NOT NULL,header_identity TEXT NOT NULL)",
+                "CREATE INDEX IF NOT EXISTS materialization_candidate ON materialization_headers(node_id,implementation_id,policy_name,coverage_start,through DESC)",
+                "CREATE INDEX IF NOT EXISTS materialization_policy ON materialization_headers(node_id,implementation_id,policy_key,through DESC)",
+                "CREATE INDEX IF NOT EXISTS materialization_domain ON materialization_headers(domain_identity)",
                 "CREATE TABLE IF NOT EXISTS node_completions(graph_id TEXT NOT NULL,context_id TEXT NOT NULL,node_id TEXT NOT NULL,identity TEXT NOT NULL REFERENCES materializations(identity),definition_digest TEXT NOT NULL,upstream_digest TEXT NOT NULL,through TEXT NOT NULL,checked_through TEXT NOT NULL,PRIMARY KEY(graph_id,context_id,node_id),FOREIGN KEY(graph_id,context_id) REFERENCES contexts(graph_id,context_id),FOREIGN KEY(graph_id,node_id) REFERENCES graph_nodes(graph_id,node_id))",
             ):
                 connection.execute(statement)
@@ -185,7 +236,8 @@ class CoreStore:
                 connection.execute(DDL)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         with sqlite3.connect(self.meta_path, timeout=30) as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
+            if connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+                connection.execute("PRAGMA journal_mode=WAL")
 
     def _file(self, relative: str) -> Path:
         path = (self.artifact_path / relative).resolve()
@@ -194,6 +246,11 @@ class CoreStore:
         return path
 
     def manifest(self, identity: str) -> dict[str, Any] | None:
+        memo = self._metadata_memo
+        cached = None if memo is None else memo.get(("manifest", identity))
+        if cached is not None:
+            self._metadata_event("manifest_cache_hits")
+            return cached
         if not self.meta_path.is_file():
             return None
         with self.read_transaction() as connection:
@@ -201,6 +258,8 @@ class CoreStore:
         if row is None:
             return None
         manifest = json.loads(row[0])
+        self._metadata_event("manifest_reads")
+        self._metadata_event("manifest_json_bytes", len(row[0].encode()))
         self._verify_metadata(manifest, identity)
         if manifest.get("proof_rebinding") is not None:
             with self.read_transaction() as connection:
@@ -210,6 +269,8 @@ class CoreStore:
                 for artifact in manifest["artifacts"].values()):
             with self.read_transaction() as connection:
                 self._verify_artifact_sources(connection, manifest)
+        if memo is not None:
+            memo.put(("manifest", identity), manifest, len(row[0].encode()))
         return manifest
 
     def _verify_artifact_sources(self, connection, manifest, *, visiting=None):
@@ -616,6 +677,9 @@ class CoreStore:
                 os.replace(temporary, final)
                 connection.execute("INSERT INTO materializations VALUES(?,?,?,?)",
                     (value.key.identity, value.key.node_id, _json(value.key.to_dict()), serialized))
+                header = _candidate_header(manifest)
+                connection.execute("INSERT INTO materialization_headers VALUES(" + ",".join("?" for _ in header) + ")",
+                    tuple(header.values()))
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
                     computation_index.save(connection, value.key.identity, manifest["content_identity"], indexed)
         finally:
@@ -638,12 +702,13 @@ class CoreStore:
             # are still validated normally; no index is warmed implicitly.
             return connection.execute("SELECT m.identity,m.manifest_json FROM materializations m "
                 "LEFT JOIN computation_index i ON i.identity=m.identity "
-                "WHERE json_extract(m.key_json,'$.domain_identity')=? "
+                "JOIN materialization_headers h ON h.identity=m.identity WHERE h.domain_identity=? "
                 "ORDER BY CASE WHEN i.version=? AND i.content_identity="
-                "json_extract(m.manifest_json,'$.content_identity') THEN 0 ELSE 1 END,m.rowid LIMIT 1",
+                "h.content_identity THEN 0 ELSE 1 END,m.rowid LIMIT 1",
                 (signature, VERSION)).fetchone()
-        return connection.execute("SELECT identity,manifest_json FROM materializations "
-            "WHERE json_extract(key_json,'$.domain_identity')=? ORDER BY rowid LIMIT 1", (signature,)).fetchone()
+        return connection.execute("SELECT m.identity,m.manifest_json FROM materializations m "
+            "JOIN materialization_headers h ON h.identity=m.identity "
+            "WHERE h.domain_identity=? ORDER BY m.rowid LIMIT 1", (signature,)).fetchone()
 
     def inventory(self, *, node_id: str | None = None,
                   implementation_id: str | None = None) -> tuple[dict[str, Any], ...]:
@@ -663,26 +728,75 @@ class CoreStore:
                 parameters).fetchall()
         return tuple({"identity": row[0], "node_id": row[1], "key": json.loads(row[2])} for row in rows)
 
+    def materialization_candidates(self, node_id: str, implementation_id: str, *,
+            policy_name: str | None = None, policy_key: str | None = None,
+            parameter_key: str | None = None, policy_role: str | None = None,
+            coverage_start: str | None = None, through: str | None = None,
+            checkpoint: bool | None = None) -> tuple[dict[str, Any], ...]:
+        """Select indexed immutable headers without decoding complete receipts.
+
+        Policies are mathematical authority; the caller still validates the
+        selected original manifest before reuse. ``through`` is an inclusive
+        upper bound. Results have a stable newest-first date/identity order.
+        """
+        if not self.meta_path.is_file():
+            return ()
+        clauses, arguments = ["node_id=?", "implementation_id=?"], [node_id, implementation_id]
+        for name, value in (("policy_name", policy_name), ("policy_key", policy_key),
+                ("parameter_key", parameter_key), ("policy_role", policy_role),
+                ("coverage_start", coverage_start), ("has_checkpoint", checkpoint)):
+            if value is not None:
+                clauses.append(name + "=?")
+                arguments.append(int(value) if name == "has_checkpoint" else value)
+        if through is not None:
+            clauses.append("through<=?")
+            arguments.append(str(through))
+        with self.read_transaction() as connection:
+            rows = connection.execute("SELECT * FROM materialization_headers WHERE " + " AND ".join(clauses)
+                + " ORDER BY through DESC,identity", arguments).fetchall()
+        result = []
+        for row in rows:
+            header = dict(row)
+            digest = header.pop("header_identity")
+            if hash_mapping(header) != digest:
+                raise ValueError("corrupt Core candidate header")
+            result.append(header)
+        self._metadata_event("candidate_rows", len(result))
+        return tuple(result)
+
+    def _computation_index(self, manifest):
+        from .computation_index import read
+        key = ("computation_index", manifest["identity"], manifest["content_identity"])
+        memo = self._metadata_memo
+        cached = None if memo is None else memo.get(key, copy_value=False)
+        if cached is not None:
+            self._metadata_event("interval_index_cache_hits")
+            return cached
+        with self.read_transaction() as connection:
+            indexed = read(connection, manifest)
+        if indexed is not None:
+            self._metadata_event("interval_index_reads")
+            if memo is not None:
+                memo.put(key, indexed, len(_json(indexed).encode()))
+        return indexed
+
     def describe(self, identity: str) -> dict[str, Any] | None:
         """Public metadata receipt containing no artifact locations."""
         manifest = self.manifest(identity)
         if manifest is None:
             return None
-        from .computation_index import read
-        with self.read_transaction() as connection:
-            indexed = read(connection, manifest)
+        indexed = self._computation_index(manifest)
         return {**{key: manifest[key] for key in ("identity", "content_identity", "node_id", "key", "value_type", "through",
             "coverage_start", "days", "logical_hash", "trace_columns", "execution_policy")},
-            "calendar": None if indexed is None else indexed["calendar"]}
+            "calendar": None if indexed is None else list(indexed["calendar"])}
 
     def interval_identity(self, identity: str, *, start, end) -> str | None:
         """Prove selected values, full calendar and membership from index records."""
-        from .computation_index import read, interval
+        from .computation_index import interval
         manifest = self.manifest(identity)
         if manifest is None:
             return None
-        with self.read_transaction() as connection:
-            indexed = read(connection, manifest)
+        indexed = self._computation_index(manifest)
         return None if indexed is None else interval(indexed, start, end)
 
     def _artifact_channel(self, identity, name):
@@ -980,9 +1094,16 @@ class CoreStore:
                 "unknown_materializations": unknown}
 
     def verify_identity(self, identity: str) -> None:
-        manifest = self.manifest(identity)
+        # Explicit audits always inspect current metadata instead of trusting
+        # an operation's immutable-record memo.
+        with self.read_transaction() as connection:
+            row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
+            header = connection.execute("SELECT * FROM materialization_headers WHERE identity=?", (identity,)).fetchone()
+        manifest = None if row is None else json.loads(row[0])
         if manifest is None:
             raise ValueError(f"missing Core materialization: {identity}")
+        if header is None or dict(header) != _candidate_header(manifest):
+            raise ValueError("Core candidate header differs from original metadata")
         self.verify(manifest)
         from . import computation_index
         with self.read_transaction() as connection:
@@ -1327,7 +1448,12 @@ class CoreStore:
                 raise RevisionConflict("graph/state changed before publication")
             if mode == "global" and row[2] not in (expected_previous, receipt["identity"]):
                 raise RevisionConflict("current global version changed before publication")
-            connection.execute("INSERT OR IGNORE INTO updates VALUES(?,?,?)", (receipt["identity"], graph_id, _json(receipt)))
+            connection.execute("INSERT OR IGNORE INTO updates VALUES(?,?,?,?,?,?,?,?)",
+                tuple(receipt[name] for name in ("identity", "graph_id", "revision", "state_revision", "previous", "through", "mode", "request_id")))
+            for context_id, values in receipt["results"].items():
+                connection.execute("INSERT OR IGNORE INTO update_contexts VALUES(?,?)", (receipt["identity"], context_id))
+                connection.executemany("INSERT OR IGNORE INTO update_results VALUES(?,?,?,?)",
+                    [(receipt["identity"], context_id, node, materialization) for node, materialization in values.items()])
             if mode == "global":
                 connection.execute("UPDATE graphs SET current_update=? WHERE graph_id=?", (receipt["identity"], graph_id))
         return receipt
@@ -1337,16 +1463,13 @@ class CoreStore:
         with self.read_transaction() as connection:
             current = connection.execute("SELECT identity FROM node_completions WHERE graph_id=? AND context_id=? AND node_id=?",
                 (graph_id, context_id, node_id)).fetchone()
-            rows = connection.execute("SELECT u.identity,n.value FROM updates u,"
-                "json_each(u.receipt_json,'$.results') c,json_each(c.value) n "
-                "WHERE u.graph_id=? AND c.key=? AND n.key=?",
+            rows = connection.execute("SELECT DISTINCT r.materialization_id FROM update_results r "
+                "JOIN updates u ON u.identity=r.update_id "
+                "WHERE u.graph_id=? AND r.context_id=? AND r.node_id=? ORDER BY r.materialization_id",
                 (graph_id, context_id, node_id)).fetchall()
         results = [] if current is None else [current[0]]
-        for identity, materialization in rows:
-            receipt = self.describe_update(identity)
-            if receipt["results"][context_id][node_id] != materialization:
-                raise ValueError("completed materialization differs from registered update")
-            results.append(materialization)
+        results.extend(row[0] for row in rows)
+        self._metadata_event("completion_rows", len(rows))
         return tuple(dict.fromkeys(results))
 
     def node_completions(self, graph_id: str, context_id: str, *, node_ids: Sequence[str] | None = None) -> dict[str, dict[str, Any]]:
@@ -1415,11 +1538,11 @@ class CoreStore:
         if not self.meta_path.is_file():
             return None
         with self.read_transaction() as connection:
-            rows = connection.execute("SELECT receipt_json FROM updates WHERE graph_id=?", (graph_id,)).fetchall()
-        matches = [json.loads(row[0]) for row in rows if json.loads(row[0]).get("request_id") == request_id]
-        if len(matches) > 1:
+            rows = connection.execute("SELECT identity FROM updates WHERE graph_id=? AND request_id=? LIMIT 2",
+                (graph_id, request_id)).fetchall()
+        if len(rows) > 1:
             raise RevisionConflict("request token names more than one update")
-        return self.describe_update(matches[0]["identity"]) if matches else None
+        return self.describe_update(rows[0][0]) if rows else None
 
     @contextmanager
     def reference_publication(self, identity: str):
@@ -1453,10 +1576,19 @@ class CoreStore:
         Historical receipts do not require the current graph revision to match.
         """
         with self.read_transaction() as connection:
-            row = connection.execute("SELECT receipt_json FROM updates WHERE identity=?", (identity,)).fetchone()
+            row = connection.execute("SELECT * FROM updates WHERE identity=?", (identity,)).fetchone()
+            contexts = connection.execute("SELECT context_id FROM update_contexts WHERE update_id=? ORDER BY context_id",
+                (identity,)).fetchall()
+            results = connection.execute("SELECT context_id,node_id,materialization_id FROM update_results "
+                "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
         if row is None:
             raise KeyError(f"unknown update receipt: {identity}")
-        receipt = json.loads(row[0])
+        receipt = {**dict(row), "results": {context[0]: {} for context in contexts}}
+        for context, node, materialization in results:
+            if context not in receipt["results"]:
+                raise ValueError("update result context is missing")
+            receipt["results"][context][node] = materialization
+        self._metadata_event("update_result_rows", len(results))
         if hash_mapping({k: v for k, v in receipt.items() if k != "identity"}) != identity:
             raise ValueError("update receipt identity mismatch")
         return receipt

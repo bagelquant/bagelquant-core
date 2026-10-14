@@ -20,6 +20,8 @@ On macOS, install the CPU ML runtime's OpenMP dependency with
 
 Version 0.11 uses new API and storage schemas. It provides no compatibility reader
 or migration. Real data and service cutover are separate operations.
+Core metadata schema 3 uses indexed update/node relations and compact candidate
+headers. A schema 2 store requires an explicitly initialized fresh location.
 
 Supported platforms: macOS and Linux. Windows support is retired.
 

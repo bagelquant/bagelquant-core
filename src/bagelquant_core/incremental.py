@@ -146,10 +146,9 @@ def _same_finite_policy(saved, policy):
 
 def _finite_partials(store, node_id, implementation_id, policy):
     partials = {}
-    for item in store.inventory(node_id=node_id, implementation_id=implementation_id):
-        manifest = store.manifest(item["identity"])
-        if _same_finite_policy(manifest["execution_policy"] or {}, policy):
-            partials.setdefault(manifest["coverage_start"], []).append(manifest)
+    for header in store.materialization_candidates(node_id, implementation_id, policy_key=hash_mapping(policy)):
+        partials.setdefault(header["coverage_start"], []).append({**header,
+            "key": {"context_identity": header["context_identity"]}})
     return partials
 
 
@@ -170,8 +169,9 @@ def _checkpoint_parent_scopes(node, contract, config, domain, direct, end, *, sc
 
 def _checkpoint_candidates(store, node, key, domain, parameters, parent_scopes, *, calendar_role=None, anchor_calendar=()):
     relevant = _relevant_parameters(node, parameters)
-    manifests = []
-    for item in store.inventory(node_id=node.node_id, implementation_id=key.implementation_id):
+    for item in store.materialization_candidates(node.node_id, key.implementation_id,
+            policy_name="checkpoint_prefix.v2", parameter_key=hash_mapping(relevant),
+            coverage_start=str(domain.times.min()), through=str(domain.times.max()), checkpoint=True):
         manifest = store.manifest(item["identity"])
         policy = manifest.get("execution_policy") or {}
         if (policy.get("name") != "checkpoint_prefix.v2" or "parameters" not in policy
@@ -188,8 +188,7 @@ def _checkpoint_candidates(store, node, key, domain, parameters, parent_scopes, 
             continue
         if policy.get("parent_cutoffs") is not None and policy["parent_cutoffs"] != cutoffs:
             continue
-        manifests.append(manifest)
-    return sorted(manifests, key=lambda item: item["through"], reverse=True)
+        yield manifest
 
 
 def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed: Mapping[str, Node],
@@ -640,7 +639,11 @@ def _execute_period_checkpoint(local, node, registered, *, direct, parameters, k
     policy = {"name": "checkpoint_periods.v1", "role": "complete", "parameters": relevant, "period_proofs": period_proofs}
     previous, restored = None, None
     candidates = []
-    for item in store.inventory(node_id=node.node_id, implementation_id=key.implementation_id):
+    for item in store.materialization_candidates(node.node_id, key.implementation_id,
+            policy_name=policy["name"], parameter_key=hash_mapping(relevant), policy_role="complete",
+            coverage_start=str(calendar[0]), through=str(calendar[-1]), checkpoint=True):
+        if candidates and item["through"] < candidates[0][0]["through"]:
+            break  # Only the newest valid boundary participates in tie-breaking.
         manifest = store.manifest(item["identity"])
         saved_policy = manifest.get("execution_policy") or {}
         if (saved_policy.get("name") != policy["name"] or saved_policy.get("role") != "complete"

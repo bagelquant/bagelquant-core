@@ -163,9 +163,9 @@ class CausalReplay:
         self.usage = {node: {"computed_blocks": 0, "reused_blocks": 0,
             "computed_output_sessions": 0, "kernel_sessions": 0, "input_sessions": 0,
             "causal_segments": 0, "canonical_sessions": CANONICAL_SESSIONS} for node in self.selected}
-        inventory = {node: [plan.store.manifest(item["identity"]) for item in plan.store.inventory(
-            node_id=node, implementation_id=plan.keys[context][node].implementation_id)
-            if plan.store.manifest(item["identity"]).get("execution_policy") == self._policy(node)] for node in self.selected}
+        inventory = {node: list(plan.store.materialization_candidates(node,
+            plan.keys[context][node].implementation_id, policy_key=hash_mapping(self._policy(node)),
+            through=plan.through)) for node in self.selected}
         # A new opaque proof namespace must not silently cold-replay an entire
         # completed model. Real bounded repairs retain at least one proven
         # interval; definitions/implementations changing create new authority.

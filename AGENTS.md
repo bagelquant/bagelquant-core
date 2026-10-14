@@ -9,9 +9,13 @@ follow graph/runtime acceptance, including explicit calendar checkpoints,
 per-period supervised Prediction evidence and original artifact references.
 Core has no BagelQuant package dependency; Workbench owns global scheduling and
 machine policy. Do not add providers, accounts, China rules or governance here.
-Core schema 2 owns one compact successful-node completion per graph/context/node;
+Core schema 3 owns indexed update/context/node relations, compact immutable
+materialization candidates and one successful-node completion per graph/context/node;
 normal repeat planning reads these flags and never opens numerical values.
 Publish completion after each durable node; interrupted retries retain the frontier.
+Candidates use indexed policy/date headers; only selected receipts are decoded.
+Finite read contexts share bounded immutable metadata; live revision guards stay fresh.
+Schema 2 stores are rejected without a migration reader.
 Generic causal-version inputs use the same Graph/UpdatePlan/CoreStore path.
 Separate source observation coverage from causal output membership; retain
 bounded version halos, shared reads and original completed output references.

@@ -287,6 +287,8 @@ def test_artifact_original_authority_fenced_in_closing_writer(tmp_path, monkeypa
             if problem == "authority":
                 with transaction() as connection:
                     connection.execute("DELETE FROM node_completions WHERE identity=?", (original_id,))
+                    connection.execute("DELETE FROM update_results WHERE materialization_id=?", (original_id,))
+                    connection.execute("DELETE FROM materialization_headers WHERE identity=?", (original_id,))
                     connection.execute("DELETE FROM materializations WHERE identity=?", (original_id,))
             else:
                 original_file.unlink()

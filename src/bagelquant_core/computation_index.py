@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_left, bisect_right
 
 from .hashing import hash_dataframe, hash_mapping
 
@@ -48,7 +49,8 @@ def read(db, manifest) -> dict | None:
 
 
 def interval(payload, start, end) -> str:
-    calendar = [day for day in payload["calendar"] if str(start) <= day <= str(end)]
+    days = payload["calendar"]
+    calendar = days[bisect_left(days, str(start)):bisect_right(days, str(end))]
     return hash_mapping({"version": VERSION, "calendar": calendar,
         "membership": [(day, payload["membership"][day]) for day in calendar],
         "values": [(day, payload["days"].get(day)) for day in calendar],

@@ -4,12 +4,21 @@ Core 0.11 是可独立运行的 Python 3.13 package，不依赖 Data、BT 或 Wo
 调用方传入输入证据、Domain、SQLite 路径、产物目录、观察区间、信息 cutoff 与资源参数；
 Workbench 负责机器探测、全局调度、中国市场语义和 GUI。
 
-Core 元数据库 schema 2 对每个 graph/context/逻辑节点保留一行小型成功状态。
+Core 元数据库 schema 3 对每个 graph/context/逻辑节点保留一行小型成功状态。
 `CoreStore.node_completions(graph_id, context_id)` 批量读取定义和上游摘要、
 完成观察日期、成功检查日期及不可变结果引用。完全相同的计划直接完成，不读取数值、
 调用输入证明或执行 kernel；缺失子节点仅为其需要的已完成父节点构造 lazy typed plan。
 每个节点的结果持久发布后立即推进状态，中断续跑只执行剩余 frontier；完整发布仍受
-覆盖范围和图修订约束，历史分支不会回退较新的状态。schema 2 仅用于新库，无旧库迁移。
+覆盖范围和图修订约束，历史分支不会回退较新的状态。
+更新 header、context（含空结果 context）和 node/result 关系归一化保存，按索引查询，
+公开 receipt 和 identity 保持原有含义；查询不扫描历史 receipt JSON。
+`CoreStore.materialization_candidates` 先按 implementation、policy、参数和日期筛选小型
+header，数值执行才读取匹配的原始 manifest/checkpoint。32-session 数学分块不变。
+`CoreStore.read_context(max_metadata_bytes=..., metadata_observer=...)` 在一次操作内
+共享有预算上限的不可变 metadata，退出清空。observer 接收 `(event_name, amount)`，
+可由工作线程调用；调用方提供线程安全 collector。图状态 fence 始终读取最新记录；
+显式审计绕过 memo，核对原始 metadata 和数值证据。本轮不缓存数值窗口。
+schema 3 仅用于新库；拒绝 schema 2 等旧库，不提供迁移或兼容 reader。
 
 ## 对象与接口
 

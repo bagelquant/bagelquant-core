@@ -115,6 +115,7 @@ def test_admission_rejects_forged_new_key_and_original_loss(tmp_path):
         store.apply_input_proof_rebind(forged)
     maintained = store.apply_input_proof_rebind(plan)
     with store.transaction() as connection:
+        connection.execute("DELETE FROM materialization_headers WHERE identity=?", (blocks[0]["identity"],))
         connection.execute("delete from materializations where identity=?", (blocks[0]["identity"],))
     with pytest.raises(ValueError, match="authority is missing"):
         store.describe(maintained["identity"])
@@ -208,6 +209,7 @@ def test_transitive_rebinding_requires_native_source_and_admission_records(tmp_p
     with store.transaction() as connection:
         import json
         connection.execute("INSERT INTO input_proof_rebinding_plans VALUES(?,?)", (plan["identity"], json.dumps(plan)))
+        connection.execute("DELETE FROM materialization_headers WHERE identity=?", (blocks[0]["identity"],))
         connection.execute("DELETE FROM materializations WHERE identity=?", (blocks[0]["identity"],))
     with pytest.raises(ValueError, match="authority is missing"):
         store.describe(second["identity"])

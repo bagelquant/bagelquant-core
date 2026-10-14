@@ -11,7 +11,7 @@ CoreStore SQLite/Parquet implementations at caller-provided paths. It imports no
 Data/BT/Workbench. Workbench owns global admission, CPU/RAM detection and pressure
 policy; Core only applies explicit local budgets and reports work.
 
-Schema 2 stores one compact `node_completions` row per graph/context/logical node.
+Schema 3 stores one compact `node_completions` row per graph/context/logical node.
 `CoreStore.node_completions` reads successful definition/upstream digests,
 observation/check dates and the immutable result reference in one metadata query.
 `UpdatePlan` adopts only exact matching authority without a value lookup or proof
@@ -20,6 +20,16 @@ parents. Each durable result advances its flag under graph/state revision fences
 incomplete updates retain these flags while global/branch completion remains a
 separate publication. Older historical branches cannot regress the latest flag.
 A date alone never proves freshness after definition, Domain or dependency edits.
+Update headers, admitted contexts and node-result relations are normalized and
+published atomically. Indexed completion/request queries never scan enclosing
+receipt JSON. Materialization candidate headers bind the original content,
+implementation, policy, parameters, dates and checkpoint availability. Planners
+filter these records before reading selected manifests/checkpoints; exact public
+update bodies and identities are reconstructed from the registered relations.
+Finite read contexts admit bounded thread-safe immutable manifest/index memos;
+they expire on exit and never cache revision fences or missing optional indexes.
+Explicit audits bypass metadata memos and check candidate/original bindings.
+Schema 2 is incompatible; there is no migration reader or implicit reconstruction.
 
 `plan_update(causal_inputs=..., input_version_loader=..., input_scope_proof=...,
 causal_output_domains=...)` admits typed CausalInputWindow versions in the same

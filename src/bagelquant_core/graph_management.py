@@ -176,10 +176,12 @@ class GraphManagement:
 
     def plan_update(self, contexts, *, through, roots=None, input_loader=None, input_proof=None,
                     input_window_loader=None, input_scope_proof=None, causal_inputs=(), input_version_loader=None,
-                    causal_output_domains=None, input_definition_identities=None):
+                    causal_output_domains=None, input_definition_identities=None, native_admission=None, kernel_dispatch=None,
+                    persist_nodes=()):
         from .update import UpdatePlan
         return UpdatePlan(self, contexts, through=through, roots=roots,
                           input_loader=input_loader, input_proof=input_proof, input_window_loader=input_window_loader,
                           input_scope_proof=input_scope_proof, causal_inputs=causal_inputs,
                           input_version_loader=input_version_loader, causal_output_domains=causal_output_domains,
-                          input_definition_identities=input_definition_identities)
+                          input_definition_identities=input_definition_identities, native_admission=native_admission,
+                          kernel_dispatch=kernel_dispatch, persist_nodes=persist_nodes)

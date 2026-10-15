@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 from datetime import date
-from .hashing import hash_dataframe
+from .hashing import _hash_dataframe_days, hash_dataframe
 from typing import Any, Mapping, Sequence
 
 import polars as pl
@@ -72,6 +72,7 @@ class Node(NodeDefinition):
             else None
         )
         self._cached_dense = _cached_dense
+        self._cached_sparse: pl.DataFrame | None = None
         self._validated_keys = _validated_keys
         self._exact_domain = _exact_domain
         self._key_identity = _key_identity or self._identity
@@ -107,8 +108,7 @@ class Node(NodeDefinition):
             from .computation_index import describe
             collected = frame.sort([TIME, ASSET_ID]).collect()
             identity = "content:" + hash_dataframe(collected)
-            days = {str(part[TIME][0]): hash_dataframe(part)
-                    for part in collected.partition_by(TIME, maintain_order=True)}
+            days = _hash_dataframe_days(collected)
             indexed = describe(domain, days=days, value_type=ValueType(value_type).value,
                                trace_columns=traces)
         panel = cls(
@@ -256,7 +256,9 @@ class Node(NodeDefinition):
             return self.output.collect(dense=dense, include_traces=include_traces)
         if self._frame is None:
             raise RuntimeError(f"source {self.source_key!r} requires an explicit data binding")
-        if dense and self._cached_dense is not None:
+        if not dense and self._cached_sparse is not None:
+            result = self._cached_sparse
+        elif dense and self._cached_dense is not None:
             result = self._cached_dense
         else:
             result = self._collect_and_validate(dense=dense)
@@ -265,7 +267,7 @@ class Node(NodeDefinition):
         columns = [TIME, ASSET_ID, VALUE]
         if include_traces:
             columns.extend(self._trace_columns)
-        return result.select(columns).clone()
+        return (result if result.columns == columns else result.select(columns)).clone()
 
     def lazy(
         self,
@@ -493,4 +495,5 @@ class Node(NodeDefinition):
         node._trace_columns = ()
         node._trace_identity = None
         node._cached_dense = None
+        node._cached_sparse = None
         return node

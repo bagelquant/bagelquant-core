@@ -11,7 +11,7 @@ CoreStore SQLite/Parquet implementations at caller-provided paths. It imports no
 Data/BT/Workbench. Workbench owns global admission, CPU/RAM detection and pressure
 policy; Core only applies explicit local budgets and reports work.
 
-Schema 3 stores one compact `node_completions` row per graph/context/logical node.
+Schema 4 stores one compact `node_completions` row per graph/context/durable node.
 `CoreStore.node_completions` reads successful definition/upstream digests,
 observation/check dates and the immutable result reference in one metadata query.
 `UpdatePlan` adopts only exact matching authority without a value lookup or proof
@@ -29,7 +29,44 @@ update bodies and identities are reconstructed from the registered relations.
 Finite read contexts admit bounded thread-safe immutable manifest/index memos;
 they expire on exit and never cache revision fences or missing optional indexes.
 Explicit audits bypass metadata memos and check candidate/original bindings.
-Schema 2 is incompatible; there is no migration reader or implicit reconstruction.
+Older schemas are incompatible; there is no migration reader or implicit reconstruction.
+
+Deterministic zero-history lazy built-ins form bounded regions. Requested roots,
+explicit `persist_nodes`, shared operator boundaries, finite rolling, causal,
+stateful, model, custom and eager boundaries remain durable. Exact intermediate
+day/Domain/type/trace indexes are committed atomically with each durable region
+block; a seal binds complete logical coverage to its durable composite. Update
+receipts expose real numerical results and a separate transient-node-to-boundary
+`coverage` map. `CoreStore.update_covers` validates registered authority; applications
+must not infer missing artifacts or trust an independently supplied coverage map.
+Physical region choices never enter numerical policies or material keys. Append,
+repair and retry verify certificates before reusing original canonical blocks;
+unknown complete-history proofs block before numerical work. Internal outputs
+requested later become durable while existing completed roots remain reusable.
+Sparse region outputs use one multi-output collection with coordinate-keyed
+trace joins. Their validated frames remain local to the admitted operation;
+sparse row presence never comes from a dense cache. Grouped proof hashing may
+share physical row hashes only while preserving the original per-group schema,
+height, width and ordered row-hash bytes, including interleaved date groups.
+
+Operation-local preparation shares actual immutable Domain windows, all admitted
+halo schedules, successful interval proofs and fitting parent slabs. Its charged
+byte budget reserves at most one quarter of admitted cache memory, capped at
+64 MiB, reducing local runtime cache accordingly. Eviction/zero cache retain the
+bulk read path. Per-key single-flight work never holds a global metadata lock
+during collection. Publication expires cached values; no missing proof or mutable
+revision guard is cached. Generic rolling canonical warm starts and resets stay
+unchanged even when an exited asset makes them expensive.
+
+`CoreStore.publication_context` initializes once per finite write operation and
+expires on exit. Every writer retains schema/revision/publication checks, and a
+replaced metadata file fails closed. Read-only planning never enters that context.
+Optional `native_admission` and `kernel_dispatch` belong to caller execution policy.
+Finite/region work descriptors contain typed explicit staging references and local
+limits, never mutable plans or stores. `compute_finite_work` computes only; the
+coordinator validates result types/traces, fences cancellation/revisions, publishes
+and advances completion. Fresh process/native setup, worker counts and machine
+admission remain caller-owned. Staging expires on success, failure or cancellation.
 
 `plan_update(causal_inputs=..., input_version_loader=..., input_scope_proof=...,
 causal_output_domains=...)` admits typed CausalInputWindow versions in the same
@@ -113,10 +150,19 @@ empty values/traces after consumed-schema validation, without inventing a date.
 Unbounded reads and explicit integrity APIs still consume the complete Domain;
 out-of-window duplicate coordinates remain an explicit full-audit concern.
 This view optimization changes no numerical receipt, policy or interval identity.
-`evidence(channels=...)` reads only requested auxiliary channels. Explicit full
+`evidence(channels=...)` reads only requested auxiliary channels. Region-root
+evidence descriptions and reads follow sealed transient logical keys to their
+retained durable ancestors; fusion must not hide model audits, checkpoints or
+auxiliary artifacts. Explicit full
 integrity/update verification covers every saved channel and compares optional
 interval indexes to original evidence. Ordinary exact execution uses published
 metadata/lazy typed plans; only missing-node consumption loads numerical inputs.
+Admit each missing finite/region interval from immutable scoped input and all
+retained output frame estimates, including conservative temporary/copy overhead,
+before numerical source reads. Use the actual local memory share. Oversized work
+fails with an actionable `MemoryError`, retaining old receipts; no inline bypass
+or replay to introduce persistence boundaries is permitted. Workers recheck the
+positive descriptor estimate against their own frozen share before staged reads.
 Optional interval proofs include full calendar, membership, empty days, values and
 trace/type channels. Completed finite/checkpoint paths with unknown proof or
 unprovable relevant parameter/policy scope require explicit maintenance, never

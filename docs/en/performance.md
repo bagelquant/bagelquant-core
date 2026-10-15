@@ -262,6 +262,56 @@ Core accepts explicit ResourceLimits and executes admitted nodes. Workbench owns
 machine detection, DAG admission and memory-pressure response. Historical
 measurements above are not a performance claim for the refactored storage path.
 
+## Bounded persistent execution
+
+An admitted update shares immutable Domain windows, halo schedules, successful
+interval proofs and fitting parent slabs. All requested halo histories on one
+actual Domain share one membership sort. Parent slabs retain each canonical
+32-session kernel reset; generic rolling means, sums and standard deviations
+keep their original warm prefix because shortening it changes floating-point
+arithmetic. A prefix larger than the preparation budget keeps its bulk read path
+rather than thrashing a smaller slab cache. Per-key single-flight collection
+allows unrelated ready work to overlap. `plan.preparation_usage` reports actual
+decodes, decoded sessions/rows, hits, evictions and charged resident/peak bytes.
+The preparation budget reserves at most a quarter of cache memory, capped at
+64 MiB, and expires after successful publication.
+
+Schema 4 pointwise regions publish requested/shared/explicit boundaries and retain
+exact transient interval indexes. Required transient output plans are collected
+together through the existing multi-output collector. Sparse values join traces
+by their full coordinate keys before collection, then retain their validated
+operation-owned frames for exact proof reads; dense caches never supply sparse
+row presence. Per-day proof hashing shares one physical row-hash evaluation and
+partitions the hashes in original row order, preserving every original schema,
+height, width and SHA byte. Region certificates are committed with
+the durable block, and seals establish complete logical coverage without claiming
+that transient numerical payloads exist. Physical persistence hints change neither
+canonical block keys nor mathematical execution policies. In a synthetic five-node,
+70-session region, this reduces durable receipts from 20 to 4 with exact keys,
+values, types and traces. It is a structural count, not an elapsed-time claim.
+Auxiliary evidence traverses the seal's original transient keys to retained
+durable ancestors, preserving model audits, operator checkpoints and artifacts
+in root evidence descriptions and selected reads.
+Before reading a missing interval, finite/region execution estimates all scoped
+input frames and every retained output frame, including key/trace/object overhead,
+then reserves eight copies for computation, validation, transport and proof work
+against the actual admitted node memory. Oversized work raises `MemoryError`
+before source-window reads or kernels; it cannot bypass admission by running
+inline. Existing receipts remain usable under smaller budgets, and append charges
+only the missing tail. Increase the admitted memory or choose explicit
+`persist_nodes` boundaries before initializing a fresh graph; admission never
+replays completed history to insert boundaries. This remains a conservative
+working-set estimate, not an operating-system memory quota.
+
+Finite work descriptors permit fresh process dispatch without passing mutable
+plans, callbacks or full frames through Python pickling. Core stages Arrow files,
+validates returned types/traces, and retains all publication/completion authority
+in the coordinator. Transport bytes and dispatched kernel counts are reported.
+Workers start only for admitted missing work; no-op plans do not stage data or
+call a dispatcher. Process/native setup and one aggregate resource budget remain
+the caller's responsibility. No real-data speedup has been established by these
+synthetic acceptance tests.
+
 ## Selective artifact verification
 
 Metadata inspection performs zero artifact hashes. A six-month typed value fixture with two Domain files requires three hashes for a one-day read: the Domain files and one monthly partition. Repeated reads in one `read_context` reuse those proofs while rechecking file identity; a new context verifies bytes again. Unselected corruption is detected by an explicit full audit or when that partition is consumed. These structural counts are tested; they are not a wall-time guarantee or a change to numerical kernels.

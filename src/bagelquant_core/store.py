@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import copy
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -21,14 +22,14 @@ from .artifact_verification import ArtifactVerification
 from .metadata_memo import MetadataMemo
 
 from .domain import Domain
-from .hashing import hash_mapping, hash_dataframe
+from .hashing import _hash_dataframe_days, hash_mapping
 from .logical import LogicalGraphSpec
 from .materialization import (
     MaterializationKey, MaterializationLookup, MaterializationStatus, NodeMaterialization,
 )
 from .node import Node, ValueType
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class RevisionConflict(RuntimeError):
@@ -101,6 +102,7 @@ class CoreStore:
         self._metadata_memo: MetadataMemo | None = None
         self._metadata_observer: Callable[[str, int], None] | None = None
         self._initialization_lock = RLock()
+        self._publication_binding = ContextVar("core_publication_binding", default=None)
 
     @contextmanager
     def read_context(self, *, max_metadata_bytes: int = 16 * 1024 * 1024,
@@ -169,6 +171,8 @@ class CoreStore:
                     "update_results": {"update_id", "context_id", "node_id", "materialization_id"},
                     "materialization_headers": {"identity", "node_id", "implementation_id", "domain_identity", "context_identity", "content_identity", "coverage_start", "through", "policy_name", "policy_key", "parameter_key", "policy_role", "has_checkpoint", "header_identity"},
                     "node_completions": {"graph_id", "context_id", "node_id", "identity", "definition_digest", "upstream_digest", "through", "checked_through"},
+                    "region_evidence": {"identity", "kind", "content_identity", "payload_json", "payload_identity"},
+                    "update_coverage": {"update_id", "context_id", "node_id", "boundary_node"},
                 }
                 if not tables and version == 0:
                     return {"status": "uninitialized", "schema_version": 0, "reason": "metadata_empty"}
@@ -183,12 +187,16 @@ class CoreStore:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        binding = self._publication_binding.get()
+        if binding is not None and self._publication_file_identity() != binding:
+            raise RevisionConflict("Core metadata file changed during publication; reopen the store")
         connection = sqlite3.connect(self.meta_path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         try:
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, SCHEMA_VERSION):
+            allowed = (0, SCHEMA_VERSION) if binding is None else (SCHEMA_VERSION,)
+            if connection.execute("PRAGMA user_version").fetchone()[0] not in allowed:
                 raise ValueError("incompatible Core database; use a new explicit storage location")
             yield connection
             connection.commit()
@@ -199,10 +207,37 @@ class CoreStore:
             connection.close()
 
     def initialize(self) -> None:
+        binding = self._publication_binding.get()
+        if binding is not None:
+            if self._publication_file_identity() != binding:
+                raise RevisionConflict("Core metadata file changed during publication; reopen the store")
+            return
         # The journal transition follows the DDL transaction. Serialize both
         # phases for workers sharing this store, including finite reader copies.
         with self._initialization_lock:
             self._initialize()
+
+    def _publication_file_identity(self):
+        try:
+            status = self.meta_path.stat()
+        except FileNotFoundError as error:
+            raise RevisionConflict("Core metadata file disappeared during publication; reopen the store") from error
+        return (status.st_dev, status.st_ino)
+
+    @contextmanager
+    def publication_context(self) -> Iterator[CoreStore]:
+        """Initialize once for a finite write operation, retaining fresh fences.
+
+        Schema/version checks remain on every writer transaction. The binding
+        expires on exit and a replaced metadata file fails rather than creating
+        a new store beneath an admitted update. No reader enters this context.
+        """
+        self.initialize()
+        token = self._publication_binding.set(self._publication_file_identity())
+        try:
+            yield self
+        finally:
+            self._publication_binding.reset(token)
 
     def _initialize(self) -> None:
         self.meta_path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +259,8 @@ class CoreStore:
                 "CREATE TABLE IF NOT EXISTS update_contexts(update_id TEXT NOT NULL REFERENCES updates(identity),context_id TEXT NOT NULL,PRIMARY KEY(update_id,context_id))",
                 "CREATE TABLE IF NOT EXISTS update_results(update_id TEXT NOT NULL,context_id TEXT NOT NULL,node_id TEXT NOT NULL,materialization_id TEXT NOT NULL REFERENCES materializations(identity),PRIMARY KEY(update_id,context_id,node_id),FOREIGN KEY(update_id,context_id) REFERENCES update_contexts(update_id,context_id))",
                 "CREATE INDEX IF NOT EXISTS update_result_node ON update_results(context_id,node_id,update_id)",
+                "CREATE TABLE IF NOT EXISTS update_coverage(update_id TEXT NOT NULL,context_id TEXT NOT NULL,node_id TEXT NOT NULL,boundary_node TEXT NOT NULL,PRIMARY KEY(update_id,context_id,node_id),FOREIGN KEY(update_id,context_id,boundary_node) REFERENCES update_results(update_id,context_id,node_id))",
+                "CREATE TABLE IF NOT EXISTS region_evidence(identity TEXT NOT NULL REFERENCES materializations(identity),kind TEXT NOT NULL CHECK(kind IN ('block','seal')),content_identity TEXT NOT NULL,payload_json TEXT NOT NULL,payload_identity TEXT NOT NULL,PRIMARY KEY(identity,kind,payload_identity))",
                 "CREATE TABLE IF NOT EXISTS materialization_headers(identity TEXT PRIMARY KEY REFERENCES materializations(identity),node_id TEXT NOT NULL,implementation_id TEXT NOT NULL,domain_identity TEXT NOT NULL,context_identity TEXT NOT NULL,content_identity TEXT NOT NULL,coverage_start TEXT NOT NULL,through TEXT NOT NULL,policy_name TEXT,policy_key TEXT NOT NULL,parameter_key TEXT NOT NULL,policy_role TEXT,has_checkpoint INTEGER NOT NULL,header_identity TEXT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS materialization_candidate ON materialization_headers(node_id,implementation_id,policy_name,coverage_start,through DESC)",
                 "CREATE INDEX IF NOT EXISTS materialization_policy ON materialization_headers(node_id,implementation_id,policy_key,through DESC)",
@@ -454,7 +491,8 @@ class CoreStore:
         return MaterializationLookup(MaterializationStatus.MISS)
 
     def publish(self, value: NodeMaterialization, *, execution_policy=None,
-                value_references: Sequence[str | Mapping[str, Any]] | None = None, _proof_rebinding=None) -> None:
+                value_references: Sequence[str | Mapping[str, Any]] | None = None, _proof_rebinding=None,
+                region_evidence: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self.initialize()
         if value.panel.domain.signature != value.key.domain_identity:
             raise ValueError("materialization Domain does not match its key")
@@ -506,7 +544,7 @@ class CoreStore:
                         unique_time=item["time"].n_unique() == item.height and item["time"].is_sorted(),
                         start=None if not item.height else str(item["time"].min()),
                         end=None if not item.height else str(item["time"].max()),
-                        days={str(day["time"][0]): hash_dataframe(day) for day in item.partition_by("time", maintain_order=True)},
+                        days=_hash_dataframe_days(item),
                         day_rows={str(day["time"][0]): day.height for day in item.partition_by("time", maintain_order=True)})
                 return result
             if isinstance(item, datetime):
@@ -585,8 +623,7 @@ class CoreStore:
                     dates = calendar.filter(calendar.dt.truncate("1mo") == month)
                     frame = value.panel._validate_collected(plan.filter(pl.col("time").is_between(dates.min(), dates.max())).collect())
                     partitions.append({**encode(frame), "start": str(dates.min()), "end": str(dates.max()), "rows": frame.height})
-                    for day_frame in frame.partition_by("time", maintain_order=True):
-                        days[str(day_frame["time"][0])] = hash_dataframe(day_frame)
+                    days.update(_hash_dataframe_days(frame))
                 if not partitions:
                     partitions.append(encode(plan.collect()))
             indexed = {**domain_index, "days": days} if domain_index is not None else computation_index.describe(
@@ -673,6 +710,7 @@ class CoreStore:
                         raise ValueError("immutable materialization conflict: different results or evidence for the same key")
                     if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
                         computation_index.save(connection, value.key.identity, existing["content_identity"], indexed)
+                    self._save_region_evidence(connection, existing, region_evidence)
                     return
                 os.replace(temporary, final)
                 connection.execute("INSERT INTO materializations VALUES(?,?,?,?)",
@@ -682,9 +720,95 @@ class CoreStore:
                     tuple(header.values()))
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
                     computation_index.save(connection, value.key.identity, manifest["content_identity"], indexed)
+                self._save_region_evidence(connection, manifest, region_evidence)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
+
+    @staticmethod
+    def _save_region_evidence(connection, manifest, evidence):
+        for kind, payload in (evidence or {}).items():
+            if kind not in {"block", "seal"} or payload.get("boundary_node") != manifest["node_id"]:
+                raise ValueError("region evidence has a different numerical boundary")
+            if manifest["node_id"] not in payload.get("nodes", {}):
+                raise ValueError("region evidence is missing its durable boundary")
+            boundary = payload["nodes"][manifest["node_id"]]
+            key = boundary if kind == "seal" else boundary.get("key")
+            if key is None or MaterializationKey.from_dict(key).identity != manifest["identity"]:
+                raise ValueError("region evidence differs from its durable numerical key")
+            if kind == "block":
+                from .computation_index import read
+                if boundary.get("index") != read(connection, manifest):
+                    raise ValueError("region boundary interval evidence differs from original values")
+            binding = {"identity": manifest["identity"], "kind": kind,
+                "content_identity": manifest["content_identity"], "payload": payload}
+            connection.execute("INSERT OR IGNORE INTO region_evidence VALUES(?,?,?,?,?)",
+                (manifest["identity"], kind, manifest["content_identity"], _json(payload), hash_mapping(binding)))
+
+    def region_evidence(self, identity: str, *, kind: str) -> tuple[dict[str, Any], ...]:
+        """Read original-content-bound logical certificates without value reads.
+
+        Block certificates retain exact transient interval indexes; seals bind
+        logical coverage to a durable composite. They are never value receipts.
+        """
+        if kind not in {"block", "seal"}:
+            raise ValueError("region evidence kind must be block or seal")
+        # Repeat planning consumes compact authority, never a composite's full
+        # manifest/reference tree or numerical interval bodies.
+        with self.read_transaction() as connection:
+            row = connection.execute("SELECT h.*,m.key_json FROM materialization_headers h "
+                "JOIN materializations m ON m.identity=h.identity WHERE h.identity=?", (identity,)).fetchone()
+        if row is None:
+            return ()
+        header = dict(row)
+        serialized = header.pop("key_json")
+        digest = header.pop("header_identity")
+        key = MaterializationKey.from_dict(json.loads(serialized))
+        if hash_mapping(header) != digest or key.identity != identity or key.node_id != header["node_id"]:
+            raise ValueError("corrupt Core region boundary header")
+        return self._read_region_evidence(header, kind)
+
+    def _read_region_evidence(self, manifest, kind):
+        identity = manifest["identity"]
+        with self.read_transaction() as connection:
+            rows = connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
+                "WHERE identity=? AND kind=? ORDER BY payload_identity", (identity, kind)).fetchall()
+        self._metadata_event("region_evidence_rows", len(rows))
+        result = []
+        for content, serialized, token in rows:
+            payload = json.loads(serialized)
+            binding = {"identity": identity, "kind": kind, "content_identity": content, "payload": payload}
+            if (content != manifest["content_identity"] or hash_mapping(binding) != token
+                    or payload.get("boundary_node") != manifest["node_id"]):
+                raise ValueError("corrupt original region evidence")
+            boundary = payload.get("nodes", {}).get(manifest["node_id"])
+            key = None if boundary is None else (boundary if kind == "seal" else boundary.get("key"))
+            if key is None or MaterializationKey.from_dict(key).identity != identity:
+                raise ValueError("region evidence differs from its durable numerical key")
+            result.append(payload)
+        return tuple(result)
+
+    def _validate_logical_coverage(self, results, coverage):
+        if set(coverage) != set(results):
+            raise ValueError("logical coverage must name exactly the admitted contexts")
+        for context, nodes in coverage.items():
+            if set(nodes) & set(results[context]):
+                raise ValueError("a numerical result cannot also be transient coverage")
+            for node, boundary in nodes.items():
+                identity = results[context].get(boundary)
+                if identity is None:
+                    raise ValueError("logical coverage requires a durable result boundary")
+                seals = self.region_evidence(identity, kind="seal")
+                if not any(node in seal["nodes"] and MaterializationKey.from_dict(seal["nodes"][node]).node_id == node
+                        for seal in seals):
+                    raise ValueError("logical coverage has no original durable region seal")
+
+    def update_covers(self, identity: str, context_id: str, *, node_ids: Sequence[str]) -> bool:
+        """Validate registered receipt authority and test its logical coverage."""
+        receipt = self.describe_update(identity)
+        if context_id not in receipt["results"]:
+            return False
+        return set(node_ids) <= set(receipt["results"][context_id]) | set(receipt["coverage"][context_id])
 
     def read(self, identity: str) -> NodeMaterialization:
         manifest = self.manifest(identity)
@@ -799,6 +923,31 @@ class CoreStore:
         indexed = self._computation_index(manifest)
         return None if indexed is None else interval(indexed, start, end)
 
+    def _evidence_parents(self, manifest):
+        """Follow original logical ancestry through sealed transient nodes.
+
+        A region keeps its original mathematical inputs, including logical keys
+        with no materialization row. Its owner seal carries those exact keys;
+        expand them until a real durable input (or external source) is reached.
+        This does not invent a numerical receipt for a transient operator.
+        """
+        transient = {}
+        for seal in self.region_evidence(manifest["identity"], kind="seal"):
+            for node, encoded in seal["nodes"].items():
+                if node != manifest["node_id"]:
+                    key = MaterializationKey.from_dict(encoded)
+                    transient[key.identity] = key.inputs
+        def expand(identity, path):
+            if identity not in transient:
+                yield identity
+                return
+            if identity in path:
+                raise ValueError("cyclic logical region evidence")
+            for parent in transient[identity]:
+                yield from expand(parent, path | {identity})
+        for parent in manifest["key"]["inputs"]:
+            yield from expand(parent, set())
+
     def _artifact_channel(self, identity, name):
         visited = set()
         def visit(current):
@@ -810,7 +959,7 @@ class CoreStore:
                 return None
             if name in manifest["artifacts"]:
                 return manifest, manifest["artifacts"][name]
-            for parent in manifest["key"]["inputs"]:
+            for parent in self._evidence_parents(manifest):
                 found = visit(parent)
                 if found is not None:
                     return found
@@ -905,7 +1054,7 @@ class CoreStore:
                 "unique_time": frame["time"].n_unique() == frame.height and frame["time"].is_sorted(),
                 "start": None if frame.is_empty() else str(frame["time"].min()),
                 "end": None if frame.is_empty() else str(frame["time"].max()),
-                "days": {str(day["time"][0]): hash_dataframe(day) for day in frame.partition_by("time", maintain_order=True)},
+                "days": _hash_dataframe_days(frame),
                 "day_rows": {str(day["time"][0]): day.height for day in frame.partition_by("time", maintain_order=True)}})
         if not leaves:
             raise ValueError("Core artifact index requires original typed leaves")
@@ -1118,6 +1267,36 @@ class CoreStore:
                 value_type=manifest["value_type"], trace_columns=manifest["trace_columns"])
             if indexed != expected:
                 raise ValueError("Core computation index differs from original evidence")
+        for certificate in self._read_region_evidence(manifest, "block"):
+            if indexed is None or certificate["nodes"][manifest["node_id"]]["index"] != indexed:
+                raise ValueError("region boundary interval evidence differs from original values")
+        for seal in self._read_region_evidence(manifest, "seal"):
+            calendar = []
+            for block in seal["blocks"]:
+                if block == identity:
+                    raise ValueError("cyclic region boundary evidence")
+                with self.read_transaction() as connection:
+                    row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (block,)).fetchone()
+                if row is None:
+                    raise ValueError("region seal original boundary is missing")
+                block_manifest = json.loads(row[0])
+                self._verify_metadata(block_manifest, block)
+                candidates = self._read_region_evidence(block_manifest, "block")
+                certificate = next((item for item in candidates if item["boundary_node"] == seal["boundary_node"]
+                    and set(seal["nodes"]) <= set(item["nodes"])), None)
+                if certificate is None:
+                    raise ValueError("region seal is missing original block evidence")
+                for node, full_key in seal["nodes"].items():
+                    block_key = certificate["nodes"][node]["key"]
+                    if any(block_key[name] != full_key[name] for name in ("node_id", "implementation_id")):
+                        raise ValueError("region seal numerical definition differs from original blocks")
+                with self.read_transaction() as connection:
+                    original = computation_index.read(connection, block_manifest)
+                if original != certificate["nodes"][manifest["node_id"]]["index"]:
+                    raise ValueError("region seal block differs from original boundary evidence")
+                calendar.extend(original["calendar"])
+            if indexed is None or calendar != indexed["calendar"]:
+                raise ValueError("region seal does not cover the complete canonical calendar")
 
     def read_values(self, identity: str, *, start=None, end=None, include_traces=False) -> pl.DataFrame:
         """Decode only selected typed value partitions and their Domain."""
@@ -1232,7 +1411,7 @@ class CoreStore:
                 audits.extend({**audit, "node_id": manifest["node_id"]} for audit in self._decode(manifest["training_audits"]))
             if manifest["checkpoint"] is not None and (channels is None or "checkpoints" in channels):
                 checkpoints[manifest["node_id"]] = self._decode(manifest["checkpoint"])
-            for parent in manifest["key"]["inputs"]:
+            for parent in self._evidence_parents(manifest):
                 visit(parent)
         visit(identity)
         return {"artifacts": artifacts, "checkpoints": checkpoints, "training_audits": tuple(audits)}
@@ -1252,7 +1431,7 @@ class CoreStore:
             audits += len(manifest["training_audits"])
             if manifest["checkpoint"] is not None:
                 checkpoints.add(manifest["node_id"])
-            for parent in manifest["key"]["inputs"]:
+            for parent in self._evidence_parents(manifest):
                 visit(parent)
         visit(identity)
         return {"artifacts": tuple(sorted(artifacts)), "checkpoint_nodes": tuple(sorted(checkpoints)),
@@ -1419,14 +1598,23 @@ class CoreStore:
 
     def commit_update(self, graph_id: str, *, revision: int, state_revision: int,
                       expected_previous: str | None, results: Mapping[str, Mapping[str, str]],
-                      through: str, mode: str = "global", request_id: str = "") -> dict[str, Any]:
+                      through: str, mode: str = "global", request_id: str = "", coverage=None) -> dict[str, Any]:
         """Verify every frozen active context before CAS promotion."""
         state = self.graph_state(graph_id)
+        coverage = {context: {} for context in results} if coverage is None else coverage
+        self._validate_logical_coverage(results, coverage)
+        ancestors = {}
+        from .graph_management import parents
+        for node in state["spec"].nodes:
+            ancestors[node.node_id] = {node.node_id} | set().union(*(ancestors[parent] for parent in parents(node)))
+        if any(state["statuses"].get(node) != "active" or node not in ancestors.get(boundary, set())
+                for nodes in coverage.values() for node, boundary in nodes.items()):
+            raise RevisionConflict("logical coverage belongs to inactive or unrelated nodes")
         required = {node.node_id for node in state["spec"].nodes if node.node_type == "operator" and state["statuses"][node.node_id] == "active"}
         if mode == "global":
             if not state["contexts"] or set(results) != set(state["contexts"]):
                 raise ValueError("global update requires every registered context")
-            if any(set(values) != required for values in results.values()):
+            if any(set(values) | set(coverage[context]) != required for context, values in results.items()):
                 raise ValueError("global update requires every active computed node")
         elif mode != "branch":
             raise ValueError("update mode must be global or branch")
@@ -1440,7 +1628,8 @@ class CoreStore:
                 if record["node_id"] != node_id:
                     raise ValueError("result receipt belongs to a different node")
         body = {"request_id": request_id, "graph_id": graph_id, "revision": revision, "state_revision": state_revision,
-                "previous": expected_previous, "results": {k: dict(v) for k, v in results.items()}, "through": through, "mode": mode}
+                "previous": expected_previous, "results": {k: dict(v) for k, v in results.items()},
+                "coverage": {k: dict(v) for k, v in coverage.items()}, "through": through, "mode": mode}
         receipt = {"identity": hash_mapping(body), **body}
         with self.transaction() as connection:
             row = connection.execute("SELECT revision,state_revision,current_update FROM graphs WHERE graph_id=?", (graph_id,)).fetchone()
@@ -1448,12 +1637,16 @@ class CoreStore:
                 raise RevisionConflict("graph/state changed before publication")
             if mode == "global" and row[2] not in (expected_previous, receipt["identity"]):
                 raise RevisionConflict("current global version changed before publication")
+            self._validate_logical_coverage(results, coverage)
             connection.execute("INSERT OR IGNORE INTO updates VALUES(?,?,?,?,?,?,?,?)",
                 tuple(receipt[name] for name in ("identity", "graph_id", "revision", "state_revision", "previous", "through", "mode", "request_id")))
             for context_id, values in receipt["results"].items():
                 connection.execute("INSERT OR IGNORE INTO update_contexts VALUES(?,?)", (receipt["identity"], context_id))
                 connection.executemany("INSERT OR IGNORE INTO update_results VALUES(?,?,?,?)",
                     [(receipt["identity"], context_id, node, materialization) for node, materialization in values.items()])
+                connection.executemany("INSERT OR IGNORE INTO update_coverage VALUES(?,?,?,?)",
+                    [(receipt["identity"], context_id, node, boundary)
+                        for node, boundary in receipt["coverage"][context_id].items()])
             if mode == "global":
                 connection.execute("UPDATE graphs SET current_update=? WHERE graph_id=?", (receipt["identity"], graph_id))
         return receipt
@@ -1581,14 +1774,22 @@ class CoreStore:
                 (identity,)).fetchall()
             results = connection.execute("SELECT context_id,node_id,materialization_id FROM update_results "
                 "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
+            coverage = connection.execute("SELECT context_id,node_id,boundary_node FROM update_coverage "
+                "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
         if row is None:
             raise KeyError(f"unknown update receipt: {identity}")
-        receipt = {**dict(row), "results": {context[0]: {} for context in contexts}}
+        receipt = {**dict(row), "results": {context[0]: {} for context in contexts},
+            "coverage": {context[0]: {} for context in contexts}}
         for context, node, materialization in results:
             if context not in receipt["results"]:
                 raise ValueError("update result context is missing")
             receipt["results"][context][node] = materialization
+        for context, node, boundary in coverage:
+            if context not in receipt["coverage"]:
+                raise ValueError("update coverage context is missing")
+            receipt["coverage"][context][node] = boundary
         self._metadata_event("update_result_rows", len(results))
         if hash_mapping({k: v for k, v in receipt.items() if k != "identity"}) != identity:
             raise ValueError("update receipt identity mismatch")
+        self._validate_logical_coverage(receipt["results"], receipt["coverage"])
         return receipt

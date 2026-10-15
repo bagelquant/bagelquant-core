@@ -71,6 +71,8 @@ from .artifact_verification import ArtifactVerification
 from .node import ValueType
 from .graph_management import MergeResult
 from .causal import CAUSAL_EXECUTION_POLICY, CausalInputWindow
+from .finite_work import FiniteKernelInput, FiniteKernelWork, FiniteKernelResult, compute_finite_work
+from .regions import ExecutionRegion
 
 __all__ = [
     "LogicalNodeSpec", "LogicalGraphSpec", "canonicalize_graph",
@@ -134,3 +136,5 @@ __all__ += ['capture_operator_checkpoints']
 
 __all__ += ["CoreStore", "RevisionConflict", "ValueType", "MergeResult", "ArtifactVerification"]
 __all__ += ["CAUSAL_EXECUTION_POLICY", "CausalInputWindow"]
+__all__ += ["FiniteKernelInput", "FiniteKernelWork", "FiniteKernelResult", "compute_finite_work"]
+__all__ += ["ExecutionRegion"]

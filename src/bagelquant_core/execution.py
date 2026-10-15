@@ -385,15 +385,7 @@ class ExecutionRuntime:
                 results = self._materialize_many(plans)
                 return graph._present_outputs(results)
 
-            results: dict[str, Node] = {}
-            for node, plan in plans:
-                output = self._materialize_node(
-                    node,
-                    plan,
-                    dense_output=False,
-                )
-                node.set_output(output)
-                results[node.name] = output
+            results = self._materialize_many(plans, dense_output=False)
             return graph._present_outputs(results)
         finally:
             self.check_canceled = previous_check
@@ -448,7 +440,8 @@ class ExecutionRuntime:
             key_owner_by_domain: dict[str, int] = {}
             key_owner_indices: list[int] = []
             for index, (_, plan, _) in enumerate(pending):
-                dense_plan = self._dense_output_plan(plan, plan.frame) if dense_output else plan.frame
+                dense_plan = (self._dense_output_plan(plan, plan.frame) if dense_output
+                    else self._frame_with_traces(plan))
                 owner_index = key_owner_by_domain.setdefault(plan.domain.signature, index) if dense_output else index
                 key_owner_indices.append(owner_index)
                 value_plans.append(
@@ -465,7 +458,8 @@ class ExecutionRuntime:
             ] = []
             for _, plan, _ in pending:
                 if (
-                    plan.trace_frame is None
+                    not dense_output
+                    or plan.trace_frame is None
                     or plan.trace_identity is None
                 ):
                     trace_keys.append(None)
@@ -515,7 +509,7 @@ class ExecutionRuntime:
                             *plan.trace_columns
                         )
                     )
-                if plan.validated_keys:
+                if plan.validated_keys and dense_output:
                     if (
                         not plan.categorical
                         and frame.schema[VALUE].is_float()
@@ -535,6 +529,7 @@ class ExecutionRuntime:
                     panel._cached_dense = validated
                 else:
                     panel._frame = validated.lazy()
+                    panel._cached_sparse = validated
                     panel._validated_keys = True
                     panel._exact_domain = panel.domain._contains_exact_keys(validated)
                     if panel._exact_domain:

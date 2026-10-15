@@ -150,10 +150,10 @@ def test_index_maintenance_admission_returns_partial_before_full_decode(tmp_path
     assert result["materializations"] == 0 and result["unknown_materializations"] == 1
 def test_source_proof_memo_distinguishes_actual_domains_with_same_opaque_identity(monkeypatch):
     from datetime import date, datetime
-    from threading import RLock
     from types import SimpleNamespace
     from bagelquant_core import Domain, Node
     from bagelquant_core.update import UpdatePlan
+    from bagelquant_core.preparation import ExecutionPreparation
     from bagelquant_core.computation_index import describe, interval
     from bagelquant_core.hashing import hash_mapping
 
@@ -172,7 +172,7 @@ def test_source_proof_memo_distinguishes_actual_domains_with_same_opaque_identit
     plan.store = SimpleNamespace(interval_identity=lambda *a, **k: None)
     plan.spec = SimpleNamespace(nodes=[SimpleNamespace(node_id="source", node_type="input", input_key="x")])
     plan._input_proof = lambda *a: "token"
-    plan._domain_proofs, plan._lock = {}, RLock()
+    plan._preparation = ExecutionPreparation(1024 * 1024)
     for context, value, token in zip(("first", "second"), values, expected, strict=True):
         assert value.source_interval_identity("token", *days) == token
         assert plan._proof_reader(context)("source", value, *days) == token

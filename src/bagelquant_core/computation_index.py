@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from bisect import bisect_left, bisect_right
 
-from .hashing import hash_dataframe, hash_mapping
+from .hashing import _hash_dataframe_days, hash_dataframe, hash_mapping
 
 VERSION = "core.interval.v1"
 DDL = """CREATE TABLE IF NOT EXISTS computation_index(
@@ -16,7 +16,7 @@ def describe(domain, *, days, value_type, trace_columns) -> dict:
     calendar = [str(day) for day in domain.times]
     if domain.is_dynamic:
         grid = domain.grid_lazy().sort("time", "asset_id").collect()
-        members = {str(frame["time"][0]): hash_dataframe(frame) for frame in grid.partition_by("time", maintain_order=True)}
+        members = _hash_dataframe_days(grid)
         empty = hash_dataframe(grid.head(0))
     else:
         # A static Domain needs no calendar x asset allocation for its proof.

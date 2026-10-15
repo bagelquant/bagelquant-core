@@ -19,8 +19,11 @@ On macOS, install the CPU ML runtime's OpenMP dependency with
 
 Version 0.11 uses new API and storage schemas. It provides no compatibility reader
 or migration. Real data and service cutover are separate operations.
-Core metadata schema 3 uses indexed update/node relations and compact candidate
-headers. A schema 2 store requires an explicitly initialized fresh location.
+Core metadata schema 4 adds content-bound transient region certificates and
+logical update coverage to indexed durable completions and candidate headers.
+Older schemas require an explicitly initialized fresh location; no migration
+or compatibility reader is provided. Pointwise regions preserve canonical keys
+and arithmetic while persisting their requested and shared boundaries.
 
 Supported platform: macOS. Validation runs locally; GitHub Actions is disabled.
 

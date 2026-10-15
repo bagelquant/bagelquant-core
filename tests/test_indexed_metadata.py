@@ -109,11 +109,12 @@ def test_corrupt_candidate_and_update_metadata_fail(tmp_path):
         store.describe_update(receipt["identity"])
 
 
-def test_schema_two_is_rejected_without_migration(tmp_path):
+@pytest.mark.parametrize("version", [2, 3])
+def test_older_schemas_are_rejected_without_migration(tmp_path, version):
     store = CoreStore(tmp_path / "old.sqlite", tmp_path / "values")
     with sqlite3.connect(store.meta_path) as db:
         db.execute("CREATE TABLE materializations(identity TEXT PRIMARY KEY, manifest_json TEXT)")
-        db.execute("PRAGMA user_version=2")
+        db.execute(f"PRAGMA user_version={version}")
     original = store.meta_path.read_bytes()
     assert store.inspect()["status"] == "incompatible"
     with pytest.raises(ValueError, match="incompatible Core"):

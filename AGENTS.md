@@ -9,13 +9,14 @@ follow graph/runtime acceptance, including explicit calendar checkpoints,
 per-period supervised Prediction evidence and original artifact references.
 Core has no BagelQuant package dependency; Workbench owns global scheduling and
 machine policy. Do not add providers, accounts, China rules or governance here.
-Core schema 3 owns indexed update/context/node relations, compact immutable
-materialization candidates and one successful-node completion per graph/context/node;
-normal repeat planning reads these flags and never opens numerical values.
+Core schema 4 owns indexed updates, materialization candidates and one completion
+per durable graph/context/node. Pointwise regions retain exact transient interval
+certificates and logical coverage bound to durable boundaries; never fabricate
+transient artifact IDs. Repeat planning reads flags/seals without numerical values.
 Publish completion after each durable node; interrupted retries retain the frontier.
 Candidates use indexed policy/date headers; only selected receipts are decoded.
 Finite read contexts share bounded immutable metadata; live revision guards stay fresh.
-Schema 2 stores are rejected without a migration reader.
+Older schemas are rejected without a migration reader.
 Generic causal-version inputs use the same Graph/UpdatePlan/CoreStore path.
 Separate source observation coverage from causal output membership; retain
 bounded version halos, shared reads and original completed output references.
@@ -45,6 +46,10 @@ Keep this entry short; detailed owner contracts live under `.ai/rules/`.
   acquire writer ownership; mutations retain revision/publication fences.
 - Regenerate operation references from their generator after catalog changes;
   coordinate separate Workbench catalog updates when the public contract changes.
+- Immutable finite work descriptors separate numerical workers from coordinator
+  publication. Callers configure fresh worker native pools and aggregate admission;
+  Core never chooses machine resources. Physical regions and dispatch preserve
+  canonical mathematical policies, material keys, historical references and fences.
 
 For formal work in an integrated workspace, create/resume a root `.ai/tasks/`
 record using the workspace CLI. Discover the workspace with

@@ -193,10 +193,17 @@ class Domain:
 
     def window(self, start, end) -> "Domain":
         """Select observation coordinates without changing an information cutoff."""
-        dates = self.times.filter(self.times.is_between(start, end))
-        universe = (self.grid_lazy().filter(pl.col("time").is_between(start, end)).collect().with_columns(
-            pl.lit(True).alias("active")) if self.is_dynamic else self.asset_ids)
-        return Domain(calendar=dates, universe=universe)
+        from .preparation import active_preparation, domain_bytes
+
+        def build():
+            dates = self.times.filter(self.times.is_between(start, end))
+            universe = (self.grid_lazy().filter(pl.col("time").is_between(start, end)).collect().with_columns(
+                pl.lit(True).alias("active")) if self.is_dynamic else self.asset_ids)
+            return Domain(calendar=dates, universe=universe)
+
+        preparation = active_preparation()
+        return build() if preparation is None else preparation.remember(
+            "domain_window", (self, start, end), build, domain_bytes)
 
     def equivalent_to(self, other: object) -> bool:
         return isinstance(other, Domain) and self.signature == other.signature

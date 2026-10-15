@@ -359,7 +359,8 @@ def test_sibling_spill_reuses_published_lazy_values_and_keeps_numerical_identity
     assert executed == [domain.size]
     actual = sparse.collect(dense=False)
     assert executed == [domain.size]
-    assert runtime.materializations == 2
+    # Two pressure spills plus the now explicit final sparse collection.
+    assert runtime.materializations == 3
     assert runtime.persistent_misses == 4
     assert len(pressured.published) == 4
     expected = frame.with_columns((pl.col("value") + (-pl.col("value")).rolling_mean(window_size=2)

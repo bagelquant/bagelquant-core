@@ -5,8 +5,8 @@ package. Callers supply data, Domain coordinates, immutable source evidence,
 SQLite and artifact paths, observation dates, information cutoff and resource
 limits. Workbench owns machine inspection, global scheduling and China semantics.
 
-Core metadata schema 3 retains one small successful-node row per graph, execution
-context and logical node. `CoreStore.node_completions(graph_id, context_id)` reads
+Core metadata schema 4 retains one small successful-node row per graph, execution
+context and durable node. `CoreStore.node_completions(graph_id, context_id)` reads
 the definition/upstream digests, completed observation/check dates and immutable
 result reference in one metadata query. Exact repeat plans are already complete:
 they invoke no value lookup, source proof callback or numerical kernel. Missing
@@ -25,9 +25,31 @@ at the newest valid boundary. Canonical 32-session mathematics is unchanged.
 bounded immutable metadata memo across workers and expires on exit. The optional
 observer receives `(event_name, amount)` on the calling worker; callers provide a
 thread-safe collector. Revision guards always read fresh state; explicit audits
-read original metadata and numerical evidence. There is no numerical-window cache.
-Use a fresh store for schema 3; older stores, including schema 2, are rejected
+read original metadata and numerical evidence. A separate finite preparation cache
+shares actual Domain windows, halo schedules, successful proofs and fitting parent
+slabs within an admitted update, then expires after publication.
+Use a fresh store for schema 4; older stores, including schema 3, are rejected
 without a migration/compatibility reader.
+
+Deterministic zero-history lazy built-ins execute in canonical, bounded regions.
+Requested roots, shared operator boundaries, explicit `persist_nodes`, rolling,
+stateful, model, causal, custom and eager nodes remain durable. Exact intermediate
+interval indexes are saved with each boundary block; they are logical evidence,
+not numerical artifacts. Whole-region seals bind coverage to the durable root.
+Update receipts expose `results` containing real artifact IDs and `coverage`
+mapping each transient logical node to its durable boundary in the same context.
+`CoreStore.update_covers(receipt, context, node_ids=...)` checks registered evidence.
+Direct internal-output requests promote those nodes without invalidating already
+completed roots. Canonical policies, block keys, types, traces and resets stay equal
+to execution with every operator in `persist_nodes`.
+
+`Graph.plan_update(..., kernel_dispatch=...)` separates finite/region math from
+publication. Core stages explicit Arrow inputs and immutable `FiniteKernelWork`;
+the caller can send it to `compute_finite_work` in a fresh process and return a
+`FiniteKernelResult`. Workers have no store or completion authority. The coordinator
+consumes typed results under current cancellation/revision fences and deletes the
+staging files. `native_admission` wraps each complete execution unit; Workbench
+chooses native profiles, worker admission and aggregate budgets before imports.
 
 ## Objects and types
 

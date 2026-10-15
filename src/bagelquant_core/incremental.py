@@ -22,6 +22,7 @@ from .logical import LogicalGraphSpec
 from .materialization import MaterializationKey, NodeMaterialization, materialization_trace_identity
 from .node import Node
 from .operator import OPERATOR_REGISTRY
+from .preparation import active_preparation
 
 CANONICAL_SESSIONS = 32
 FINITE_EXECUTION_POLICY = "finite_causal_blocks.v3"
@@ -61,12 +62,27 @@ def finite_execution_policies(spec, *, anchor):
 
 
 def _canonical_halos(domain, observations):
+    preparation = active_preparation()
+    histories = (observations,) if preparation is None else preparation.histories(domain, observations)
+    def build():
+        return _canonical_halo_schedules(domain, histories)
+    schedules = build() if preparation is None else preparation.remember(
+        "halo_schedule", (domain, histories), build,
+        lambda value: sum(128 + len(schedule) * 128 for schedule in value.values()))
+    return schedules[observations]
+
+
+def _canonical_halo_schedules(domain, histories):
+    """Sort membership once for every admitted history on the same Domain."""
     calendar = domain.times.cast(pl.Int32).to_numpy()
     if not len(calendar):
-        return {}
+        return {history: {} for history in histories}
     origins = np.arange(0, len(calendar), CANONICAL_SESSIONS)
-    earliest = calendar[np.maximum(0, origins-observations)].copy()
-    if observations and domain.is_dynamic:
+    earliest = {history: calendar[np.maximum(0, origins-history)].copy() for history in histories}
+    if any(histories) and domain.is_dynamic:
+        preparation = active_preparation()
+        if preparation is not None:
+            preparation.counts["halo_membership_sorts"] += 1
         membership = domain.grid_lazy().sort("asset_id", "time").collect()
         times = membership["time"].cast(pl.Int32).to_numpy()
         lengths = membership["asset_id"].rle().struct.field("len").to_numpy()
@@ -76,10 +92,17 @@ def _canonical_halos(domain, observations):
             offset += int(length)
             counts = np.searchsorted(asset_times, calendar[origins], side="left")
             present = counts > 0
-            earliest[present] = np.minimum(earliest[present], asset_times[np.maximum(0, counts[present]-observations)])
-    earliest[0] = calendar[0]
+            for history in histories:
+                if history:
+                    earliest[history][present] = np.minimum(earliest[history][present],
+                        asset_times[np.maximum(0, counts[present]-history)])
     epoch = date(1970, 1, 1)
-    return {int(origin): epoch+timedelta(days=int(day)) for origin, day in zip(origins, earliest, strict=True)}
+    result = {}
+    for history in histories:
+        earliest[history][0] = calendar[0]
+        result[history] = {int(origin): epoch+timedelta(days=int(day))
+            for origin, day in zip(origins, earliest[history], strict=True)}
+    return result
 
 
 def _numerical_read_start(domain: Domain, output_start: date, end: date, history: int) -> date:
@@ -112,10 +135,51 @@ _EXACT_WINDOW_OPERATORS = frozenset((
 
 
 def scoped_domain(domain, start, end, *, identity=None):
+    if identity is None:
+        return domain.window(start, end)
     dates = domain.times.filter(domain.times.is_between(start, end))
     universe = (domain.grid_lazy().filter(pl.col("time").is_between(start, end)).collect().with_columns(
         pl.lit(True).alias("active")) if domain.is_dynamic else domain.asset_ids)
     return Domain(calendar=dates, universe=universe, identity=identity)
+
+
+def _parent_window(parent, value, start, end, *, input_window_loader, stored_parent, check_canceled):
+    """Reuse bounded immutable slabs without changing a canonical kernel reset.
+
+    A window too large for the admitted cache follows the original bulk read;
+    an LRU scan over a larger-than-cache prefix would only create thrashing.
+    External loaders retain their exact requested window and frozen authority.
+    """
+    preparation = active_preparation()
+    def collect(first, last):
+        source = value if input_window_loader is None else input_window_loader(parent, value, first, last)
+        frame = source.lazy(include_traces=True).filter(pl.col("time").is_between(first, last)).collect().sort("time", "asset_id")
+        if preparation is not None:
+            preparation.counts["parent_window_decodes"] += 1
+            preparation.counts["parent_decoded_rows"] += frame.height
+            preparation.counts["parent_decoded_sessions"] += len(source.domain.times.filter(source.domain.times.is_between(first, last)))
+        return frame
+    if preparation is None or not preparation.maximum_bytes:
+        return collect(start, end)
+    source_key = (value.identity, value.domain, value.value_type, value.trace_columns, value.trace_identity)
+    def remember(first, last):
+        return preparation.remember("parent_slab", (*source_key, first, last),
+            lambda: collect(first, last), lambda frame: 2 * frame.estimated_size(), check_canceled=check_canceled)
+    own = scoped_domain(value.domain, start, end)
+    estimate = own.size * (40 + 8 * len(value.trace_columns))
+    if not stored_parent:
+        return remember(start, end) if estimate <= preparation.maximum_bytes // 2 else collect(start, end)
+    if estimate > preparation.maximum_bytes // 2:
+        return collect(start, end)
+    calendar = value.domain.times.to_list()
+    first = calendar.index(own.times.min())
+    last = calendar.index(own.times.max())
+    slabs = []
+    for origin in range(first // CANONICAL_SESSIONS * CANONICAL_SESSIONS, last + 1, CANONICAL_SESSIONS):
+        lower = calendar[max(first, origin)]
+        upper = calendar[min(last, origin + CANONICAL_SESSIONS - 1)]
+        slabs.append(remember(lower, upper))
+    return pl.concat(slabs).sort("time", "asset_id")
 
 
 def _relevant_parameters(node, bindings):
@@ -193,7 +257,7 @@ def _checkpoint_candidates(store, node, key, domain, parameters, parent_scopes, 
 
 def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed: Mapping[str, Node],
                         parameters, key, domain, policy, store, check_canceled, input_proof=None,
-                        input_window_loader=None, completed_materializations=()):
+                        input_window_loader=None, completed_materializations=(), kernel_dispatch=None, load_inputs=None):
     """Execute one admitted node, verifying content proofs before reusing blocks."""
     declared = {node.node_id: node for node in spec.nodes}
     node = declared[node_id]
@@ -214,7 +278,6 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         raise ValueError("block anchor must precede the first observation session")
     # Membership halos count active coordinates, including long universe gaps.
     halos = _canonical_halos(domain, policy["history_observations"])
-    local = LogicalGraphSpec({node_id: node_id}, spec.nodes)
     blocks = []
     references = []
     computed = reused = 0
@@ -330,29 +393,43 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                 numerical_start = _numerical_read_start(domain, output_start, last, policy["history_observations"])
             else:
                 numerical_start = warm
+            from .finite_work import (_run_finite_kernel, admit_finite_payload, dispatch_finite_kernel,
+                finite_payload_bytes)
+            missing_domain = scoped_domain(domain, output_start, last)
+            traces = tuple(dict.fromkeys(trace for value in direct.values() for trace in value.trace_columns))
+            estimate = finite_payload_bytes([
+                *((scoped_domain(value.domain, numerical_start, last), value.trace_columns) for value in direct.values()),
+                (missing_domain, traces)])
+            admit_finite_payload(estimate)
+            if load_inputs is not None:
+                load_inputs()
+                direct = {parent: (inputs[declared[parent].input_key] if declared[parent].node_type == "input"
+                    else completed[parent]) for parent in parents(node)}
             scoped = {}
             for (parent, value), proof in zip(direct.items(), proofs, strict=True):
-                if input_window_loader is not None:
-                    value = input_window_loader(parent, value, numerical_start, last)
-                frame = value.lazy(include_traces=True).filter(pl.col("time").is_between(numerical_start, last)).collect().sort("time", "asset_id")
+                frame = _parent_window(parent, value, numerical_start, last,
+                    input_window_loader=input_window_loader,
+                    stored_parent=declared[parent].node_type == "operator", check_canceled=check_canceled)
                 own = scoped_domain(value.domain, numerical_start, last)
                 scoped[parent] = Node.from_domain(frame, own, identity=proof, value_type=value.value_type,
                     trace_columns=value.trace_columns, trace_identity=proof if value.trace_columns else None)
                 input_sessions += len(own.times)
-            bindings = {declared[parent].input_key: value for parent, value in scoped.items() if declared[parent].node_type == "input"}
-            retained = {parent: value for parent, value in scoped.items() if declared[parent].node_type == "operator"}
-            bound = Graph.from_logical_spec(local, inputs=bindings, node_bindings=retained, parameter_bindings=parameters)
-            runtime = ExecutionRuntime(check_canceled=check_canceled)
-            result = runtime.run(bound, dense_output=False)
-            if runtime.node_artifacts or runtime.node_checkpoints or runtime.node_training_audits:
-                raise ValueError("finite contract cannot discard operator evidence")
-            frame = result.collect(dense=False, include_traces=True).filter(pl.col("time") >= output_start)
-            missing_domain = scoped_domain(domain, output_start, last)
+            operation = OPERATOR_REGISTRY.get(node.operator)
+            dispatchable = kernel_dispatch is not None and operation.operation.__module__.startswith("bagelquant_core.operator.")
+            should_dispatch = getattr(kernel_dispatch, "should_dispatch", None)
+            if dispatchable and should_dispatch is not None:
+                dispatchable = should_dispatch(estimate)
+            if dispatchable:
+                frame, value_type, trace_columns = dispatch_finite_kernel(spec, node_id, scoped, parameters,
+                    output_start, kernel_dispatch, check_canceled, estimated_payload_bytes=estimate)
+            else:
+                frame, value_type, trace_columns = _run_finite_kernel(spec, node_id, scoped, parameters,
+                    output_start, check_canceled)
             fragment_key = block_key if prefix is None else MaterializationKey(node_id, key.implementation_id,
                 tuple(proofs), missing_domain.signature, hash_mapping({"fragment_of": block_key.identity, "start": str(output_start)}))
-            value = Node.from_domain(frame, missing_domain, value_type=result.value_type,
-                identity=fragment_key.identity, trace_columns=result.trace_columns,
-                trace_identity=materialization_trace_identity(fragment_key, result.trace_columns))
+            value = Node.from_domain(frame, missing_domain, value_type=value_type,
+                identity=fragment_key.identity, trace_columns=trace_columns,
+                trace_identity=materialization_trace_identity(fragment_key, trace_columns))
             check_canceled()
             store.publish(NodeMaterialization(fragment_key, value), execution_policy=publication_policy)
             if prefix is not None:

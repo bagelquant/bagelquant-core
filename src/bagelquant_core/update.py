@@ -12,7 +12,10 @@ import polars as pl
 from .execution import ExecutionRuntime
 from .graph_management import parents
 from .logical import LogicalGraphSpec
-from .resources import ResourceLimits, resource_limits
+from .resources import NativeAdmission, ResourceLimits, resource_limits
+from .resources import active_resource_limits
+from .preparation import ExecutionPreparation, preparation_scope
+from .finite_work import KernelDispatch
 from .store import RevisionConflict
 from .incremental import finite_execution_policies, execute_finite_node, execute_checkpoint_node
 from .hashing import hash_mapping
@@ -33,7 +36,9 @@ class UpdatePlan:
     def __init__(self, graph, contexts: Mapping, *, through, roots=None,
                  input_loader=None, input_proof=None, input_window_loader=None, input_scope_proof=None,
                  causal_inputs=(), input_version_loader=None, causal_output_domains=None,
-                 input_definition_identities: Mapping[str, Mapping[str, str]] | None = None):
+                 input_definition_identities: Mapping[str, Mapping[str, str]] | None = None,
+                 native_admission: NativeAdmission | None = None, kernel_dispatch: KernelDispatch | None = None,
+                 persist_nodes=()):
         from .graph import Graph
         if graph._store is None:
             raise ValueError("persistent updates require an explicit CoreStore")
@@ -42,12 +47,19 @@ class UpdatePlan:
         self.store = graph._store
         self.state = graph._state()
         self.mode = "global" if roots is None else "branch"
+        requested = (set(self.state["spec"].outputs.values()) if roots is None else
+            {roots} if isinstance(roots, str) else set(roots))
+        if roots is not None:
+            roots = requested
         self.through = date.fromisoformat(str(through)).isoformat()
         self._lock = RLock()
         self._in_flight = set()
         self._input_loader, self._input_proof = input_loader, input_proof
         self._input_scope_proof = input_scope_proof
         self._input_window_loader = input_window_loader
+        self._native_admission = native_admission
+        self._kernel_dispatch = kernel_dispatch
+        self._preparation = ExecutionPreparation(min(64, active_resource_limits().cache_mib // 4) * 1024 * 1024)
         self._causal_inputs = frozenset(causal_inputs)
         self._input_version_loader = input_version_loader
         self._causal_replays = {}
@@ -58,7 +70,6 @@ class UpdatePlan:
         self._loaded_inputs = set()
         self._input_locks = {}
         self._parent_locks = {}
-        self._domain_proofs = {}
         self.results = {context: {} for context in contexts}
         self._values = {context: {} for context in contexts}
         if not contexts:
@@ -112,6 +123,7 @@ class UpdatePlan:
         self.policies = {}
         self.numerical_contexts = {}
         self.completion_digests = {}
+        self._completion_records = {}
         self.resource_usage = {context: {} for context in contexts}
         for context_id, bindings in contexts.items():
             needed = {node.input_key for node in self.spec.nodes if node.node_type == "input"}
@@ -178,6 +190,8 @@ class UpdatePlan:
                     self.keys[context_id][node.node_id] = replacement
                     self.domains[context_id][node.node_id] = domain
             self._bound_nodes[context_id] = {node.logical_id: node for node in bound.nodes}
+            for node_id, policy in self.policies[context_id].items():
+                self._preparation.register_halo(self.domains[context_id][node_id], policy["history_observations"])
             from .incremental import _relevant_parameters
             self.completion_digests[context_id] = {node_id: {
                 "definition_digest": hash_mapping({"node": node.to_dict(),
@@ -192,6 +206,7 @@ class UpdatePlan:
             } for node_id, node in self._nodes.items()}
             self._parent_locks.update({(context_id, node_id): Lock() for node_id in self._nodes})
             completed = self.store.node_completions(self.graph.graph_id, context_id, node_ids=tuple(self._nodes))
+            self._completion_records[context_id] = completed
             for node_id, record in completed.items():
                 digests = self.completion_digests[context_id][node_id]
                 if (record["identity"] == self.keys[context_id][node_id].identity
@@ -200,7 +215,36 @@ class UpdatePlan:
                     self.results[context_id][node_id] = record["identity"]
                     self.resource_usage[context_id][node_id] = {"outcome": "up_to_date", "computed_blocks": 0,
                         "reused_blocks": 0, "input_sessions": 0, "output_sessions": 0}
+        from .regions import plan_regions
+        regions = plan_regions(self.spec, policies=self.policies, requested=requested,
+            persist_nodes=persist_nodes, causal_nodes=self._causal_nodes)
+        # A completed all-durable graph remains reusable when no historical
+        # region certificate was authored. Changing physical policy never
+        # manufactures evidence or replays that completed history.
+        admitted = []
+        for region in regions:
+            if all(region.output_node not in self._completion_records[context] or any(
+                    set(region.nodes) <= set(seal["nodes"]) and (region.output_node not in self.results[context] or
+                        all(seal["nodes"].get(node) == self.keys[context][node].to_dict() for node in region.nodes))
+                    for seal in self.store.region_evidence(self._completion_records[context][region.output_node]["identity"], kind="seal"))
+                    for context in self.results):
+                admitted.append(region)
+        self.regions = tuple(admitted)
+        self._region_outputs = {region.output_node: region for region in self.regions}
+        self._transient_owners = {node: region.output_node for region in self.regions
+            for node in region.nodes if node != region.output_node}
+        self._durable_nodes = set(self._nodes) - self._transient_owners.keys()
+        for context in self.results:
+            for node in self._transient_owners:
+                self.results[context].pop(node, None)
         self.guard()
+
+    @property
+    def logical_coverage(self) -> dict:
+        """Return satisfied transient nodes and their real durable boundaries."""
+        with self._lock:
+            return {context: {node: owner for node, owner in self._transient_owners.items() if owner in values}
+                for context, values in self.results.items()}
 
     def _causal_replay(self, context_id):
         from .causal import CausalReplay
@@ -218,6 +262,15 @@ class UpdatePlan:
         an explicit contract before completed incremental work is possible.
         This performs no token callback, value load, audit or index maintenance.
         """
+        with preparation_scope(self._preparation):
+            return self._input_proof_windows(context_id)
+
+    @property
+    def preparation_usage(self) -> dict:
+        """Report operation-local immutable reuse; never numerical authority."""
+        return self._preparation.report()
+
+    def _input_proof_windows(self, context_id):
         from .incremental import (CANONICAL_SESSIONS, _canonical_halos, _finite_partials,
             _checkpoint_candidates, _checkpoint_parent_scopes)
         from .operator import OPERATOR_REGISTRY
@@ -238,7 +291,7 @@ class UpdatePlan:
                     parent = next(item.node_id for item in self.spec.nodes if item.node_type == "input" and item.input_key == source)
                     add(node_id, parent, start, end, cutoff, "causal_versions", "required")
         for node_id, node in self._nodes.items():
-            if node_id in self.results[context_id]:
+            if node_id in self.results[context_id] or self._transient_owners.get(node_id) in self.results[context_id]:
                 continue
             if node_id in self._causal_nodes:
                 continue
@@ -315,11 +368,31 @@ class UpdatePlan:
         with self._lock:
             complete = self.results[context_id]
             return tuple(node_id for node_id, node in self._nodes.items()
-                if node_id not in complete and (context_id, node_id) not in self._in_flight
-                and all(parent not in self._nodes or parent in complete for parent in parents(node)))
+                if node_id in self._durable_nodes and node_id not in complete and (context_id, node_id) not in self._in_flight
+                and all(parent not in self._nodes or parent in complete for parent in
+                    (self._region_outputs[node_id].external_inputs if node_id in self._region_outputs else parents(node))))
 
     def execute(self, context_id, node_id, *, limits: ResourceLimits | None = None, check_canceled=None):
         """Execute one ready node, reusing already completed immutable parents."""
+        from contextlib import nullcontext
+        from .operator import OPERATOR_REGISTRY
+        from .operation_contract import ExecutionMode
+
+        selected = limits or active_resource_limits()
+        reserved_mib = min(64, selected.cache_mib // 4)
+        self._preparation.restrict(reserved_mib * 1024 * 1024)
+        selected = replace(selected, cache_mib=selected.cache_mib - reserved_mib)
+        operation = OPERATOR_REGISTRY.get(self._nodes[node_id].operator)
+        columnar = (operation.operation.__module__.startswith("bagelquant_core.operator.")
+            and operation.contract.execution == ExecutionMode.LAZY
+            and operation.factory is None
+            and operation.output_type not in {"prediction", "weights"})
+        admission = (nullcontext() if self._native_admission is None else
+            self._native_admission("columnar" if columnar else "mixed"))
+        with admission, preparation_scope(self._preparation), self.store.publication_context():
+            return self._execute(context_id, node_id, limits=selected, check_canceled=check_canceled)
+
+    def _execute(self, context_id, node_id, *, limits, check_canceled):
         from .graph import Graph
         def guard():
             if check_canceled is not None:
@@ -335,6 +408,18 @@ class UpdatePlan:
             hit = self.store.describe(key.identity)
             if hit is not None:
                 result = self.store.lookup(key, domain=self.domains[context_id][node_id], evidence=False)
+                if node_id in self._region_outputs and not any(all(
+                        seal["nodes"].get(node) == self.keys[context_id][node].to_dict()
+                        for node in self._region_outputs[node_id].nodes)
+                        for seal in self.store.region_evidence(key.identity, kind="seal")):
+                    raise ValueError("Completed numerical result needs explicit logical-region evidence maintenance")
+            elif node_id in self._region_outputs:
+                from .regions import execute_region
+                region = self._region_outputs[node_id]
+                self._load_saved_parents(context_id, node_id, guard, selected_parents=region.external_inputs)
+                with resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
+                    result, usage = execute_region(self, context_id, region, guard)
+                self.resource_usage[context_id].update(usage)
             elif node_id in self._causal_nodes:
                 with self._causal_locks[context_id], resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
                     replay = self._causal_replay(context_id)
@@ -342,8 +427,6 @@ class UpdatePlan:
                 self.resource_usage[context_id].update(replay.usage)
             elif node_id in self.policies[context_id]:
                 self._load_saved_parents(context_id, node_id, guard)
-                if self._input_window_loader is None:
-                    self._load_inputs(context_id, node_id, guard, limits)
                 with resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
                     result, usage = execute_finite_node(self.spec, node_id, inputs=self._inputs[context_id],
                         completed=self._values[context_id], parameters=self._parameters[context_id], key=key,
@@ -351,7 +434,10 @@ class UpdatePlan:
                         store=self.store, check_canceled=guard,
                         input_proof=self._proof_reader(context_id),
                         input_window_loader=self._window_reader(context_id, guard, limits),
-                        completed_materializations=self.store.completed_materializations(self.graph.graph_id, context_id, node_id))
+                        completed_materializations=self.store.completed_materializations(self.graph.graph_id, context_id, node_id),
+                        kernel_dispatch=self._kernel_dispatch,
+                        load_inputs=(None if self._input_loader is None or self._input_window_loader is not None else
+                            lambda: self._load_inputs(context_id, node_id, guard, limits)))
                 self.resource_usage[context_id][node_id] = usage
             elif self._checkpoint_supported(node_id):
                 self._load_saved_parents(context_id, node_id, guard)
@@ -426,9 +512,9 @@ class UpdatePlan:
             return value
         return read
 
-    def _load_saved_parents(self, context_id, node_id, guard):
+    def _load_saved_parents(self, context_id, node_id, guard, *, selected_parents=None):
         """Construct lazy typed plans only for completed parents now consumed."""
-        for parent in parents(self._nodes[node_id]):
+        for parent in parents(self._nodes[node_id]) if selected_parents is None else selected_parents:
             if parent not in self._nodes:
                 continue
             with self._parent_locks[(context_id, parent)]:
@@ -475,6 +561,12 @@ class UpdatePlan:
 
     def _proof_reader(self, context_id):
         def proof(parent, value, start, end, consumption_cutoff=None):
+            locator = (context_id, parent, value.identity, value.domain, value.value_type,
+                value.trace_columns, value.trace_identity, start, end, consumption_cutoff)
+            return self._preparation.remember("interval_proof", locator,
+                lambda: read(parent, value, start, end, consumption_cutoff), lambda token: len(token) * 4)
+
+        def read(parent, value, start, end, consumption_cutoff):
             token = self.store.interval_identity(value.identity, start=start, end=end)
             if token is not None:
                 return token
@@ -491,16 +583,7 @@ class UpdatePlan:
                     # A caller's explicit Domain identity is opaque evidence;
                     # distinguish actual immutable Domain objects in this
                     # operation-local memo, retaining them against id reuse.
-                    locator = (value.domain, value.value_type, value.trace_columns, start, end, token)
-                    with self._lock:
-                        domain_token = self._domain_proofs.get(locator)
-                    if domain_token is None:
-                        domain_token = value.source_interval_identity(token, start, end)
-                        with self._lock:
-                            if len(self._domain_proofs) >= 4096:
-                                self._domain_proofs.pop(next(iter(self._domain_proofs)))
-                            self._domain_proofs[locator] = domain_token
-                    return domain_token
+                    return value.source_interval_identity(token, start, end)
             return value.interval_identity(start, end)
         return proof
 
@@ -514,7 +597,7 @@ class UpdatePlan:
     @property
     def complete(self):
         with self._lock:
-            return not self._in_flight and all(set(values) == set(self._nodes) for values in self.results.values())
+            return not self._in_flight and all(set(values) == self._durable_nodes for values in self.results.values())
 
     def publish(self, *, check_canceled=None):
         if check_canceled is not None:
@@ -526,6 +609,9 @@ class UpdatePlan:
             for context, values in self.results.items():
                 if any(identity != self.keys[context][node].identity for node, identity in values.items()):
                     raise RevisionConflict("update result identities changed")
-            return self.store.commit_update(self.graph.graph_id, revision=self.state["revision"],
+            receipt = self.store.commit_update(self.graph.graph_id, revision=self.state["revision"],
                 state_revision=self.state["state_revision"], expected_previous=self.state["current_update"],
-                results=self.results, through=self.through, mode=self.mode, request_id=self.request_id)
+                results=self.results, through=self.through, mode=self.mode, request_id=self.request_id,
+                coverage=self.logical_coverage)
+            self._preparation.clear()
+            return receipt

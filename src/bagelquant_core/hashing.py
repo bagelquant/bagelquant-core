@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -34,14 +35,33 @@ def hash_mapping(payload: Mapping[str, Any]) -> str:
 
 
 def hash_dataframe(frame: pl.DataFrame) -> str:
+    row_hashes = frame.hash_rows(seed=0, seed_1=0, seed_2=0, seed_3=0) if frame.width else None
+    return _dataframe_digest(frame.schema, frame.height, frame.width, row_hashes)
+
+
+def _dataframe_digest(schema, height, width, row_hashes) -> str:
     digest = hashlib.sha256()
-    schema = {
-        "schema": {name: str(dtype) for name, dtype in frame.schema.items()},
-        "height": frame.height,
-        "width": frame.width,
+    header = {
+        "schema": {name: str(dtype) for name, dtype in schema.items()},
+        "height": height,
+        "width": width,
     }
-    digest.update(json.dumps(schema, sort_keys=True).encode("utf-8"))
-    if frame.width:
-        row_hashes = frame.hash_rows(seed=0, seed_1=0, seed_2=0, seed_3=0)
+    digest.update(json.dumps(header, sort_keys=True).encode("utf-8"))
+    if row_hashes is not None:
         digest.update(row_hashes.to_numpy().tobytes())
     return digest.hexdigest()
+
+
+def _hash_dataframe_days(frame: pl.DataFrame) -> dict[str, str]:
+    """Original per-day digests with one physical row-hash evaluation.
+
+    Row hashing is independent of other rows. Partition only the resulting
+    hashes, preserving each group's original order and original schema header.
+    This also supports interleaved dates without assuming contiguous groups.
+    """
+    if not frame.height:
+        return {}
+    hashes = pl.DataFrame({"time": frame.get_column("time"),
+        "row_hash": frame.hash_rows(seed=0, seed_1=0, seed_2=0, seed_3=0)})
+    return {str(day["time"][0]): _dataframe_digest(frame.schema, day.height, frame.width, day["row_hash"])
+        for day in hashes.partition_by("time", maintain_order=True)}

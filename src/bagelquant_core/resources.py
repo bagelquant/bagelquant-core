@@ -4,8 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
+from contextlib import AbstractContextManager
+from typing import Callable, Literal
 import json
 import os
+
+NativeAdmission = Callable[[Literal["columnar", "mixed"]], AbstractContextManager[None]]
 
 
 @dataclass(frozen=True)

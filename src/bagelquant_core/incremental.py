@@ -1,6 +1,8 @@
 """Canonical finite-history blocks, independent of application scheduling.
 
-Every first build and rebuild uses the same 32-session mathematical blocks.
+Every first build and rebuild keeps the same 32-session receipts and proofs.
+Closed cold Core-parent work can share a bounded numerical invocation; retained
+history always keeps the original individual-block execution path.
 Block reuse is proven from all parent values, coordinates, membership and traces.
 Unbounded/custom contracts conservatively replay their required full history.
 """
@@ -8,12 +10,16 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from dataclasses import replace
+from contextlib import ExitStack, contextmanager
 from typing import Mapping
 
 import numpy as np
 import polars as pl
 
-from .domain import Domain
+from .domain import Domain, _inclusive_date_count
+from ._finite_pct_view import _PctKernelView
+from ._finite_cold_batch import _ColdFiniteBatches
+from ._finite_time_index import _FiniteTimeIndexLease
 from .execution import ExecutionRuntime
 from .graph import Graph
 from .graph_management import parents
@@ -23,6 +29,7 @@ from .materialization import MaterializationKey, NodeMaterialization, materializ
 from .node import Node
 from .operator import OPERATOR_REGISTRY
 from .preparation import active_preparation
+from .resources import ResourceLimits, active_resource_limits, resource_limits
 
 CANONICAL_SESSIONS = 32
 FINITE_EXECUTION_POLICY = "finite_causal_blocks.v3"
@@ -61,7 +68,24 @@ def finite_execution_policies(spec, *, anchor):
     return policies
 
 
-def _canonical_halos(domain, observations):
+def _canonical_halos(domain, observations, *, _time_index_lease=None):
+    if (_time_index_lease is not None and _time_index_lease.admitted
+            and not _time_index_lease.accepts(domain)):
+        raise ValueError("finite membership reservation belongs to a different or closed Domain")
+    if _time_index_lease is not None and _time_index_lease.admitted:
+        calendar = membership = None
+        try:
+            calendar = domain.times.cast(pl.Int32).to_numpy()
+            if not len(calendar):
+                return {}
+            preparation = active_preparation()
+            if preparation is not None:
+                preparation.counts["halo_membership_sorts"] += 1
+            membership = domain.grid_lazy().sort("asset_id", "time").collect()
+            index = _time_index_lease.build_from_sorted(membership, calendar)
+            return index.canonical_halos(observations, CANONICAL_SESSIONS)
+        finally:
+            calendar = membership = None
     preparation = active_preparation()
     histories = (observations,) if preparation is None else preparation.histories(domain, observations)
     def build():
@@ -134,6 +158,11 @@ _EXACT_WINDOW_OPERATORS = frozenset((
 ))
 
 
+def _finite_time_index_reservation(domain, history, operator, limits: ResourceLimits):
+    return _FiniteTimeIndexLease(domain, history, limits,
+        eligible=operator in _EXACT_WINDOW_OPERATORS, canonical_sessions=CANONICAL_SESSIONS)
+
+
 def scoped_domain(domain, start, end, *, identity=None):
     if identity is None:
         return domain.window(start, end)
@@ -180,6 +209,14 @@ def _parent_window(parent, value, start, end, *, input_window_loader, stored_par
         upper = calendar[min(last, origin + CANONICAL_SESSIONS - 1)]
         slabs.append(remember(lower, upper))
     return pl.concat(slabs).sort("time", "asset_id")
+
+
+def _calendar_sessions(calendar, start, end):
+    """Count only an already-owned calendar; retain the empty-window error."""
+    count = _inclusive_date_count(calendar, start, end)
+    if not count:
+        raise ValueError("calendar must contain at least one time")
+    return count
 
 
 def _relevant_parameters(node, bindings):
@@ -255,9 +292,64 @@ def _checkpoint_candidates(store, node, key, domain, parameters, parent_scopes, 
         yield manifest
 
 
+@contextmanager
+def _finite_kernel(local, node, declared, scoped, output_domain, output_start, last, history,
+                   parameters, check_canceled, *, kernel_dispatch=None, estimated_payload_bytes):
+    """One typed finite-kernel path with caller-owned optional dispatch."""
+    from .finite_work import _run_finite_kernel, dispatch_finite_kernel
+    view = _PctKernelView(node, scoped, output_domain, history, active_resource_limits())
+    kernel_inputs = frame = None
+    with resource_limits(view.limits), view:
+        try:
+            kernel_inputs = view.prepare(scoped, output_domain, output_start, last, history, check_canceled)
+            operation = OPERATOR_REGISTRY.get(node.operator)
+            dispatchable = kernel_dispatch is not None and operation.operation.__module__.startswith("bagelquant_core.operator.")
+            should_dispatch = getattr(kernel_dispatch, "should_dispatch", None)
+            if dispatchable and should_dispatch is not None:
+                dispatchable = should_dispatch(estimated_payload_bytes)
+            if dispatchable:
+                frame, value_type, traces = dispatch_finite_kernel(local, node.node_id, kernel_inputs, parameters,
+                    output_start, kernel_dispatch, check_canceled, estimated_payload_bytes=estimated_payload_bytes)
+            else:
+                frame, value_type, traces = _run_finite_kernel(local, node.node_id, kernel_inputs, parameters,
+                    output_start, check_canceled)
+            yield frame, value_type, traces
+        finally:
+            scoped.clear()
+            kernel_inputs = frame = None
+            del local, node, declared, scoped, output_domain, check_canceled
+
+
+def _publish_finite_block(frame, *, domain, output_domain, output_start, last, block_key,
+                          prefix, proofs, value_type, trace_columns, store, publication_policy,
+                          check_canceled):
+    """Keep original canonical fragment and reference publication in one path."""
+    value = combined = missing_domain = None
+    try:
+        missing_domain = scoped_domain(domain, output_start, last)
+        fragment_key = block_key if prefix is None else MaterializationKey(block_key.node_id,
+            block_key.implementation_id, tuple(proofs), missing_domain.signature,
+            hash_mapping({"fragment_of": block_key.identity, "start": str(output_start)}))
+        value = Node.from_domain(frame, missing_domain, value_type=value_type,
+            identity=fragment_key.identity, trace_columns=trace_columns,
+            trace_identity=materialization_trace_identity(fragment_key, trace_columns))
+        check_canceled()
+        store.publish(NodeMaterialization(fragment_key, value), execution_policy=publication_policy)
+        if prefix is not None:
+            combined = _reference_node(pl.concat([prefix.panel.lazy(include_traces=True), value.lazy(include_traces=True)]),
+                output_domain, block_key, value_type=value.value_type, trace_columns=value.trace_columns)
+            store.publish(NodeMaterialization(block_key, combined), execution_policy=publication_policy,
+                value_references=(prefix.key.identity, fragment_key.identity))
+        return store.lookup(block_key, domain=output_domain, evidence=False)
+    finally:
+        frame = value = combined = missing_domain = None
+        del domain, output_domain, prefix
+
+
 def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed: Mapping[str, Node],
                         parameters, key, domain, policy, store, check_canceled, input_proof=None,
-                        input_window_loader=None, completed_materializations=(), kernel_dispatch=None, load_inputs=None):
+                        input_window_loader=None, completed_materializations=(), _time_index_lease=None,
+                        _stored_parent_keys=None, kernel_dispatch=None, load_inputs=None):
     """Execute one admitted node, verifying content proofs before reusing blocks."""
     declared = {node.node_id: node for node in spec.nodes}
     node = declared[node_id]
@@ -277,7 +369,12 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
     if date.fromisoformat(policy["anchor"]) > calendar[0]:
         raise ValueError("block anchor must precede the first observation session")
     # Membership halos count active coordinates, including long universe gaps.
-    halos = _canonical_halos(domain, policy["history_observations"])
+    if _time_index_lease is not None and _time_index_lease.admitted:
+        check_canceled()
+    halos = _canonical_halos(domain, policy["history_observations"], _time_index_lease=_time_index_lease)
+    if _time_index_lease is not None and _time_index_lease.admitted:
+        check_canceled()
+    local = LogicalGraphSpec({node_id: node_id}, spec.nodes)
     blocks = []
     references = []
     computed = reused = 0
@@ -334,124 +431,226 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         if not reusable:
             raise ValueError("Input proof changes cover the completed finite history; "
                 "plan affected intervals or run explicit proof maintenance before updating")
-    computed_sessions = 0
-    kernel_sessions = 0
-    input_sessions = 0
-    for begin in range(0, len(calendar), CANONICAL_SESSIONS):
-        check_canceled()
+    def numerical_start(first, last, origin):
+        if policy["history_observations"] == 0:
+            return first
+        if node.operator in _EXACT_WINDOW_OPERATORS:
+            index = None if _time_index_lease is None else _time_index_lease.index
+            return (_numerical_read_start(domain, first, last, policy["history_observations"])
+                if index is None else index.numerical_read_start(first, last, policy["history_observations"]))
+        return halos[origin]
+
+    def block_authority(begin):
         last = calendar[min(begin+CANONICAL_SESSIONS, len(calendar))-1]
         warm = halos[begin]
         proofs = []
-        for parent, value in direct.items():
-            own = scoped_domain(value.domain, warm, last)
-            token = None if input_proof is None else input_proof(parent, value, warm, last)
-            if token is None and require_interval_proof:
-                raise ValueError("Incremental update needs interval evidence for completed inputs; "
-                    "run explicit owner index maintenance or supply input_proof before updating")
-            # Initialization may bind the full durable source token. Completed
-            # unchanged definitions require scoped proof, never a cold fallback.
-            proof = hash_mapping({"version": FINITE_EXECUTION_POLICY,
-                "content": token or {"source": value.identity, "start": str(warm), "end": str(last)}, "domain": own.signature,
-                "type": value.value_type.value, "traces": value.trace_columns})
-            proofs.append(proof)
-        output_domain = scoped_domain(domain, calendar[begin], last)
-        block_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature,
-            contexts(str(calendar[begin]), str(last))[0])
-        record = None
-        for context in contexts(str(calendar[begin]), str(last)):
-            candidate_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature, context)
-            record = store.lookup(candidate_key, domain=output_domain, evidence=False)
-            if record is not None:
-                break
-        if record is None:
-            prefix = None
-            output_start = calendar[begin]
-            for candidate in sorted(partials.get(str(output_start), ()), key=lambda item: item["through"], reverse=True):
-                prior_end = date.fromisoformat(candidate["through"])
-                if prior_end >= last or prior_end not in calendar[begin:begin+CANONICAL_SESSIONS]:
-                    continue
-                prior_proofs = []
-                for parent, value in direct.items():
-                    own = scoped_domain(value.domain, warm, prior_end)
-                    token = None if input_proof is None else input_proof(parent, value, warm, prior_end)
-                    if token is None and require_interval_proof:
-                        raise ValueError("Incremental prefix reuse needs explicit interval-index maintenance")
-                    prior_proofs.append(hash_mapping({"version": FINITE_EXECUTION_POLICY,
-                        "content": token or {"source": value.identity, "start": str(warm), "end": str(prior_end)},
-                        "domain": own.signature, "type": value.value_type.value, "traces": value.trace_columns}))
-                prior_domain = scoped_domain(domain, output_start, prior_end)
-                prior_keys = [MaterializationKey(node_id, key.implementation_id, tuple(prior_proofs), prior_domain.signature,
-                    context) for context in contexts(str(output_start), str(prior_end))]
-                prior_key = next((value for value in prior_keys if value.identity == candidate["identity"]), None)
-                if prior_key is not None:
-                    prefix = store.lookup(prior_key, domain=prior_domain, evidence=False)
-                    output_start = calendar[calendar.index(prior_end)+1]
-                    break
-            if policy["history_observations"] == 0:
-                numerical_start = output_start
-            elif node.operator in _EXACT_WINDOW_OPERATORS:
-                numerical_start = _numerical_read_start(domain, output_start, last, policy["history_observations"])
-            else:
-                numerical_start = warm
-            from .finite_work import (_run_finite_kernel, admit_finite_payload, dispatch_finite_kernel,
-                finite_payload_bytes)
-            missing_domain = scoped_domain(domain, output_start, last)
-            traces = tuple(dict.fromkeys(trace for value in direct.values() for trace in value.trace_columns))
-            estimate = finite_payload_bytes([
-                *((scoped_domain(value.domain, numerical_start, last), value.trace_columns) for value in direct.values()),
-                (missing_domain, traces)])
-            admit_finite_payload(estimate)
-            if load_inputs is not None:
-                load_inputs()
-                direct = {parent: (inputs[declared[parent].input_key] if declared[parent].node_type == "input"
-                    else completed[parent]) for parent in parents(node)}
-            scoped = {}
+        known = True
+        own = output_domain = value = None
+        try:
+            for parent, value in direct.items():
+                own = scoped_domain(value.domain, warm, last)
+                token = None if input_proof is None else input_proof(parent, value, warm, last)
+                known &= token is not None
+                if token is None and require_interval_proof:
+                    raise ValueError("Incremental update needs interval evidence for completed inputs; "
+                        "run explicit owner index maintenance or supply input_proof before updating")
+                proof = hash_mapping({"version": FINITE_EXECUTION_POLICY,
+                    "content": token or {"source": value.identity, "start": str(warm), "end": str(last)},
+                    "domain": own.signature, "type": value.value_type.value, "traces": value.trace_columns})
+                proofs.append(proof)
+            output_domain = scoped_domain(domain, calendar[begin], last)
+            block_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature,
+                contexts(str(calendar[begin]), str(last))[0])
+            return last, warm, proofs, output_domain, block_key, known
+        finally:
+            own = output_domain = value = proofs = None
+
+    def load_scoped(proofs, first, last, *, output_start, validate=None):
+        from .finite_work import admit_finite_payload, finite_payload_bytes
+        nonlocal direct
+        missing_domain = scoped_domain(domain, output_start, last)
+        traces = tuple(dict.fromkeys(trace for value in direct.values() for trace in value.trace_columns))
+        estimate = finite_payload_bytes([
+            *((scoped_domain(value.domain, first, last), value.trace_columns) for value in direct.values()),
+            (missing_domain, traces)])
+        admit_finite_payload(estimate)
+        if load_inputs is not None:
+            load_inputs()
+            direct = {parent: (inputs[declared[parent].input_key] if declared[parent].node_type == "input"
+                else completed[parent]) for parent in parents(node)}
+        scoped = {}
+        sessions = 0
+        frame = value = own = None
+        try:
             for (parent, value), proof in zip(direct.items(), proofs, strict=True):
-                frame = _parent_window(parent, value, numerical_start, last,
+                frame = _parent_window(parent, value, first, last,
                     input_window_loader=input_window_loader,
                     stored_parent=declared[parent].node_type == "operator", check_canceled=check_canceled)
-                own = scoped_domain(value.domain, numerical_start, last)
+                if validate is not None:
+                    validate(parent, frame)
+                own = scoped_domain(value.domain, first, last)
                 scoped[parent] = Node.from_domain(frame, own, identity=proof, value_type=value.value_type,
                     trace_columns=value.trace_columns, trace_identity=proof if value.trace_columns else None)
-                input_sessions += len(own.times)
-            operation = OPERATOR_REGISTRY.get(node.operator)
-            dispatchable = kernel_dispatch is not None and operation.operation.__module__.startswith("bagelquant_core.operator.")
-            should_dispatch = getattr(kernel_dispatch, "should_dispatch", None)
-            if dispatchable and should_dispatch is not None:
-                dispatchable = should_dispatch(estimate)
-            if dispatchable:
-                frame, value_type, trace_columns = dispatch_finite_kernel(spec, node_id, scoped, parameters,
-                    output_start, kernel_dispatch, check_canceled, estimated_payload_bytes=estimate)
-            else:
-                frame, value_type, trace_columns = _run_finite_kernel(spec, node_id, scoped, parameters,
-                    output_start, check_canceled)
-            fragment_key = block_key if prefix is None else MaterializationKey(node_id, key.implementation_id,
-                tuple(proofs), missing_domain.signature, hash_mapping({"fragment_of": block_key.identity, "start": str(output_start)}))
-            value = Node.from_domain(frame, missing_domain, value_type=value_type,
-                identity=fragment_key.identity, trace_columns=trace_columns,
-                trace_identity=materialization_trace_identity(fragment_key, trace_columns))
+                sessions += len(own.times)
+            return scoped, sessions, estimate
+        except BaseException:
+            scoped.clear()
+            raise
+        finally:
+            frame = value = own = None
+
+    cold = _ColdFiniteBatches(node, direct, domain, policy, store, active_resource_limits(), _stored_parent_keys)
+    # Once a batch is selected, held schemas/metadata stay charged under P
+    # between R scopes. Close the controller before restoring that outer debit.
+    with ExitStack() as planning_scope, cold:
+        planning_held = False
+        computed_sessions = 0
+        kernel_sessions = 0
+        input_sessions = 0
+        skip_until = 0
+        for begin in range(0, len(calendar), CANONICAL_SESSIONS):
+            if begin < skip_until:
+                continue
             check_canceled()
-            store.publish(NodeMaterialization(fragment_key, value), execution_policy=publication_policy)
-            if prefix is not None:
-                combined = _reference_node(pl.concat([prefix.panel.lazy(include_traces=True), value.lazy(include_traces=True)]),
-                    output_domain, block_key, value_type=value.value_type, trace_columns=value.trace_columns)
-                store.publish(NodeMaterialization(block_key, combined), execution_policy=publication_policy,
-                    value_references=(prefix.key.identity, fragment_key.identity))
-            record = store.lookup(block_key, domain=output_domain, evidence=False)
-            computed += 1
-            computed_sessions += len(missing_domain.times)
-            kernel_sessions += len(scoped_domain(domain, numerical_start, last).times)
-        else:
-            reused += 1
-        blocks.append(record.panel)
-        references.append(record.key.identity)
-    result = _reference_node(pl.concat([value.lazy(include_traces=True) for value in blocks]), domain,
-        key, value_type=blocks[0].value_type, trace_columns=blocks[0].trace_columns)
-    check_canceled()
-    store.publish(NodeMaterialization(key, result), execution_policy=publication_policy, value_references=references)
-    return store.lookup(key, domain=domain, evidence=False), {"computed_blocks": computed, "reused_blocks": reused,
-        "computed_output_sessions": computed_sessions, "kernel_sessions": kernel_sessions,
-        "input_sessions": input_sessions, "canonical_sessions": CANONICAL_SESSIONS}
+            cold.guard()
+            last, warm, proofs, output_domain, block_key, known_proofs = block_authority(begin)
+            record = None
+            for context in contexts(str(calendar[begin]), str(last)):
+                candidate_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature, context)
+                record = store.lookup(candidate_key, domain=output_domain, evidence=False)
+                if record is not None:
+                    break
+            if record is None:
+                prefix = None
+                output_start = calendar[begin]
+                for candidate in sorted(partials.get(str(output_start), ()), key=lambda item: item["through"], reverse=True):
+                    prior_end = date.fromisoformat(candidate["through"])
+                    if prior_end >= last or prior_end not in calendar[begin:begin+CANONICAL_SESSIONS]:
+                        continue
+                    prior_proofs = []
+                    for parent, value in direct.items():
+                        own = scoped_domain(value.domain, warm, prior_end)
+                        token = None if input_proof is None else input_proof(parent, value, warm, prior_end)
+                        if token is None and require_interval_proof:
+                            raise ValueError("Incremental prefix reuse needs explicit interval-index maintenance")
+                        prior_proofs.append(hash_mapping({"version": FINITE_EXECUTION_POLICY,
+                            "content": token or {"source": value.identity, "start": str(warm), "end": str(prior_end)},
+                            "domain": own.signature, "type": value.value_type.value, "traces": value.trace_columns}))
+                    prior_domain = scoped_domain(domain, output_start, prior_end)
+                    prior_keys = [MaterializationKey(node_id, key.implementation_id, tuple(prior_proofs), prior_domain.signature,
+                        context) for context in contexts(str(output_start), str(prior_end))]
+                    prior_key = next((value for value in prior_keys if value.identity == candidate["identity"]), None)
+                    if prior_key is not None:
+                        prefix = store.lookup(prior_key, domain=prior_domain, evidence=False)
+                        output_start = calendar[calendar.index(prior_end)+1]
+                        break
+                batch = (cold.plan(begin, calendar,
+                    lambda origin, end: numerical_start(calendar[origin], end, origin), CANONICAL_SESSIONS)
+                    if prefix is None and known_proofs else None)
+                if batch is not None:
+                    if not planning_held:
+                        planning_scope.enter_context(resource_limits(cold.planning_limits))
+                        planning_held = True
+                    scoped = kernel = frame = authorities = batch_domain = None
+                    authority = own_domain = batch_proofs = own_proofs = None
+                    batched = False
+                    with resource_limits(batch.limits):
+                        try:
+                            cold.guard()
+                            authorities = [(begin, (last, warm, proofs, output_domain, block_key, known_proofs))]
+                            for origin in range(begin + CANONICAL_SESSIONS, batch.stop, CANONICAL_SESSIONS):
+                                check_canceled()
+                                authority = block_authority(origin)
+                                if not authority[-1]:
+                                    raise ValueError("cold finite batch needs original parent interval authority")
+                                authorities.append((origin, authority))
+                            # Footer/schema reads are admitted consumption under
+                            # R (which includes P), after every original proof.
+                            # Unsupported types alone can choose the original
+                            # path here, before body reads. Errors propagate.
+                            if cold.preflight_schema(check_canceled):
+                                batch_proofs = [hash_mapping({"finite_numerical_batch": [own[2][index]
+                                    for _, own in authorities]}) for index in range(len(direct))]
+                                batch_domain = scoped_domain(domain, calendar[begin], batch.end)
+                                check_canceled()
+                                scoped, sessions, estimate = load_scoped(batch_proofs, batch.start, batch.end,
+                                    output_start=calendar[begin], validate=cold.validate_frame)
+                                check_canceled()
+                                with _finite_kernel(local, node, declared, scoped, batch_domain, calendar[begin],
+                                        batch.end, policy["history_observations"], parameters, check_canceled,
+                                        kernel_dispatch=kernel_dispatch, estimated_payload_bytes=estimate) as kernel:
+                                    frame, value_type, trace_columns = kernel
+                                    check_canceled()
+                                    for origin, authority in authorities:
+                                        own_last, _, own_proofs, own_domain, own_key, _ = authority
+                                        cold.guard()
+                                        record = _publish_finite_block(
+                                            frame.filter(pl.col("time").is_between(calendar[origin], own_last)),
+                                            domain=domain, output_domain=own_domain, output_start=calendar[origin],
+                                            last=own_last, block_key=own_key, prefix=None, proofs=own_proofs,
+                                            value_type=value_type, trace_columns=trace_columns, store=store,
+                                            publication_policy=publication_policy, check_canceled=check_canceled)
+                                        cold.published(record.key.identity)
+                                        blocks.append(record.panel)
+                                        references.append(record.key.identity)
+                                        computed += 1
+                                        computed_sessions += len(own_domain.times)
+                                        check_canceled()
+                                input_sessions += sessions
+                                kernel_sessions += _calendar_sessions(calendar, batch.start, batch.end)
+                                skip_until = batch.stop
+                                batched = True
+                        finally:
+                            if scoped is not None:
+                                scoped.clear()
+                            scoped = kernel = frame = authorities = batch_domain = None
+                            authority = own_domain = batch_proofs = own_proofs = None
+                    if not cold.eligible:
+                        # Unsupported schema: release held state and P before
+                        # the unchanged original body path, never catch/replay.
+                        cold.close()
+                        planning_scope.close()
+                        planning_held = False
+                    if batched:
+                        continue
+                elif not planning_held:
+                    # No first batch fits or has original interval authority.
+                    # Discard selection metadata before original consumption.
+                    cold.close()
+                scoped = kernel = frame = None
+                try:
+                    read_start = numerical_start(output_start, last, begin)
+                    scoped, sessions, estimate = load_scoped(proofs, read_start, last, output_start=output_start)
+                    input_sessions += sessions
+                    with _finite_kernel(local, node, declared, scoped, output_domain, output_start, last,
+                            policy["history_observations"], parameters, check_canceled,
+                            kernel_dispatch=kernel_dispatch, estimated_payload_bytes=estimate) as kernel:
+                        frame, value_type, trace_columns = kernel
+                        cold.guard()
+                        record = _publish_finite_block(frame, domain=domain, output_domain=output_domain,
+                            output_start=output_start, last=last, block_key=block_key, prefix=prefix, proofs=proofs,
+                            value_type=value_type, trace_columns=trace_columns, store=store,
+                            publication_policy=publication_policy, check_canceled=check_canceled)
+                        cold.published(record.key.identity)
+                finally:
+                    if scoped is not None:
+                        scoped.clear()
+                    scoped = kernel = frame = None
+                computed += 1
+                computed_sessions += _calendar_sessions(calendar, output_start, last)
+                kernel_sessions += _calendar_sessions(calendar, read_start, last)
+            else:
+                reused += 1
+            blocks.append(record.panel)
+            references.append(record.key.identity)
+        result = _reference_node(pl.concat([value.lazy(include_traces=True) for value in blocks]), domain,
+            key, value_type=blocks[0].value_type, trace_columns=blocks[0].trace_columns)
+        check_canceled()
+        cold.guard()
+        store.publish(NodeMaterialization(key, result), execution_policy=publication_policy, value_references=references)
+        return store.lookup(key, domain=domain, evidence=False), {"computed_blocks": computed, "reused_blocks": reused,
+            "computed_output_sessions": computed_sessions, "kernel_sessions": kernel_sessions,
+            "input_sessions": input_sessions, "canonical_sessions": CANONICAL_SESSIONS}
 
 
 def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key, domain, store, check_canceled, input_proof=None,

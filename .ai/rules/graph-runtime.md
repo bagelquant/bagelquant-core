@@ -6,6 +6,21 @@ current block/input/parameter proofs before any kernel runs. If only obsolete
 policies remain, or current consumed proofs are unknown, require explicit
 maintenance rather than adopting the old policy or replaying completed history.
 
+The optional finite percentage-change view is private execution preparation,
+not a new numerical formula or policy. Keep original read/proof/canonical/output
+Domains and all receipt identities. Validate the entire original selected input
+and its dense implicit-null coordinates before pruning to all missing output
+keys plus each output asset's H preceding admitted keys. Use a public dynamic
+Domain with the original calendar and explicit active=True retained keys; dense
+alignment must not recreate discarded membership. Only the exact built-in unary
+Float64 numeric percentage-change/Date-trace path is eligible; all other types,
+static/auxiliary/custom/rolling/ML paths stay unchanged. Admission reserves
+working headroom before B-only allocations from already divided, index-debited
+limits and holds it through publication. Nonadmission runs the original path;
+never retry MemoryError or clear foreign exception frames to manufacture a
+resource-release claim. Prove exact values/traces/IDs/history and owned lifetime;
+calendar-session counters are not prepared-row or native-RSS measurements.
+
 Core owns LogicalGraphSpec, Graph DSL/merge/resolve, dependency primitives, and
 CoreStore SQLite/Parquet implementations at caller-provided paths. It imports no
 Data/BT/Workbench. Workbench owns global admission, CPU/RAM detection and pressure
@@ -29,6 +44,9 @@ update bodies and identities are reconstructed from the registered relations.
 Finite read contexts admit bounded thread-safe immutable manifest/index memos;
 they expire on exit and never cache revision fences or missing optional indexes.
 Explicit audits bypass metadata memos and check candidate/original bindings.
+Successful composed-source binding checks share that same finite byte budget;
+their keys bind immutable original content. Failed checks are never retained.
+Closing publication transactions and explicit full audits bypass these successes.
 Older schemas are incompatible; there is no migration reader or implicit reconstruction.
 
 Deterministic zero-history lazy built-ins form bounded regions. Requested roots,
@@ -95,7 +113,7 @@ Logical identity excludes names, app IDs, Domain, source versions and hardware.
 Material keys include relevant evidence, Domain, implementation/kernel and numerical
 context. Source identities prove immutable values/traces; no unproven reuse.
 
-Use fixed 32-session finite mathematical blocks with a caller anchor. Prove all
+Use fixed 32-session finite receipt/proof blocks with a caller anchor. Prove all
 parent values, coordinates, dynamic membership and availability for block reuse.
 Declared checkpoint replay requires unchanged complete parent prefixes, preserves
 full calendar/training context and merges audits/artifacts. For calculation changes,
@@ -112,6 +130,21 @@ operator implementation or numerical-parameter change. Preserve scheduled new
 fits, maturity/embargo/seed semantics and all old model evidence. Test append and
 local repair against a full reference, with call/date/fit instrumentation proving
 unchanged historical work does not run; record current implementation gaps.
+
+Closed cold initialization may share one ordinary numerical invocation across
+at most eight consecutive blocks only when exact completed Core direct parents,
+original per32 proofs, no own history, supported native kernel/version and
+explicit metadata/dense-row/physical-partition resource admission are established.
+Keep one Graph/runtime/publisher path and every original block key, Domain,
+content and trace identity. External loaders and any retained own history keep
+the original individual-block path. Footer/schema preflight is explicit admitted
+consumption under its reservation, never normal metadata prerequisite work;
+unsupported types may select the original path only before body consumption.
+Errors after admission propagate without replay. Count actual runtime/input work
+truthfully and document the changed cold failure granularity. Preserve durable
+blocks on cancellation, veto coalescing on retry, reject competing frontier
+changes and close owned buffers before restoring limits. Native/RSS bounds and
+arbitrary foreign traceback cleanup are not implied by soft admission estimates.
 Do not change retained canonical proof scopes or material keys merely to reduce
 numerical reads. Narrow a missing output's numerical window only for kernels
 with proven exact value/trace independence from earlier state. Count admitted
@@ -119,6 +152,22 @@ membership coordinates, including nulls, and preserve old observations needed
 by reentering assets. Permanently exited assets absent from the missing output
 must not extend such a window. Other finite rolling kernels may depend on
 earlier floating-point accumulator state and retain their canonical warm read.
+For dynamic exact-window finite execution, an operation-local coordinate index
+may answer the same canonical and numerical date queries from the existing
+asset/time sort. Admit owned date, offset and calendar buffers against the
+already-divided worker cache before constructing them, and use the same reduced
+limits for full/window input loaders and Runtime. Construction scratch has a
+separate conservative admission estimate against the original noncache working
+headroom; it is not a native RSS guarantee. Nonadmission retains the original
+queries. Do not change read dates, proof scopes, numerical membership or work
+counters, retain values in the index, or retry failures with another path.
+Clear Core-owned buffer fields and temporary frame/array aliases before restoring
+resource limits, including cancellation and retained exception tracebacks. Use
+direct array methods where equivalent to avoid extra Python wrapper references.
+Core never clears foreign traceback frames or rewrites exceptions: arbitrary
+library or caller locals can retain their own references. Completed receipt hits
+allocate no index; an
+interrupted all-block reassembly can allocate it while running zero kernels.
 Old fits are reusable only with unchanged complete features/labels/samples,
 availability/maturity, embargo, seed and numerical parameters. Repair affected
 fit events/predictions on relevant input revision. Cross-sectional impact covers
@@ -150,6 +199,21 @@ empty values/traces after consumed-schema validation, without inventing a date.
 Unbounded reads and explicit integrity APIs still consume the complete Domain;
 out-of-window duplicate coordinates remain an explicit full-audit concern.
 This view optimization changes no numerical receipt, policy or interval identity.
+Ordinary finite UpdatePlan consumers acquire eligible published CoreStore parents
+with the same bounded `read_values` API, retaining the already selected numerical
+halo and full calendar/proof scopes. Eligibility requires matching frozen planned
+and completed receipt identities and the expected Node identity/Domain. Unsaved,
+differently identified or custom-store Nodes retain their original lazy path;
+contradictory authority and missing/corrupt admitted receipts never fall back.
+The scoped Node preserves its original ValueType and trace identity before the
+existing local proof rebinding. Only the finite call opts in: checkpoint,
+independent-period Prediction, causal and generic paths retain their input-reader
+sentinels and loading rules. No value cache, new budget or integrity audit is added.
+This consumption uses selected Domain/schema/key/value validation, which can
+reject damage earlier or wrap errors differently from a deferred published plan.
+Unconsumed damage remains an explicit full-audit or other existing-phase concern;
+ordinary reads do not certify unchanged bytes. Valid immutable originals preserve
+the exact values, traces, block/materialization identities and historical reuse.
 `evidence(channels=...)` reads only requested auxiliary channels. Region-root
 evidence descriptions and reads follow sealed transient logical keys to their
 retained durable ancestors; fusion must not hide model audits, checkpoints or
@@ -263,3 +327,29 @@ original `identity` and exact `start`/`end`, retaining only complete selected da
 Composition preserves ordered complete calendar/Domain coverage and the original
 authority/file-existence fences at publication; it does not rewrite unchanged
 numerical partitions or implicitly hash historical bytes.
+
+
+Cold finite initialization estimates output rows from admitted active coordinates
+before history-query or candidate Domain work. A private per-node LRU retains at
+most eight successful Date starts under exact canonical origin and endpoint;
+charge its bounded objects under P, clear on exit and never cache errors, values,
+Frames or proof authorities. Sparse reentry forbids a first-origin monotonic
+shortcut. Parent sizing may use global asset/string upper bounds plus every
+overlapping physical row count, preserving conservative M/C/R admission and the
+original public Domain/proof/typed/publication path. Unknown bounds, allocation,
+metadata or consumed-value failures never trigger a caught-error replay. Retained
+history and ordinary repeats do not enter this cold planner. No public resource
+usage key, persistent identity or configuration flag is added.
+
+Private count-only metadata may binary-search scalar Dates on already resident
+normalized sorted axes. Count dynamic keys from the active membership Date
+column, including off-calendar dates and extra assets; calendar sessions are a
+different count. Reuse the already-owned equal-parent calendar list for planner
+rectangles and exactly three counter-only scopes. Preserve empty-calendar
+errors. Do not convert/rechunk/collect a full column or retain a new array,
+index, view or cache. Release new borrowed lookup aliases on error and success;
+never clear foreign traceback frames or catch/replay allocation failures.
+Counts/endpoints/opaque identities do not prove membership or typed authority.
+Real window/hash/proof/publication/read/Node scopes and P/R/A/index reservations
+stay unchanged. Scalar lookup source alone proves no native RSS or latency
+bound; isolated Root checks and measurements remain required.

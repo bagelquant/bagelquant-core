@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
+import json
 import sqlite3
 
 import pytest
@@ -94,6 +95,57 @@ def test_finite_metadata_memo_is_shared_bounded_and_mutation_safe(tmp_path):
     with store.read_context(max_metadata_bytes=0) as reader:
         reader.manifest(identity)
         assert reader._metadata_memo.bytes == 0
+
+
+def test_composed_source_bindings_are_checked_once_per_finite_reader(tmp_path):
+    _, store, _, receipt = completed(tmp_path)
+    original = store.read(next(iter(receipt["results"]["main"].values())))
+    original = NodeMaterialization(replace(original.key, context_identity="original-leaf"), original.panel)
+    store.publish(original)
+    identities = [original.key.identity]
+    for index in range(12):
+        key = replace(original.key, context_identity=f"composed-{index}")
+        store.publish(NodeMaterialization(key, original.panel), value_references=(identities[-1],))
+        identities.append(key.identity)
+    counts = []
+    for budget in (0, 1024 * 1024):
+        events = []
+        with store.read_context(max_metadata_bytes=budget,
+                metadata_observer=lambda key, amount: events.extend([key] * amount)) as reader:
+            for identity in reversed(identities):
+                assert reader.describe(identity)["identity"] == identity
+            counts.append(events.count("source_binding_checks"))
+            assert reader._metadata_memo.bytes <= reader._metadata_memo.maximum_bytes
+    assert counts == [sum(range(2, 14)), 13]
+
+
+def test_source_binding_memo_never_bypasses_full_audit_or_publication(tmp_path):
+    _, store, _, receipt = completed(tmp_path)
+    original = store.read(next(iter(receipt["results"]["main"].values())))
+    parent_key = replace(original.key, context_identity="composed-parent")
+    store.publish(NodeMaterialization(parent_key, original.panel), value_references=(original.key.identity,))
+    tip_key = replace(original.key, context_identity="composed-tip")
+    store.publish(NodeMaterialization(tip_key, original.panel), value_references=(parent_key.identity,))
+    with store.read_context() as reader:
+        reader.describe(tip_key.identity)
+        with sqlite3.connect(store.meta_path) as db:
+            manifest = json.loads(db.execute("SELECT manifest_json FROM materializations WHERE identity=?",
+                (original.key.identity,)).fetchone()[0])
+            manifest["through"] = "2099-01-01"
+            db.execute("UPDATE materializations SET manifest_json=? WHERE identity=?",
+                (json.dumps(manifest), original.key.identity))
+        # Already admitted immutable descriptions stay local to this reader;
+        # explicit audits and the final publication transaction remain fresh.
+        assert reader.describe(tip_key.identity)["identity"] == tip_key.identity
+        with pytest.raises(ValueError, match="corrupt Core manifest"):
+            reader.verify_identity(tip_key.identity)
+        new_key = replace(original.key, context_identity="rejected-composition")
+        with pytest.raises(ValueError, match="corrupt Core manifest"):
+            reader.publish(NodeMaterialization(new_key, original.panel), value_references=(tip_key.identity,))
+        assert reader.manifest(new_key.identity) is None
+    with store.read_context() as reader:
+        with pytest.raises(ValueError, match="corrupt Core manifest"):
+            reader.describe(tip_key.identity)
 
 
 def test_corrupt_candidate_and_update_metadata_fail(tmp_path):

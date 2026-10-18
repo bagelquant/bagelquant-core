@@ -65,14 +65,25 @@ def normalize_panel_frame(
     value_column: str = VALUE,
     numeric: bool = True,
 ) -> pl.DataFrame:
+    return _normalize_panel_columns(frame, value_column=value_column, numeric=numeric)
+
+
+def _normalize_panel_columns(
+    frame: pl.DataFrame,
+    *,
+    value_column: str = VALUE,
+    numeric: bool = True,
+    additional_columns: Sequence[str] = (),
+) -> pl.DataFrame:
+    """Validate one key layout while carrying its row-aligned trace columns."""
     if not isinstance(frame, pl.DataFrame):
         raise TypeError("panel data must be a polars DataFrame")
     missing = [
-        column for column in (*PANEL_KEYS, value_column) if column not in frame.columns
+        column for column in (*PANEL_KEYS, value_column, *additional_columns) if column not in frame.columns
     ]
     if missing:
         raise ValueError(f"panel data is missing required columns: {missing}")
-    normalized = frame.select(*PANEL_KEYS, value_column).rename({value_column: VALUE})
+    normalized = frame.select(*PANEL_KEYS, value_column, *additional_columns).rename({value_column: VALUE})
     normalized = normalized.with_columns(
         normalize_date_expression(TIME, normalized.schema[TIME]),
         pl.col(ASSET_ID).cast(pl.String),

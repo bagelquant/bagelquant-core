@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
 import polars as pl
@@ -16,6 +17,41 @@ from bagelquant_core.frame import (
     normalize_time_series,
 )
 from bagelquant_core.hashing import hash_dataframe, hash_mapping
+
+
+def _inclusive_date_count(values: Sequence[date] | pl.Series, start: date, end: date) -> int:
+    """Count a sorted normalized Date axis using only scalar item lookups.
+
+    Duplicate dates are intentional for active keys. No array conversion,
+    expression evaluation, rechunk, index or retained cache is needed. Callers
+    own the immutable sorted axis; this private helper does not normalize it.
+    """
+    item = None
+    try:
+        if type(start) is not date or type(end) is not date:
+            raise TypeError("private date counts require datetime.date bounds")
+        if start > end:
+            return 0
+        item = values.item if isinstance(values, pl.Series) else values.__getitem__
+        lower, upper = 0, len(values)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            if item(middle) < start:
+                lower = middle + 1
+            else:
+                upper = middle
+        first, upper = lower, len(values)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            if item(middle) <= end:
+                lower = middle + 1
+            else:
+                upper = middle
+        return lower - first
+    finally:
+        # An error's traceback must not keep a new borrowed-Series alias alive.
+        item = None
+        del values
 
 
 class Domain:
@@ -59,6 +95,9 @@ class Domain:
             self._asset_ids = normalize_asset_ids(universe).sort()
             self._active_membership = None
 
+        self._set_signature(identity)
+
+    def _set_signature(self, identity: str | None = None) -> None:
         self._signature = identity or hash_mapping(
             {
                 "calendar": hash_dataframe(pl.DataFrame({TIME: self._times})),
@@ -117,6 +156,23 @@ class Domain:
             assert self._active_membership is not None
             return self._active_membership.height
         return len(self._times) * len(self._asset_ids)
+
+    def _count_rows(self, start: date, end: date) -> int:
+        """Count inclusive grid keys without constructing a window or grid.
+
+        Active dates need not occur in the calendar. Dynamic counts therefore
+        use resident membership rows, including extra assets and duplicate
+        dates across assets, rather than a calendar rectangle.
+        """
+        coordinates = None
+        try:
+            if self._is_dynamic:
+                assert self._active_membership is not None
+                coordinates = self._active_membership.get_column(TIME)
+                return _inclusive_date_count(coordinates, start, end)
+            return _inclusive_date_count(self._times, start, end) * len(self._asset_ids)
+        finally:
+            coordinates = None
 
     def _contains_exact_keys(self, data: pl.DataFrame) -> bool:
         if data.height != self.size:
@@ -196,10 +252,25 @@ class Domain:
         from .preparation import active_preparation, domain_bytes
 
         def build():
-            dates = self.times.filter(self.times.is_between(start, end))
-            universe = (self.grid_lazy().filter(pl.col("time").is_between(start, end)).collect().with_columns(
-                pl.lit(True).alias("active")) if self.is_dynamic else self.asset_ids)
-            return Domain(calendar=dates, universe=universe)
+            dates = self._times.filter(self._times.is_between(start, end))
+            if dates.is_empty():
+                raise ValueError("calendar must contain at least one time")
+            # Subsets of immutable normalized coordinates retain their key
+            # types, uniqueness and order. Their identities still bind all
+            # selected coordinates through the original canonical hashes.
+            window = object.__new__(Domain)
+            window._times = dates
+            window.start_time, window.end_time = dates[0], dates[-1]
+            window._is_dynamic = self._is_dynamic
+            if self._is_dynamic:
+                assert self._active_membership is not None
+                window._active_membership = self._active_membership.filter(pl.col(TIME).is_between(start, end))
+                window._asset_ids = window._active_membership[ASSET_ID].unique().sort()
+            else:
+                window._active_membership = None
+                window._asset_ids = self._asset_ids
+            window._set_signature()
+            return window
 
         preparation = active_preparation()
         return build() if preparation is None else preparation.remember(

@@ -8,6 +8,7 @@ from polars.testing import assert_frame_equal
 from bagelquant_core import Domain, Node
 import bagelquant_core.incremental as incremental
 from bagelquant_core.operator import pct_change, rolling_mean, rolling_std, rolling_sum, smooth
+from bagelquant_core.resources import ResourceLimits
 from test_global_graph import finish, global_graph
 
 
@@ -51,7 +52,8 @@ def test_append_keeps_old_blocks_and_exact_canonical_outputs(tmp_path, monkeypat
     graph, store, root = global_graph(tmp_path / "append", factory(before))
     with monkeypatch.context() as legacy:
         legacy.setattr(incremental, "_numerical_read_start", canonical_read_start)
-        saved = finish(graph.plan_update({"main": {"x": before}}, through=before.domain.times.max()))
+        saved = finish(graph.plan_update({"main": {"x": before}}, through=before.domain.times.max()),
+            limits=ResourceLimits(cache_mib=0))
     previous_id = saved["results"]["main"][root]
     previous_manifest = store.manifest(previous_id)
     previous = store.read(previous_id).panel.collect(dense=False, include_traces=True)
@@ -69,7 +71,8 @@ def test_append_keeps_old_blocks_and_exact_canonical_outputs(tmp_path, monkeypat
     reference, cold, cold_root = global_graph(tmp_path / "reference", factory(current))
     with monkeypatch.context() as legacy:
         legacy.setattr(incremental, "_numerical_read_start", canonical_read_start)
-        completed = finish(reference.plan_update({"main": {"x": current}}, through=current.domain.times.max()))
+        completed = finish(reference.plan_update({"main": {"x": current}}, through=current.domain.times.max()),
+            limits=ResourceLimits(cache_mib=0))
     expected = cold.read(completed["results"]["main"][cold_root]).panel.collect(dense=False, include_traces=True)
     assert_frame_equal(actual, expected, check_exact=True)
     assert_frame_equal(actual.filter(pl.col("time") <= before.domain.times.max()), previous, check_exact=True)
@@ -92,7 +95,8 @@ def test_initialization_matches_original_canonical_values_and_traces(tmp_path, m
     reference, old_store, old_root = global_graph(tmp_path / "reference", factory(current))
     with monkeypatch.context() as legacy:
         legacy.setattr(incremental, "_numerical_read_start", canonical_read_start)
-        old = finish(reference.plan_update({"main": {"x": current}}, through=current.domain.times.max()))
+        old = finish(reference.plan_update({"main": {"x": current}}, through=current.domain.times.max()),
+            limits=ResourceLimits(cache_mib=0))
     graph, store, root = global_graph(tmp_path / "new", factory(current))
     result = finish(graph.plan_update({"main": {"x": current}}, through=current.domain.times.max()))
     assert result["results"]["main"][root] == old["results"]["main"][old_root]

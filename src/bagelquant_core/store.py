@@ -287,7 +287,7 @@ class CoreStore:
         cached = None if memo is None else memo.get(("manifest", identity))
         if cached is not None:
             self._metadata_event("manifest_cache_hits")
-            return cached
+            return json.loads(cached)
         if not self.meta_path.is_file():
             return None
         with self.read_transaction() as connection:
@@ -305,16 +305,21 @@ class CoreStore:
         if manifest.get("value_sources") or any(isinstance(artifact, Mapping) and "$artifact_concat" in artifact
                 for artifact in manifest["artifacts"].values()):
             with self.read_transaction() as connection:
-                self._verify_artifact_sources(connection, manifest)
+                self._verify_artifact_sources(connection, manifest, memo=memo)
         if memo is not None:
-            memo.put(("manifest", identity), manifest, len(row[0].encode()))
+            memo.put(("manifest", identity), row[0], len(row[0].encode()))
         return manifest
 
-    def _verify_artifact_sources(self, connection, manifest, *, visiting=None):
+    def _verify_artifact_sources(self, connection, manifest, *, visiting=None, memo=None):
         visiting = set() if visiting is None else visiting
         identity = manifest["identity"]
         if identity in visiting:
             raise ValueError("cyclic original artifact authority")
+        locator = ("source_bindings", identity, manifest["content_identity"])
+        if memo is not None and memo.get(locator, copy_value=False) is not None:
+            self._metadata_event("source_binding_cache_hits")
+            return
+        self._metadata_event("source_binding_checks")
         visiting.add(identity)
         try:
             for source in manifest.get("value_sources", ()):
@@ -329,7 +334,7 @@ class CoreStore:
                         or original["value_type"] != manifest["value_type"]
                         or original["trace_columns"] != manifest["trace_columns"]):
                     raise ValueError("original value authority differs")
-                self._verify_artifact_sources(connection, original, visiting=visiting)
+                self._verify_artifact_sources(connection, original, visiting=visiting, memo=memo)
             for artifact in manifest["artifacts"].values():
                 if not isinstance(artifact, Mapping) or "$artifact_concat" not in artifact:
                     continue
@@ -352,9 +357,11 @@ class CoreStore:
                 if original.get("proof_rebinding") is not None:
                     self._verify_proof_rebinding(connection, original["proof_rebinding"],
                         MaterializationKey.from_dict(original["key"]), original["execution_policy"])
-                self._verify_artifact_sources(connection, original, visiting=visiting)
+                self._verify_artifact_sources(connection, original, visiting=visiting, memo=memo)
         finally:
             visiting.remove(identity)
+        if memo is not None:
+            memo.put(locator, True, 0)
 
     @classmethod
     def _verify_proof_rebinding(cls, connection, plan, key, policy):

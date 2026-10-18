@@ -13,6 +13,7 @@ from .frame import (
     ASSET_ID,
     TIME,
     VALUE,
+    _normalize_panel_columns,
     align_frames,
     normalize_date_expression,
     normalize_panel_frame,
@@ -323,19 +324,8 @@ class Node(NodeDefinition):
                 raise ValueError(
                     f"panel data is missing required columns: {missing}"
                 )
-            base = normalize_panel_frame(data.select(TIME, ASSET_ID, VALUE), numeric=value_type != ValueType.CATEGORY)
-            if not trace_columns:
-                return base.lazy()
-            traces = data.select(TIME, ASSET_ID, *trace_columns).with_columns(
-                normalize_date_expression(TIME, data.schema[TIME]),
-                pl.col(ASSET_ID).cast(pl.String),
-            )
-            return base.join(
-                traces,
-                on=[TIME, ASSET_ID],
-                how="left",
-                maintain_order="left",
-            ).lazy()
+            return _normalize_panel_columns(data, numeric=value_type != ValueType.CATEGORY,
+                additional_columns=trace_columns).lazy()
 
         schema = data.collect_schema()
         missing = sorted(required - set(schema.names()))
@@ -364,18 +354,10 @@ class Node(NodeDefinition):
         return self._validate_collected(frame.collect())
 
     def _validate_collected(self, collected: pl.DataFrame) -> pl.DataFrame:
-        base = self._validate_data(collected.select(TIME, ASSET_ID, VALUE))
         if not self._trace_columns:
-            return base
-        traces = collected.select(
-            TIME, ASSET_ID, *self._trace_columns
-        ).with_columns(
-            normalize_date_expression(TIME, collected.schema[TIME]),
-            pl.col(ASSET_ID).cast(pl.String),
-        )
-        return base.join(traces, on=[TIME, ASSET_ID], how="left").sort(
-            [TIME, ASSET_ID]
-        )
+            return self._validate_data(collected.select(TIME, ASSET_ID, VALUE))
+        return _normalize_panel_columns(collected, numeric=self.value_type != ValueType.CATEGORY,
+            additional_columns=self._trace_columns)
 
     def _validate_data(self, data: pl.DataFrame) -> pl.DataFrame:
         return normalize_panel_frame(data, numeric=self.value_type != ValueType.CATEGORY)

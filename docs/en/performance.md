@@ -1,5 +1,42 @@
 # Performance Notes
 
+Finite percentage-change blocks can use an optional private dynamic membership
+view after their unchanged bounded input read and complete typed dense
+normalization. The view retains every missing output coordinate and each output
+asset's last H admitted preceding coordinates, including implicit/null keys.
+Its calendar is unchanged; its active asset union can contract. Dynamic dense
+alignment uses only those active keys, and the same registered lazy percentage
+kernel and current/shift availability rule run on the smaller table. Original
+canonical halos, proof/read windows, output Domains, receipts and historical
+references remain authoritative. Static inputs, non-Float64/type/trace channels,
+custom/auxiliary kernels and smooth/other rolling computations keep their
+existing paths. An empty whole block skips the view; an empty missing tail after
+partial-prefix reuse keeps the original scoped input and runtime.
+
+The view reserves working headroom from the already divided worker limit after
+the compact coordinate index's cache debit, before any view-only dense/key/Domain
+allocation. Its conservative byte estimate is
+`6*N*(64+max_asset_UTF8_bytes+8*Date_trace_count)+8*A+256*S+65536`, where N is the
+full selected Domain's active coordinates, A its asset count and S its full
+calendar length. The S term includes known public calendar constructor Python
+date-list scratch. Round upward to MiB, admit at most one quarter of current
+noncache headroom, and lower the inner memory target by that reservation. The
+original reader's limits and cache allowance stay unchanged; no second worker
+division or new cache is introduced. Nonadmission keeps the original pipeline,
+without a MemoryError retry. The reservation lasts through ordinary publication;
+own aliases are cleared before scope restoration. Foreign constructor/library/
+caller exception frames can retain arguments and are not cleared or rewritten.
+This is a soft native-allocation selection estimate, not a hard RSS promise.
+
+Existing `input_sessions` and `kernel_sessions` count selected calendar lengths
+per input/block, not active rows or native instructions. They remain unchanged
+when the private view keeps the calendar. External test/probe spies can report
+actual prepared input rows without introducing a new public work metric.
+Exact bit/trace/receipt/history, tight-budget and whole-node cost validation is
+required before selecting this implementation; fewer rows alone does not prove
+an application latency gain. In particular, smooth's weighted rolling sums have
+not been admitted to this prefix-trimming argument.
+
 Benchmarks run each case in an isolated child process so setup state, cached
 graphs, and peak resident memory are attributable to one operation. Synthetic
 inputs use a fixed seed and include nulls and repeated values.
@@ -24,6 +61,25 @@ An empty or calendar-gap view returns typed empty values and traces without a
 synthetic calendar. Unbounded reads and explicit full integrity audits retain
 the complete Domain and original-byte checks. Receipts and numerical identities
 are unchanged; this is a bounded read improvement, not a new cache.
+
+Ordinary finite updates use that public bounded value reader when a completed
+CoreStore parent matches the frozen planned receipt and expected Node. This
+avoids rebuilding a scan of every retained physical reference for each missing
+block. The existing numerical read start, canonical observation halos, values,
+types, traces and local proof rebinding remain authoritative. Recently published
+finite parents are eligible; unsaved or differently identified in-memory Nodes
+and custom stores keep their existing path. Checkpoint, period Prediction,
+causal replay and generic execution retain their loading rules.
+
+Bounded parent consumption validates selected saved Domain/schema/keys and typed
+values rather than treating a deferred plan as a full validation boundary. It
+can reject malformed input earlier or report the public reader's wrapped error.
+No implicit byte audit, full-history replay, numerical-window cache or separate
+memory reservation is added. Selected Domain/normalization temporaries still
+share the caller's admitted worker budget; a bounded visible frame size is not
+a hard bound on backing Arrow allocations or process RSS. Exact valid results
+and retained receipts require integration tests; a direct read microbenchmark
+does not establish whole-update or application latency gains.
 
 ```bash
 uv run python scripts/benchmark_efficiency.py --profile smoke --json
@@ -312,6 +368,200 @@ call a dispatcher. Process/native setup and one aggregate resource budget remain
 the caller's responsibility. No real-data speedup has been established by these
 synthetic acceptance tests.
 
+## Typed preparation and composed metadata
+
+Source and consumed-value validation carry availability traces alongside their
+values through one key normalization, uniqueness check and sort. Unique typed
+coordinates establish row correspondence; separating traces and joining them
+back repeats work at every finite block. Date conversion, invalid-key rejection,
+category types, NaN-to-null normalization, sparse row presence and trace values
+retain their original rules.
+
+`Domain.window` selects immutable coordinates already validated by its parent
+Domain. It retains sorted unique Date/String keys and computes the same canonical
+calendar, asset and membership hashes as public construction, including windows
+with no active members. Public Domain construction still validates arbitrary
+inputs. An opaque parent identity never substitutes for selected coordinates.
+
+Within `CoreStore.read_context`, successful original-source binding checks share
+the existing byte-bounded immutable metadata memo. Reading composed receipts with
+shared ancestry checks that ancestry once in the finite context. Entries bind
+original manifest content and expire on exit; unsuccessful checks are never
+retained. Full audits and the closing publication transaction traverse current
+original metadata independently of that memo. These internal optimizations
+preserve the current storage schema, numerical receipts, canonical block policies and stored bytes.
+
+The manifest entry retains the verified original serialized JSON string, not a
+shared mutable parsed tree. Each public manifest hit parses that immutable string
+after the memo get has released its lock, returning a fresh dict/list/scalar tree.
+Caller mutation, including nested fields returned by descriptions, cannot affect
+later reads. A cold read still parses and validates original metadata, rebinding
+and source authority before retaining the exact original string; it does not
+reserialize or canonicalize JSON for this cache. The same UTF-8 byte charge,
+eviction, metadata events, finite lifetime and generic memo copying policy apply.
+Audits and publication guards retain their existing fresh validation paths. This
+internal representation change has no artifact, identity, schema or formula effect;
+it does not by itself establish a whole-calculation speedup or memory peak.
+
 ## Selective artifact verification
 
-Metadata inspection performs zero artifact hashes. A six-month typed value fixture with two Domain files requires three hashes for a one-day read: the Domain files and one monthly partition. Repeated reads in one `read_context` reuse those proofs while rechecking file identity; a new context verifies bytes again. Unselected corruption is detected by an explicit full audit or when that partition is consumed. These structural counts are tested; they are not a wall-time guarantee or a change to numerical kernels.
+Metadata inspection and ordinary selected value reads perform zero artifact
+hashes. `read_values` decodes the selected Domain and value partitions and applies
+the public typed-value validation; it does not establish a fresh SHA proof.
+Unselected partition damage can remain unobserved until that partition is
+consumed or an explicit integrity audit checks the complete materialization.
+Explicit `verify_identity` and full integrity checks retain byte validation;
+successful checksum proofs expire with their finite `read_context`. These
+structural contracts are tested; they are not a wall-time guarantee or a change
+to numerical kernels.
+
+## Finite membership date queries
+
+Dynamic finite `pct_change` and `smooth` execution can retain a compact coordinate
+index for one node call. The existing canonical-halo sort supplies asset-grouped
+int32 dates, int64 group offsets and an owned int32 calendar. Canonical proof
+halos still consider every asset's preceding observations; numerical read starts
+still consider only assets occurring in the missing output. Admitted coordinates
+include null-valued observations and preserve sparse reentry. The selected dates,
+32-session blocks, source proofs, typed values and traces, numerical kernels and
+receipt identities do not change. No numerical membership trimming is performed.
+
+Admission uses the worker allocation already divided by the caller. For `N`
+membership rows, `A` assets and `S` calendar sessions, the retained charge is
+`4*N + 8*(A+1) + 4*S + 4096` bytes, rounded up to whole MiB and reserved from
+the existing numerical cache. The same remaining limits cover Runtime and both
+full and bounded input loaders. A separate conservative sort/scratch estimate
+must fit one eighth of the original memory target minus cache budget. That
+estimate is an admission heuristic, not a bound on opaque native allocations.
+The existing CoreStore metadata memo has its separate unchanged scope.
+
+Static, empty, history-zero, nonexact or unadmitted calls retain the original
+queries. Allocation, validation and cancellation errors propagate without a
+second attempt. Buffers own no values, String frame or Domain membership view.
+Core clears its own buffer fields and temporary argument/view aliases before
+the worker limits restore, on success and failure. Direct ndarray methods avoid
+unnecessary Python wrapper frames around date queries and offset accumulation.
+This does not promise that arbitrary foreign library or caller traceback locals
+release their own references; Core does not clear those frames or rewrite
+propagated exceptions.
+Completed whole-receipt reuse bypasses this allocation. Interrupted reassembly
+of already-complete blocks can still allocate the index despite zero kernels
+and zero window reads. Existing public work-counter keys remain unchanged;
+private focused checks account for reserved and retained bytes separately.
+
+## Bounded cold finite invocations
+
+An optional private initialization preparation can share one ordinary numerical
+Graph/runtime call across two to eight consecutive canonical blocks. It requires
+an exact concrete CoreStore, no materialization history for the current logical
+node, exact completed Core direct-parent keys, existing interval indexes and
+nonempty original per32 input proofs. External input loaders, missing optional
+indexes, retained candidates, append, repair and interrupted retries keep the
+individual-block path. No prerequisite, currentness check or metadata-only repeat
+resolves a new footer, reads values or constructs this batch.
+
+The closed path is limited to the original built-in Float64 arithmetic, rank,
+percentage-change240, constant100, project-domain, canonical14 and fixed smooth
+kernels under Polars 1.42.1. Registered operation, plan and contract objects must
+match; other supported versions and custom implementations remain on the existing
+path. Sparse admitted observations, implicit nulls, exit/reentry, the full
+cross-section at each output date and up to two Date traces remain unchanged.
+The unchanged smooth expression reduces each weighted ten-observation window in
+its original operand order; this admission does not generalize to arbitrary
+stateful rolling kernels or assert binary equivalence without acceptance tests.
+
+Selection first uses existing typed metadata only. With worker limits already
+divided and membership-index debits already applied, planning charge P includes
+twice each parent/output membership size times its key/string allowance,
+256 bytes per calendar session, 4096 bytes per registered parent partition,
+a 64 KiB allowance and a separate 4 KiB scalar-memo/axis allowance. It must fit
+one quarter of the original noncache working headroom M-C. Candidate output
+coordinates are counted from the resident sorted active Date column with scalar
+lower/upper binary searches, including implicit-null values and active keys on
+dates outside the calendar. Row overflow is rejected
+before asset-local history queries or candidate Domain construction/hashing.
+Original per32 proof Domains remain unchanged and are not skipped.
+
+Within one immutable node invocation, at most eight successful numerical-start
+Dates are retained under exact canonical-origin/own-end keys. Candidate attempts
+and adjacent origins can reuse these scalar answers. The callback, exceptions,
+Nodes, values and frames are never memo entries. A partial final block has its
+actual endpoint; first-origin monotonicity is not assumed, because later asset
+reentry can require older admitted observations. The bounded LRU and parent-axis
+metadata are cleared on normal/error/cancellation exit; Core drops its own new
+callback aliases without clearing foreign traceback frames or rewriting errors.
+
+For each candidate of at most eight blocks, R includes P plus an eightfold
+allowance for output rows and the greater of each parent's conservative dense
+rectangle or intersecting physical partition rows. Global parent asset counts
+and maximum UTF8 key lengths bound any selected window; held calendar axes give
+the selected session count. Unknown physical bounds still count. These upper
+bounds can decline extra sparse batches but cannot reduce the former reserve.
+Candidate estimation constructs no temporary Domain; after admission the same
+original public Domain construction/identity path runs under R. No coordinate,
+proof, schema, value or trace validation is waived. Output membership is capped by batch_rows;
+summed parent rows are capped by eight times batch_rows. R must also fit one
+quarter of M-C, and the same immutable limits with memory_target_mib=M-R cover
+the batch. After the first batch is selected, P remains reserved between batches
+until held schemas/metadata close, including an individual final block. If no
+first batch is admitted, selection metadata is discarded before the original
+body path. Unsupported schema releases P and its held state before that path.
+Cache, threads and all other fields remain unchanged. There is no
+second worker division or allocation-failure retry.
+
+Private count-only preparation uses at most twice the Date axis length's bit
+length in scalar item visits. The normalized resident calendar is sorted and
+unique; active membership is sorted by `(time, asset_id)`, so dates may repeat
+across assets. The lower bound excludes dates before the start and the upper
+bound includes every date equal to the end. Dynamic counts use membership rows,
+not calendar membership or a calendar-by-assets rectangle. Static counts use
+calendar sessions times existing assets. Empty/reversed key ranges count zero.
+
+This private helper accepts exact normalized `datetime.date` bounds. Public
+`Domain.window` keeps its original input and empty-calendar behavior. The cold
+planner reuses its existing calendar list once per candidate after proving all
+parent calendars equal. Exactly three finite session counters also use the
+already-owned calendar list, retaining the empty-calendar error. Required
+publication, proof, typed Node and read-window Domains are still constructed
+and hashed through the original path. Counts never establish identity or key
+equivalence, even when endpoints, counts or caller-supplied identities match.
+
+No new array, retained view, time index or cache is created. A borrowed resident
+Series wrapper and scalar lookup alias are released on normal/error exit; no
+full-column conversion, expression collection, rechunk or native `search_sorted`
+is requested. The scalar Polars API is not an operating-system allocation/RSS
+guarantee. Existing P/R/A reservations, coordinate-index cache charges, worker
+division, kernel math, work counters and canonical receipts remain unchanged.
+This isolated source daughter requires Root validation and measurement; it has
+no measured gain or CPU-cost attribution yet.
+
+After the original per32 proofs, the admitted reservation covers an explicit
+footer/schema preflight of each plain immutable parent Parquet plan. This is
+consumption validation inside authorized initialization, not a file-free
+metadata gate. Each parent's schema is resolved at most once in the invocation;
+the private resolution count does not measure physical footer I/O. Only the
+exact Date/String/Float64/Date-channel schema is admitted. Unsupported schemas
+select the original path before value bodies; footer failures and cancellation
+propagate. Body consumption still uses the original public selected-value reader,
+full typed/coordinate validation, public Node construction and matching held
+schema. Ordinary reads establish no fresh full-file SHA audit.
+
+The result is sliced and published using each original 32-session Domain, proof,
+key, trace identity, policy and publisher, followed by the original composed
+receipt. There is no batch receipt or new persisted schema/API. Actual runtime
+calls, input_sessions and kernel_sessions can decrease; computed_blocks and
+computed_output_sessions count only canonical receipts actually published.
+Their old larger numerical-work totals are never synthesized.
+
+An admitted native call may finish several blocks before the first new receipt
+can be published. This changes initialization failure/cancellation granularity,
+not the canonical blocks or durable history. Cancellation and revision guards
+run around consumption and every publication. An optimistic inventory guard
+rejects unexpected own-node candidates before continuing; it is not an atomic
+cross-process lock spanning native execution. Every already committed receipt
+survives an error, and its presence vetoes batching on retry. Owned batch frames,
+slices, Graph/runtime/binding and temporary Domain aliases are dropped before R
+restores on success or failure. Foreign library/caller traceback locals remain
+untouched and can retain their own references. P/R and row ceilings are
+conservative admission heuristics, not hard native scratch, RSS or cancellation
+latency bounds. This unselected experiment has no measured speed claim.

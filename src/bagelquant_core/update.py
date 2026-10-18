@@ -16,8 +16,9 @@ from .resources import NativeAdmission, ResourceLimits, resource_limits
 from .resources import active_resource_limits
 from .preparation import ExecutionPreparation, preparation_scope
 from .finite_work import KernelDispatch
-from .store import RevisionConflict
-from .incremental import finite_execution_policies, execute_finite_node, execute_checkpoint_node
+from .store import CoreStore, RevisionConflict
+from .incremental import (finite_execution_policies, execute_finite_node, execute_checkpoint_node,
+                          _finite_time_index_reservation)
 from .hashing import hash_mapping
 
 
@@ -427,17 +428,26 @@ class UpdatePlan:
                 self.resource_usage[context_id].update(replay.usage)
             elif node_id in self.policies[context_id]:
                 self._load_saved_parents(context_id, node_id, guard)
-                with resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
+                node_limits = replace(limits or ResourceLimits(), parallel_nodes=1)
+                lease = _finite_time_index_reservation(self.domains[context_id][node_id],
+                    self.policies[context_id][node_id]["history_observations"],
+                    self._nodes[node_id].operator, node_limits)
+                with resource_limits(lease.limits), lease:
                     result, usage = execute_finite_node(self.spec, node_id, inputs=self._inputs[context_id],
                         completed=self._values[context_id], parameters=self._parameters[context_id], key=key,
                         domain=self.domains[context_id][node_id], policy=self.policies[context_id][node_id],
                         store=self.store, check_canceled=guard,
                         input_proof=self._proof_reader(context_id),
-                        input_window_loader=self._window_reader(context_id, guard, limits),
+                        input_window_loader=self._window_reader(context_id, guard, lease.limits,
+                            bounded_stored_parents=True),
                         completed_materializations=self.store.completed_materializations(self.graph.graph_id, context_id, node_id),
+                        _time_index_lease=lease,
+                        _stored_parent_keys={parent: self.keys[context_id][parent]
+                            for parent in parents(self._nodes[node_id]) if parent in self.results[context_id]
+                            and self.results[context_id][parent] == self.keys[context_id][parent].identity},
                         kernel_dispatch=self._kernel_dispatch,
                         load_inputs=(None if self._input_loader is None or self._input_window_loader is not None else
-                            lambda: self._load_inputs(context_id, node_id, guard, limits)))
+                            lambda: self._load_inputs(context_id, node_id, guard, lease.limits)))
                 self.resource_usage[context_id][node_id] = usage
             elif self._checkpoint_supported(node_id):
                 self._load_saved_parents(context_id, node_id, guard)
@@ -491,13 +501,36 @@ class UpdatePlan:
             with self._lock:
                 self._in_flight.discard((context_id, node_id))
 
-    def _window_reader(self, context_id, guard, limits):
+    def _window_reader(self, context_id, guard, limits, *, bounded_stored_parents=False):
         loader = self._input_window_loader
-        if loader is None:
+        if loader is None and not bounded_stored_parents:
             return None
         sources = {node.node_id: node.input_key for node in self.spec.nodes if node.node_type == "input"}
         def read(parent, expected, start, end):
             if parent not in sources:
+                if not bounded_stored_parents or not isinstance(self.store, CoreStore):
+                    return expected
+                with self._lock:
+                    key = self.keys[context_id].get(parent)
+                    identity = self.results[context_id].get(parent)
+                if key is None or identity is None:
+                    return expected
+                if identity != key.identity:
+                    raise ValueError("completed parent numerical authority differs from the frozen key")
+                if expected.identity != identity:
+                    return expected
+                if expected.domain.signature != key.domain_identity:
+                    raise ValueError("completed parent Domain differs from the frozen key")
+                guard()
+                frame = self.store.read_values(identity, start=start, end=end, include_traces=True)
+                from .node import Node
+                value = Node.from_domain(frame, expected.domain.window(start, end),
+                    name=expected.name, metadata=expected.metadata, source_key=expected.source_key,
+                    identity=expected.identity, value_type=expected.value_type,
+                    trace_columns=expected.trace_columns, trace_identity=expected.trace_identity)
+                guard()
+                return value
+            if loader is None:
                 return expected
             guard()
             with resource_limits(limits or ResourceLimits()):

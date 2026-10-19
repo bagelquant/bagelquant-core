@@ -88,7 +88,8 @@ class ExecutionRuntime:
     def __init__(self, alignment: str = "inner", *,
                  materialization_store: MaterializationStore | None = None,
                   context_identity: str = "",
-                  node_contexts: Mapping[str, str] | None = None, check_canceled=None) -> None:
+                  node_contexts: Mapping[str, str] | None = None, check_canceled=None,
+                  _capture_contexts: bool = False) -> None:
         if alignment != "inner":
             raise ValueError("ExecutionRuntime only supports inner alignment")
         self.check_canceled = check_canceled or (lambda: None)
@@ -98,6 +99,7 @@ class ExecutionRuntime:
         self._alignment = alignment
         self.materialization_store = materialization_store
         self.context_identity = context_identity
+        self.materialization_contexts = {} if _capture_contexts else None
         self.node_contexts = dict(node_contexts or {})
         if any(not isinstance(node_id, str) or not node_id or not isinstance(context, str)
                for node_id, context in self.node_contexts.items()):
@@ -566,9 +568,11 @@ class ExecutionRuntime:
             "runtime_kernel": EXECUTION_KERNEL_VERSION,
             "execution": operator.contract.execution, "density": operator.contract.density,
             "trace_rule": operator.contract.trace_rule, "output_type": operator.output_type})
-        context = hash_mapping({"context": self.node_contexts.get(node.logical_id, self.context_identity),
-                                "operator": operator_input_context(node.logical_id),
-                                "parameters": self._node_parameters(node)})
+        context_body = {"context": self.node_contexts.get(node.logical_id, self.context_identity),
+            "operator": operator_input_context(node.logical_id), "parameters": self._node_parameters(node)}
+        if self.materialization_contexts is not None:
+            self.materialization_contexts[node.logical_id] = context_body
+        context = hash_mapping(context_body)
         return MaterializationKey(node.logical_id, implementation,
             tuple(parent.physical_identity or parent.identity for parent in parents), domain.signature, context)
 

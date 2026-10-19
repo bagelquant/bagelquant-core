@@ -31,6 +31,29 @@ def _same_coordinates(left, right):
         right.grid_lazy().sort("time", "asset_id").collect())
 
 
+def _plan_context_materializations(spec, bindings, definition, *, capture_contexts=False):
+    """Share exact ordinary context/key planning with explicit proof maintenance."""
+    from .graph import Graph
+    bound = Graph.from_logical_spec(spec, inputs=bindings, parameter_bindings=definition.get("parameters", {}))
+    policies = finite_execution_policies(spec, anchor=definition["anchor"])
+    operators = {node.node_id: node for node in spec.nodes if node.node_type == "operator"}
+    def plan():
+        contexts = {node: hash_mapping({"history_policy": policies.get(node),
+            "information_cutoff": definition.get("information_cutoff")}) for node in operators}
+        planner = ExecutionRuntime(node_contexts=contexts, _capture_contexts=capture_contexts)
+        keys = planner.plan_materialization_keys(bound)
+        return contexts, planner, keys
+    contexts, planner, keys = plan()
+    domains = {node.logical_id: node.domain for node in bound.nodes if node.node_type == "input"}
+    domains.update(planner.node_domains)
+    unsupported = {node for node in policies if str(domains[node].times.min()) != str(definition["anchor"])
+        or any(not domains[parent].times.equals(domains[node].times) for parent in parents(operators[node]))}
+    if unsupported:
+        policies = {node: policy for node, policy in policies.items() if node not in unsupported}
+        contexts, planner, keys = plan()
+    return bound, policies, contexts, planner, keys
+
+
 class UpdatePlan:
     """One frozen global or branch update, with no worker/admission policy."""
 
@@ -40,7 +63,6 @@ class UpdatePlan:
                  input_definition_identities: Mapping[str, Mapping[str, str]] | None = None,
                  native_admission: NativeAdmission | None = None, kernel_dispatch: KernelDispatch | None = None,
                  persist_nodes=()):
-        from .graph import Graph
         if graph._store is None:
             raise ValueError("persistent updates require an explicit CoreStore")
         self.request_id = uuid4().hex
@@ -60,6 +82,7 @@ class UpdatePlan:
         self._input_window_loader = input_window_loader
         self._native_admission = native_admission
         self._kernel_dispatch = kernel_dispatch
+        self._input_proof_repairs = {}
         self._preparation = ExecutionPreparation(min(64, active_resource_limits().cache_mib // 4) * 1024 * 1024)
         self._causal_inputs = frozenset(causal_inputs)
         self._input_version_loader = input_version_loader
@@ -139,25 +162,11 @@ class UpdatePlan:
             self._inputs[context_id] = dict(bindings)
             self._input_locks.update({(context_id, source): Lock() for source in needed})
             self._parameters[context_id] = self.state["contexts"].get(context_id, {}).get("parameters", {})
-            bound = Graph.from_logical_spec(self.spec, inputs=bindings, parameter_bindings=self._parameters[context_id])
             definition = self.state["contexts"].get(context_id)
             if definition is None:
                 raise ValueError("execution context must be explicitly registered")
-            self.policies[context_id] = finite_execution_policies(self.spec, anchor=definition["anchor"])
-            self.numerical_contexts[context_id] = {node_id: hash_mapping({"history_policy": self.policies[context_id].get(node_id),
-                "information_cutoff": definition.get("information_cutoff")}) for node_id in self._nodes}
-            planner = ExecutionRuntime(node_contexts=self.numerical_contexts[context_id])
-            self.keys[context_id] = planner.plan_materialization_keys(bound)
-            domains = {node.logical_id: node.domain for node in bound.nodes if node.node_type == "input"}
-            domains.update(planner.node_domains)
-            unsupported = {node_id for node_id in self.policies[context_id]
-                if str(domains[node_id].times.min()) != str(definition["anchor"]) or any(not domains[parent].times.equals(domains[node_id].times) for parent in parents(self._nodes[node_id]))}
-            if unsupported:
-                self.policies[context_id] = {node: policy for node, policy in self.policies[context_id].items() if node not in unsupported}
-                self.numerical_contexts[context_id] = {node_id: hash_mapping({"history_policy": self.policies[context_id].get(node_id),
-                    "information_cutoff": definition.get("information_cutoff")}) for node_id in self._nodes}
-                planner = ExecutionRuntime(node_contexts=self.numerical_contexts[context_id])
-                self.keys[context_id] = planner.plan_materialization_keys(bound)
+            bound, self.policies[context_id], self.numerical_contexts[context_id], planner, self.keys[context_id] = (
+                _plan_context_materializations(self.spec, bindings, definition))
             if self._causal_nodes:
                 from .causal import CAUSAL_EXECUTION_POLICY
                 for node_id in self._causal_nodes:
@@ -303,7 +312,14 @@ class UpdatePlan:
             direct = {parent: (self._inputs[context_id][declared[parent].input_key]
                 if declared[parent].node_type == "input" else self._bound_nodes[context_id][parent])
                 for parent in parents(node)}
-            if node_id in self.policies[context_id]:
+            if context_id in self._input_proof_repairs:
+                from .incremental import _numerical_read_start
+                repair = self._input_proof_repairs[context_id]["repair"]
+                first, last = date.fromisoformat(repair["from"]), date.fromisoformat(self.through)
+                for parent, value in direct.items():
+                    add(node_id, parent, _numerical_read_start(value.domain, first, last, repair["history"][node_id]),
+                        last, None, "cutoff_tail_repair", "required")
+            elif node_id in self.policies[context_id]:
                 policy = self.policies[context_id][node_id]
                 calendar = domain.times.to_list()
                 halos = _canonical_halos(domain, policy["history_observations"])
@@ -414,6 +430,13 @@ class UpdatePlan:
                         for node in self._region_outputs[node_id].nodes)
                         for seal in self.store.region_evidence(key.identity, kind="seal")):
                     raise ValueError("Completed numerical result needs explicit logical-region evidence maintenance")
+            elif context_id in self._input_proof_repairs:
+                from .cutoff_repair import execute_repair
+                self._load_saved_parents(context_id, node_id, guard, selected_parents=(
+                    self._region_outputs[node_id].external_inputs if node_id in self._region_outputs else None))
+                with resource_limits(replace(limits or ResourceLimits(), parallel_nodes=1)):
+                    result, usage = execute_repair(self, context_id, node_id, guard)
+                self.resource_usage[context_id].update(usage)
             elif node_id in self._region_outputs:
                 from .regions import execute_region
                 region = self._region_outputs[node_id]

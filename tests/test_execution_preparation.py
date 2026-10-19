@@ -13,7 +13,7 @@ from bagelquant_core import CoreStore, Domain, Node, RevisionConflict
 from bagelquant_core.operation_contract import ExecutionMode, OperationContract, TraceRule
 from bagelquant_core.incremental import _canonical_halos
 from bagelquant_core.operator import add, negate, operator, rolling_mean, rolling_std
-from bagelquant_core.preparation import ExecutionPreparation, preparation_scope
+from bagelquant_core.preparation import ExecutionPreparation, PreparationMetadataMemo, preparation_scope
 from bagelquant_core.resources import ResourceLimits, resource_limits
 from test_global_graph import finish, global_graph
 
@@ -96,6 +96,101 @@ def test_absent_proofs_are_not_cached():
     assert preparation.remember("proof", "x", lambda: available[0], len) is None
     available[0] = "published"
     assert preparation.remember("proof", "x", lambda: available[0], len) == "published"
+
+
+def test_interval_metadata_uses_one_existing_reserve_and_fresh_public_trees(tmp_path):
+    value = retired_source(65)
+    graph, store, root = global_graph(tmp_path, negate(value))
+    receipt = finish(graph.plan_update({"main": {"x": value}}, through=value.domain.times.max()))
+    identity = receipt["results"]["main"][root]
+    expected = store.interval_identity(identity, start=value.domain.times.min(), end=value.domain.times.max())
+    counts = []
+    for budget in (0, 1024 * 1024):
+        preparation = ExecutionPreparation(budget)
+        events = []
+        store._metadata_observer = lambda name, amount: events.extend([name] * amount)
+        try:
+            with preparation_scope(preparation):
+                store.manifest(identity)["key"]["node_id"] = "caller mutation"
+                assert store.manifest(identity)["node_id"] == root
+                for _ in range(2):
+                    assert store.interval_identity(identity, start=value.domain.times.min(),
+                        end=value.domain.times.max()) == expected
+                assert preparation.bytes <= budget
+                counts.append((events.count("manifest_reads"), events.count("interval_index_reads")))
+            preparation.clear()
+            assert preparation.bytes == 0
+        finally:
+            store._metadata_observer = None
+    assert counts == [(4, 2), (1, 1)]
+
+
+def test_preparation_metadata_expiry_missing_proof_and_explicit_audit(tmp_path):
+    import json
+    value = retired_source(32)
+    graph, store, root = global_graph(tmp_path, negate(value))
+    receipt = finish(graph.plan_update({"main": {"x": value}}, through=value.domain.times.max()))
+    identity = receipt["results"]["main"][root]
+    preparation = ExecutionPreparation(1024 * 1024)
+    with preparation_scope(preparation):
+        assert store.manifest("missing") is None
+        assert not preparation._values
+        store.describe(identity)
+        with sqlite3.connect(store.meta_path) as db:
+            manifest = json.loads(db.execute("SELECT manifest_json FROM materializations WHERE identity=?",
+                (identity,)).fetchone()[0])
+            manifest["through"] = "2099-01-01"
+            db.execute("UPDATE materializations SET manifest_json=? WHERE identity=?",
+                (json.dumps(manifest), identity))
+        with pytest.raises(ValueError):
+            store.verify_identity(identity)
+        preparation.clear()
+        with pytest.raises(ValueError, match="corrupt Core manifest"):
+            store.manifest(identity)
+
+
+def test_preparation_metadata_namespaces_stores_and_never_caches_absent_index(tmp_path):
+    value = retired_source(32)
+    stores = []
+    for name in ("first", "second"):
+        graph, store, root = global_graph(tmp_path / name, negate(value))
+        receipt = finish(graph.plan_update({"main": {"x": value}}, through=value.domain.times.max()))
+        stores.append((store, receipt["results"]["main"][root]))
+    with sqlite3.connect(stores[1][0].meta_path) as db:
+        saved = db.execute("SELECT * FROM computation_index WHERE identity=?", (stores[1][1],)).fetchone()
+        db.execute("DELETE FROM computation_index WHERE identity=?", (stores[1][1],))
+    preparation = ExecutionPreparation(1024 * 1024)
+    with preparation_scope(preparation):
+        assert stores[0][0].interval_identity(stores[0][1], start=value.domain.times.min(), end=value.domain.times.max())
+        assert stores[1][0].interval_identity(stores[1][1], start=value.domain.times.min(), end=value.domain.times.max()) is None
+        with sqlite3.connect(stores[1][0].meta_path) as db:
+            db.execute("INSERT INTO computation_index VALUES(?,?,?,?,?)", saved)
+        assert stores[1][0].interval_identity(stores[1][1], start=value.domain.times.min(), end=value.domain.times.max())
+
+
+def test_metadata_and_numerical_preparation_compete_in_one_reserve():
+    preparation = ExecutionPreparation(4096)
+    memo = PreparationMetadataMemo(preparation, "fixture")
+    preparation.remember("numerical", "window", lambda: "x" * 2000, len)
+    memo.put("original", "y" * 200, 200)
+    assert memo.get("original") == "y" * 200
+    assert ("numerical", "window") not in preparation._values
+    assert preparation.bytes <= preparation.maximum_bytes
+    preparation.remember("numerical", "other", lambda: "z" * 2000, len)
+    assert memo.get("original") is None
+
+
+def test_warm_preparation_never_caches_graph_revision_guards(tmp_path):
+    value = retired_source(32)
+    graph, store, root = global_graph(tmp_path, negate(value))
+    receipt = finish(graph.plan_update({"main": {"x": value}}, through=value.domain.times.max()))
+    appended = retired_source(33)
+    plan = graph.plan_update({"main": {"x": appended}}, through=appended.domain.times.max())
+    with preparation_scope(plan._preparation):
+        store.describe(receipt["results"]["main"][root])
+        graph.sleep(root)
+        with pytest.raises(RevisionConflict):
+            plan.guard()
 
 
 def test_unrelated_preparation_misses_can_overlap():

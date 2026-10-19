@@ -129,6 +129,15 @@ class CoreStore:
         if self._metadata_observer is not None:
             self._metadata_observer(name, amount)
 
+    def _read_metadata_memo(self):
+        if self._metadata_memo is not None:
+            return self._metadata_memo
+        from .preparation import active_preparation, PreparationMetadataMemo
+        preparation = active_preparation()
+        if preparation is None:
+            return None
+        return PreparationMetadataMemo(preparation, (self.meta_path, self.artifact_path))
+
     @contextmanager
     def read_transaction(self) -> Iterator[sqlite3.Connection]:
         """Read committed metadata without initialization or writer ownership."""
@@ -283,7 +292,7 @@ class CoreStore:
         return path
 
     def manifest(self, identity: str) -> dict[str, Any] | None:
-        memo = self._metadata_memo
+        memo = self._read_metadata_memo()
         cached = None if memo is None else memo.get(("manifest", identity))
         if cached is not None:
             self._metadata_event("manifest_cache_hits")
@@ -334,6 +343,10 @@ class CoreStore:
                         or original["value_type"] != manifest["value_type"]
                         or original["trace_columns"] != manifest["trace_columns"]):
                     raise ValueError("original value authority differs")
+                if original.get("proof_rebinding") is not None:
+                    from .proof_maintenance import verify_rebinding
+                    verify_rebinding(type(self), connection, original["proof_rebinding"],
+                        MaterializationKey.from_dict(original["key"]), original["execution_policy"], visited=tuple(visiting))
                 self._verify_artifact_sources(connection, original, visiting=visiting, memo=memo)
             for artifact in manifest["artifacts"].values():
                 if not isinstance(artifact, Mapping) or "$artifact_concat" not in artifact:
@@ -781,6 +794,12 @@ class CoreStore:
             rows = connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
                 "WHERE identity=? AND kind=? ORDER BY payload_identity", (identity, kind)).fetchall()
         self._metadata_event("region_evidence_rows", len(rows))
+        return self._decode_region_evidence(manifest, kind, rows)
+
+    @staticmethod
+    def _decode_region_evidence(manifest, kind, rows):
+        """Validate original certificates inside either a reader or writer fence."""
+        identity = manifest["identity"]
         result = []
         for content, serialized, token in rows:
             payload = json.loads(serialized)
@@ -898,7 +917,7 @@ class CoreStore:
     def _computation_index(self, manifest):
         from .computation_index import read
         key = ("computation_index", manifest["identity"], manifest["content_identity"])
-        memo = self._metadata_memo
+        memo = self._read_metadata_memo()
         cached = None if memo is None else memo.get(key, copy_value=False)
         if cached is not None:
             self._metadata_event("interval_index_cache_hits")
@@ -1199,11 +1218,22 @@ class CoreStore:
         validation; it is not a read-only prerequisite or preview. It never
         infers equivalence from saved output values or changes original receipts.
         """
+        mode = source_bindings.pop("mode", None)
+        if mode in {"cutoff_normalization.v1", "cutoff_tail_repair.v1"}:
+            from .cutoff_proof import plan_normalization
+            if (mode == "cutoff_tail_repair.v1") != (source_bindings.get("repair_from") is not None):
+                raise ValueError("Cutoff tail repair requires an explicit final-session boundary")
+            return plan_normalization(self, spec, identity, **source_bindings)
+        if mode is not None:
+            raise ValueError("Unknown input-proof maintenance mode")
         from .proof_maintenance import plan_rebinding
         return plan_rebinding(self, spec, identity, **source_bindings)
 
-    def apply_input_proof_rebind(self, plan, *, check_canceled=lambda: None) -> dict[str, Any]:
-        """Admit a planned reference-only proof update, preserving originals."""
+    def apply_input_proof_rebind(self, plan, *, check_canceled=lambda: None, update_plan=None) -> dict[str, Any]:
+        """Apply exact references, or admit bounded repair in an ordinary UpdatePlan."""
+        if plan.get("mode") == "cutoff_tail_repair.v1":
+            from .cutoff_repair import admit_repair
+            return admit_repair(self, plan, update_plan, check_canceled)
         from .proof_maintenance import apply_rebinding
         return apply_rebinding(self, plan, check_canceled=check_canceled)
 
@@ -1776,13 +1806,21 @@ class CoreStore:
         Historical receipts do not require the current graph revision to match.
         """
         with self.read_transaction() as connection:
-            row = connection.execute("SELECT * FROM updates WHERE identity=?", (identity,)).fetchone()
-            contexts = connection.execute("SELECT context_id FROM update_contexts WHERE update_id=? ORDER BY context_id",
-                (identity,)).fetchall()
-            results = connection.execute("SELECT context_id,node_id,materialization_id FROM update_results "
-                "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
-            coverage = connection.execute("SELECT context_id,node_id,boundary_node FROM update_coverage "
-                "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
+            receipt = self._read_update_receipt(connection, identity)
+        self._metadata_event("update_result_rows", sum(map(len, receipt["results"].values())))
+        self._validate_logical_coverage(receipt["results"], receipt["coverage"])
+        return receipt
+
+    @staticmethod
+    def _read_update_receipt(connection, identity):
+        """Validate normalized immutable receipt rows within an existing fence."""
+        row = connection.execute("SELECT * FROM updates WHERE identity=?", (identity,)).fetchone()
+        contexts = connection.execute("SELECT context_id FROM update_contexts WHERE update_id=? ORDER BY context_id",
+            (identity,)).fetchall()
+        results = connection.execute("SELECT context_id,node_id,materialization_id FROM update_results "
+            "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
+        coverage = connection.execute("SELECT context_id,node_id,boundary_node FROM update_coverage "
+            "WHERE update_id=? ORDER BY context_id,node_id", (identity,)).fetchall()
         if row is None:
             raise KeyError(f"unknown update receipt: {identity}")
         receipt = {**dict(row), "results": {context[0]: {} for context in contexts},
@@ -1795,8 +1833,6 @@ class CoreStore:
             if context not in receipt["coverage"]:
                 raise ValueError("update coverage context is missing")
             receipt["coverage"][context][node] = boundary
-        self._metadata_event("update_result_rows", len(results))
         if hash_mapping({k: v for k, v in receipt.items() if k != "identity"}) != identity:
             raise ValueError("update receipt identity mismatch")
-        self._validate_logical_coverage(receipt["results"], receipt["coverage"])
         return receipt

@@ -10,6 +10,7 @@ import pytest
 from bagelquant_core import CoreStore, NodeMaterialization
 from bagelquant_core.hashing import hash_mapping
 from bagelquant_core.operator import negate
+from bagelquant_core.preparation import ExecutionPreparation, preparation_scope
 from test_global_graph import finish, global_graph, source
 
 
@@ -119,14 +120,27 @@ def test_composed_source_bindings_are_checked_once_per_finite_reader(tmp_path):
     assert counts == [sum(range(2, 14)), 13]
 
 
-def test_source_binding_memo_never_bypasses_full_audit_or_publication(tmp_path):
+@pytest.mark.parametrize("scope", ["reader", "preparation"])
+def test_source_binding_memo_never_bypasses_full_audit_or_publication(tmp_path, scope):
     _, store, _, receipt = completed(tmp_path)
     original = store.read(next(iter(receipt["results"]["main"].values())))
     parent_key = replace(original.key, context_identity="composed-parent")
     store.publish(NodeMaterialization(parent_key, original.panel), value_references=(original.key.identity,))
     tip_key = replace(original.key, context_identity="composed-tip")
     store.publish(NodeMaterialization(tip_key, original.panel), value_references=(parent_key.identity,))
-    with store.read_context() as reader:
+    @contextmanager
+    def reader_scope():
+        if scope == "reader":
+            with store.read_context() as reader:
+                yield reader
+        else:
+            preparation = ExecutionPreparation(1024 * 1024)
+            try:
+                with preparation_scope(preparation):
+                    yield store
+            finally:
+                preparation.clear()
+    with reader_scope() as reader:
         reader.describe(tip_key.identity)
         with sqlite3.connect(store.meta_path) as db:
             manifest = json.loads(db.execute("SELECT manifest_json FROM materializations WHERE identity=?",

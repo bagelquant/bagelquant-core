@@ -113,7 +113,7 @@ def _matching_certificate(plan, context, region, certificate, start, end, direct
     return True
 
 
-def execute_region(plan, context, region, guard):
+def execute_region(plan, context, region, guard, *, proof_rebinding=None):
     """Execute only missing region intervals with the original block identities."""
     declared = {node.node_id: node for node in plan.spec.nodes}
     direct = {parent: (plan._inputs[context][declared[parent].input_key] if declared[parent].node_type == "input"
@@ -151,6 +151,15 @@ def execute_region(plan, context, region, guard):
                 break
     if require_proof and not selected:
         raise ValueError("Input proof changes cover completed region history; resolve impact or run explicit evidence maintenance")
+    if proof_rebinding is not None:
+        prefix_end = date.fromisoformat(proof_rebinding["repair"]["prefix_through"])
+        for begin in range(0, len(calendar), CANONICAL_SESSIONS):
+            if calendar[begin] > prefix_end:
+                continue
+            needed_end = min(prefix_end, calendar[min(begin + CANONICAL_SESSIONS, len(calendar)) - 1])
+            retained = selected.get(begin)
+            if retained is None or date.fromisoformat(retained[0]["through"]) < needed_end:
+                raise ValueError("Cutoff repair requires complete retained region prefix evidence; run explicit evidence maintenance")
     usage = {node: {"computed_blocks": 0, "reused_blocks": 0, "computed_output_sessions": 0,
         "kernel_sessions": 0, "input_sessions": 0, "canonical_sessions": CANONICAL_SESSIONS} for node in region.nodes}
     references, panels = [], []
@@ -173,6 +182,8 @@ def execute_region(plan, context, region, guard):
             output_start = calendar[calendar.index(old_end) + 1]
         else:
             output_start = start
+        if proof_rebinding is not None and str(output_start) < proof_rebinding["repair"]["from"]:
+            raise ValueError("Cutoff repair cannot rerun retained historical region outputs")
         traces = tuple(dict.fromkeys(trace for value in direct.values() for trace in value.trace_columns))
         estimate = finite_payload_bytes([
             *((scoped_domain(value.domain, output_start, end), value.trace_columns) for value in direct.values()),
@@ -186,7 +197,7 @@ def execute_region(plan, context, region, guard):
         scoped = {}
         for parent, value in direct.items():
             frames = _parent_window(parent, value, output_start, end,
-                input_window_loader=plan._window_reader(context, guard, None),
+                input_window_loader=plan._window_reader(context, guard, active_resource_limits()),
                 stored_parent=declared[parent].node_type == "operator", check_canceled=guard)
             own = scoped_domain(value.domain, output_start, end)
             scoped[parent] = Node.from_domain(frames, own, identity=value.identity, value_type=value.value_type,
@@ -229,7 +240,24 @@ def execute_region(plan, context, region, guard):
         block_domain = scoped_domain(domain, start, end)
         block_key = MaterializationKey.from_dict(evidence[root]["key"])
         proof = {"region_id": region.region_id, "boundary_node": root, "nodes": evidence}
-        if prefix is None:
+        existing = plan.store.describe(block_key.identity)
+        if existing is not None:
+            # Changed transient inputs can yield the exact same durable key.
+            # Retain that complete result rather than compose a cycle through
+            # a shorter prefix that already references it. Add only the new
+            # content-bound logical certificate; original evidence is immutable.
+            from .computation_index import read
+            with plan.store.transaction() as connection:
+                guard()
+                row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (block_key.identity,)).fetchone()
+                import json
+                manifest = json.loads(row[0])
+                plan.store._verify_metadata(manifest, block_key.identity)
+                plan.store._verify_artifact_sources(connection, manifest)
+                if read(connection, manifest) != evidence[root]["index"]:
+                    raise ValueError("Retained region block differs from its recomputed bounded evidence")
+                plan.store._save_region_evidence(connection, manifest, {"block": proof})
+        elif prefix is None:
             value = Node.from_domain(root_panel.lazy(include_traces=True), block_domain, identity=block_key.identity,
                 value_type=root_panel.value_type, trace_columns=root_panel.trace_columns,
                 trace_identity=materialization_trace_identity(block_key, root_panel.trace_columns))
@@ -257,5 +285,5 @@ def execute_region(plan, context, region, guard):
         "definitions": definitions, "blocks": references}
     guard()
     plan.store.publish(NodeMaterialization(key, result), execution_policy=publication_policy,
-        value_references=references, region_evidence={"seal": seal})
+        value_references=references, region_evidence={"seal": seal}, _proof_rebinding=proof_rebinding)
     return plan.store.lookup(key, domain=domain, evidence=False), usage

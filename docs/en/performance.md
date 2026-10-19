@@ -1,5 +1,19 @@
 # Performance Notes
 
+An update's existing `ExecutionPreparation` budget also admits immutable store
+metadata: decoded computation indexes, serialized manifests and successful
+original source bindings. The adapter shares the numerical preparation LRU;
+it adds no separate allowance. Keys bind both store roots and exact identities,
+entries carry conservative encoded-size charges, and metadata hits are reported
+in `preparation_usage`. Public manifest calls return fresh trees. Missing proofs
+are never cached; eviction and scope exit require an ordinary reread.
+
+An explicit finite store read context remains authoritative when present.
+Explicit original-byte audits and closing publication checks still validate
+fresh authority; mutable revision/state guards are not memoized. This reduces
+repeated preparation without changing canonical 32-session certificates,
+numerical identities, historical receipts or accepted update intervals.
+
 Finite percentage-change blocks can use an optional private dynamic membership
 view after their unchanged bounded input read and complete typed dense
 normalization. The view retains every missing output coordinate and each output

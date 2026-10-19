@@ -1,4 +1,4 @@
-"""Explicit source-bound proof format maintenance without numerical replay."""
+"""Explicit source-bound input proof maintenance and retained-authority checks."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Callable
@@ -55,6 +55,10 @@ PLAN_DDL = """CREATE TABLE IF NOT EXISTS input_proof_rebinding_plans(
 def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), require_admission=True):
     """Validate immutable admission and its complete retained authority chain."""
     from .logical import LogicalNodeSpec
+    if plan.get("mode") in {"cutoff_normalization.v1", "cutoff_tail_repair.v1"}:
+        from .cutoff_proof import verify_normalization
+        return verify_normalization(store_type, connection, plan, key, policy,
+            visited=visited, require_admission=require_admission)
     try:
         body = {name: value for name, value in plan.items() if name != "identity"}
         if plan.get("identity") != hash_mapping(body):
@@ -255,6 +259,9 @@ def plan_rebinding(store, spec: LogicalGraphSpec, identity: str, *, domain: Doma
 
 def apply_rebinding(store, plan: Mapping[str, Any], *, check_canceled=lambda: None) -> dict[str, Any]:
     """Publish only proven original references; never run operators or load values."""
+    if plan.get("mode") == "cutoff_normalization.v1":
+        from .cutoff_proof import apply_normalization
+        return apply_normalization(store, plan, check_canceled=check_canceled)
     body = {name: value for name, value in plan.items() if name != "identity"}
     if plan.get("identity") != hash_mapping(body):
         raise ValueError("Proof maintenance plan identity differs")

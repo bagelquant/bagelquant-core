@@ -7,6 +7,7 @@ an opaque caller-provided signature cannot hide different coordinates.
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event, RLock
@@ -87,6 +88,35 @@ class ExecutionPreparation:
         with self.lock:
             return {**self.counts, "resident_bytes": self.bytes,
                 "peak_bytes": self.peak_bytes, "maximum_bytes": self.maximum_bytes}
+
+
+class PreparationMetadataMemo:
+    """Use the existing preparation reserve for immutable owner metadata.
+
+    This view allocates no second cache. Serialized manifests keep their fresh
+    public parsed trees; private indexes and successful source checks share the
+    same admission, eviction and operation lifetime as numerical preparation.
+    """
+
+    def __init__(self, preparation, namespace):
+        self.preparation = preparation
+        self.namespace = namespace
+
+    def get(self, key, *, copy_value=True):
+        preparation = self.preparation
+        locator = ("metadata", (self.namespace, key))
+        with preparation.lock:
+            found = preparation._values.pop(locator, None)
+            if found is None:
+                return None
+            preparation._values[locator] = found
+            preparation.counts["metadata_hits"] += 1
+            value = found[0]
+        return deepcopy(value) if copy_value else value
+
+    def put(self, key, value, encoded_bytes):
+        self.preparation.remember("metadata", (self.namespace, key),
+            lambda: deepcopy(value), lambda _: 8 * encoded_bytes)
 
 
 _active: ContextVar[ExecutionPreparation | None] = ContextVar("core_execution_preparation", default=None)

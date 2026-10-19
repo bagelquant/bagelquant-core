@@ -275,6 +275,31 @@ prove exact consumed values, coordinates, type and traces; Core verifies origina
 finite keys and parameter contexts. Never infer input equivalence from output
 equality or fabricate old source bindings.
 
+The same API's `mode="cutoff_normalization.v1"` admits a complete deterministic
+stateless closure over the exact completed output interval when only a later
+information cutoff is lowered. Bind both complete external input sets to exact
+source-owner projections and reproduce every ordinary canonical key/context.
+Verify actual coordinates, parameters, policies, original normalized update
+authority, durable results and all transient region members/blocks. Publish
+reference-only successors; preserve original values, keys, seals and monotonic
+completion flags. Recheck original/admission/block ancestry on apply, reads and
+audit. Missing/changed evidence blocks; this is never permission for generic
+history replay. Context recipe capture is opt-in for this admission, so ordinary
+key planning does not retain full per-node calendar recipes.
+
+Explicit `cutoff_tail_repair.v1` is a bounded maintenance admission for one potentially changed
+final session with exact source-owned prefix equality and unchanged full canonical
+recipes, Domains and durable boundaries. Only supported causal pointwise built-ins,
+adjacent change operators and finite-limit ffill may consume it. Keep ordinary
+policies and generic-history guards unchanged. Execute in the ordinary UpdatePlan
+admission/Runtime path with the caller's actual limits and bounded loaders; reject
+full-loader-only repair. Count per-asset support/warmup separately from changed
+outputs. Retain original prefix partitions, verify clipped region member indexes,
+and require every historical region block before executing the suffix. Never let
+an otherwise valid repair fall back to recomputing an unmatched earlier block.
+Recheck admitted proof ancestry through every value reference. Same durable keys
+may append verified logical certificates without replacing existing evidence.
+
 Use public `Node.source_interval_identity` to bind external source tokens to
 actual interval coordinates, types and traces. Bounds are `datetime.date`.
 Operation-local proof memos distinguish immutable Domain objects and source

@@ -270,6 +270,41 @@ evidence cannot establish equivalence of a traced input. Output equality alone
 does not establish input equivalence. Unknown original bindings require source
 owner maintenance rather than a guessed current receipt.
 
+`mode="cutoff_normalization.v1"` uses the same admission/apply API for a complete
+deterministic stateless closure whose output interval is unchanged while its
+information cutoff is lowered. Supply `original_update`, `context_id`, the two
+context definitions, both complete external input mappings and source projection
+callbacks. Core reproduces the ordinary canonical keys, compares actual Domains
+and all consumed channels, and retains every durable result and transient region
+certificate. It verifies original normalized update rows and block ancestry at
+admission, apply, read and audit. Reference-only successor keys retain the original
+numerical partitions; original receipts and monotonic completion flags remain
+unchanged. It cannot repair changed inputs, missing proof, models/checkpoints or
+extend output history. Generic undeclared-history replay remains blocked.
+
+For a potentially changed final session, the same maintenance API accepts
+`mode="cutoff_tail_repair.v1", repair_from=through`. It requires the same full
+original/replacement Domains, canonical recipes and durable closure, a shared
+calendar with a nonempty retained prefix, and exact source-owner equivalence
+through the preceding session. Support is deliberately limited to causal
+pointwise built-ins, adjacent `diff_from_last_change`/`pct_change_from_last_change`
+and `ffill` with an explicit finite limit. Unlimited fills, lookahead, unknown
+custom/stateful operations and other historical kernels remain blocked. This
+admission does not change existing numerical policies or keys.
+
+`apply_input_proof_rebind(proof, update_plan=plan)` admits that repair into the
+matching frozen ordinary UpdatePlan. Its regular scheduler, resource admission,
+bounded loaders and Runtime compute the affected final cross section. Direct
+parents supply the actual per-asset preceding coordinates, including nulls and
+reentry gaps; warmup/kernel sessions are reported separately from the single
+changed output session. Full-history-only loaders are rejected. Original prefix
+partitions are referenced without rewriting them. A region's last prefix block
+retains clipped, source-bound indexes for every member; ordinary region append
+requires complete retained prefix coverage before any kernel. Identical durable
+block keys may gain a new verified logical certificate while retaining their
+original manifest and bytes. Admission ancestry is verified transitively through
+value references, and cancellation retains reusable fragments/certificates.
+
 `Node.source_interval_identity(source_token, start, end)` supplies the same Core
 Domain/type/trace binding used by Graph for external source proofs. Bounds are
 `datetime.date` values; the source owner proves the consumed channels. The

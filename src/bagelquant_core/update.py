@@ -83,7 +83,7 @@ class UpdatePlan:
         self._native_admission = native_admission
         self._kernel_dispatch = kernel_dispatch
         self._input_proof_repairs = {}
-        self._preparation = ExecutionPreparation(min(64, active_resource_limits().cache_mib // 4) * 1024 * 1024)
+        self._preparation = ExecutionPreparation(active_resource_limits().cache_mib // 4 * 1024 * 1024)
         self._causal_inputs = frozenset(causal_inputs)
         self._input_version_loader = input_version_loader
         self._causal_replays = {}
@@ -396,7 +396,7 @@ class UpdatePlan:
         from .operation_contract import ExecutionMode
 
         selected = limits or active_resource_limits()
-        reserved_mib = min(64, selected.cache_mib // 4)
+        reserved_mib = selected.cache_mib // 4
         self._preparation.restrict(reserved_mib * 1024 * 1024)
         selected = replace(selected, cache_mib=selected.cache_mib - reserved_mib)
         operation = OPERATOR_REGISTRY.get(self._nodes[node_id].operator)

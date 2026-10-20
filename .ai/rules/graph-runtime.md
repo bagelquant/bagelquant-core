@@ -69,8 +69,11 @@ height, width and ordered row-hash bytes, including interleaved date groups.
 
 Operation-local preparation shares actual immutable Domain windows, all admitted
 halo schedules, successful interval proofs and fitting parent slabs. Its charged
-byte budget reserves at most one quarter of admitted cache memory, capped at
-64 MiB, reducing local runtime cache accordingly. Eviction/zero cache retain the
+byte budget reserves at most one quarter of admitted cache memory, reducing
+local runtime cache accordingly. There is no fixed 64 MiB ceiling: larger caller
+allocations can retain useful parent slabs instead of repeatedly decoding them.
+Each execution restricts that operation's reserve to its actual worker share;
+a smaller admission cannot later be enlarged. Eviction/zero cache retain the
 bulk read path. Per-key single-flight work never holds a global metadata lock
 during collection. Publication expires cached values; no missing proof or mutable
 revision guard is cached. Generic rolling canonical warm starts and resets stay

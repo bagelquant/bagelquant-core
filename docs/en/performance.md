@@ -14,6 +14,15 @@ fresh authority; mutable revision/state guards are not memoized. This reduces
 repeated preparation without changing canonical 32-session certificates,
 numerical identities, historical receipts or accepted update intervals.
 
+The preparation reserve scales to one quarter of the caller's `cache_mib`,
+without a fixed 64 MiB cap. It is deducted from the same runtime cache allowance;
+it adds no memory budget. For example, an admitted 896 MiB cache reserves
+224 MiB for preparation and leaves 672 MiB for runtime caching. A smaller
+worker admission restricts the shared preparation reserve for the rest of the
+operation. Zero-cache execution retains its ordinary bounded reads. Cache
+hits/evictions and decoded parent rows measure useful reuse; a larger reserve
+does not change canonical output work, native pool size or mathematical policy.
+
 Finite percentage-change blocks can use an optional private dynamic membership
 view after their unchanged bounded input read and complete typed dense
 normalization. The view retains every missing output coordinate and each output

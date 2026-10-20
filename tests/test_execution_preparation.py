@@ -206,6 +206,44 @@ def test_unrelated_preparation_misses_can_overlap():
         assert [job.result(timeout=5) for job in jobs] == ["a", "b"]
 
 
+@pytest.mark.parametrize("planned_cache,worker_cache", [(0, 0), (3, 3), (4, 4),
+    (896, 896), (1024, 128), (128, 1024), (1024, 0)])
+def test_preparation_scales_with_cache_and_respects_smaller_worker_admission(
+        tmp_path, monkeypatch, planned_cache, worker_cache):
+    from dataclasses import replace
+
+    value = retired_source(3)
+    limits = ResourceLimits(total_threads=6, memory_target_mib=20480, cache_mib=planned_cache)
+    with resource_limits(limits):
+        graph, store, root = global_graph(tmp_path, negate(value))
+        plan = graph.plan_update({"main": {"x": value}}, through=value.domain.times.max())
+        assert plan._preparation.maximum_bytes == planned_cache // 4 * 1024**2
+        selected = replace(limits, cache_mib=worker_cache)
+        execute = plan._execute
+        calls = []
+
+        def observed(*args, **kwargs):
+            admitted = kwargs["limits"]
+            reserve = plan._preparation.maximum_bytes // 1024**2
+            assert reserve == min(planned_cache // 4, worker_cache // 4)
+            assert admitted.cache_mib == worker_cache - worker_cache // 4
+            assert reserve + admitted.cache_mib <= worker_cache
+            assert admitted.memory_target_mib == limits.memory_target_mib
+            calls.append(admitted)
+            return execute(*args, **kwargs)
+
+        monkeypatch.setattr(plan, "_execute", observed)
+        receipt = finish(plan, limits=selected)
+        assert calls and plan.preparation_usage["resident_bytes"] == 0
+        repeated = graph.plan_update({"main": {"x": value}}, through=value.domain.times.max())
+        assert repeated.complete
+        assert finish(repeated)["results"] == receipt["results"]
+        assert all(usage["outcome"] == "up_to_date" and usage["computed_blocks"] == 0
+            and usage["input_sessions"] == 0
+            for usage in repeated.resource_usage["main"].values())
+        assert store.read_values(receipt["results"]["main"][root]).height == value.domain.size
+
+
 def test_publication_context_amortizes_initialization_and_checks_schema(tmp_path, monkeypatch):
     store = CoreStore(tmp_path / "core.sqlite", tmp_path / "values")
     initialize = store._initialize

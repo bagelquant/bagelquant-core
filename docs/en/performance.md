@@ -23,6 +23,32 @@ operation. Zero-cache execution retains its ordinary bounded reads. Cache
 hits/evictions and decoded parent rows measure useful reuse; a larger reserve
 does not change canonical output work, native pool size or mathematical policy.
 
+Built-in `lag` uses the exact numerical-window path. Its runtime shifts keys on
+the complete parent calendar, including dates with no member observations, so
+numerical reads need only the missing output interval and `periods` preceding
+calendar sessions. Sparse observations and reentry do not require older rows
+for this kernel. It has no floating accumulator or membership-index reservation.
+Canonical proof halos, 32-session publication boundaries, input availability
+traces and materialization identities remain unchanged. Nested lag dependencies
+still execute through the shared global DAG. This does not change conservative
+historical repair decisions or enable generic rolling/stateful partitioning.
+
+Cached stored-parent slabs begin at the original 32-session calendar boundary,
+even when a numerical window begins inside that slab. This lets overlapping
+consumers reuse one retained slab instead of decoding separate partial prefixes.
+Admission includes the extra historical coordinates; nonadmitted and external
+input reads keep the exact requested range. The final slab never extends beyond
+the requested end, and earlier retained rows are removed before numerical
+execution. Output windows, canonical proofs and typed availability remain unchanged.
+
+Preparation diagnostics distinguish per-kind builds, hits, coalesced waits,
+evictions and evicted bytes. Oversize build counts/bytes describe entries that
+were built but could not be retained. `parent_window_bulk_bypasses` counts the
+separate early decision to read a window in bulk when its estimated size exceeds
+half the preparation reserve; `parent_window_bulk_estimated_bytes` sums those
+estimates, not measured resident memory or physical I/O. Builds include first use
+and rebuilds, so aggregate counts alone cannot identify duplicate decoding.
+
 Finite percentage-change blocks can use an optional private dynamic membership
 view after their unchanged bounded input read and complete typed dense
 normalization. The view retains every missing output coordinate and each output
@@ -352,8 +378,8 @@ arithmetic. A prefix larger than the preparation budget keeps its bulk read path
 rather than thrashing a smaller slab cache. Per-key single-flight collection
 allows unrelated ready work to overlap. `plan.preparation_usage` reports actual
 decodes, decoded sessions/rows, hits, evictions and charged resident/peak bytes.
-The preparation budget reserves at most a quarter of cache memory, capped at
-64 MiB, and expires after successful publication.
+The preparation budget reserves a quarter of cache memory without a fixed cap,
+is restricted by smaller worker admissions, and expires after successful publication.
 
 Schema 4 pointwise regions publish requested/shared/explicit boundaries and retain
 exact transient interval indexes. Required transient output plans are collected

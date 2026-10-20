@@ -98,6 +98,20 @@ def test_absent_proofs_are_not_cached():
     assert preparation.remember("proof", "x", lambda: available[0], len) == "published"
 
 
+def test_diagnostics_distinguish_evictions_and_uncached_oversize_builds():
+    preparation = ExecutionPreparation(2048)
+    for key in ("first", "second", "first"):
+        preparation.remember("parent_slab", key, lambda: b"x" * 512, len)
+    preparation.remember("domain_window", "large", lambda: b"x" * 2048, len)
+    report = preparation.report()
+    assert report["parent_slab_builds"] == 3
+    assert report["parent_slab_evictions"] == report["evictions"] == 2
+    assert report["parent_slab_evicted_bytes"] == 3072
+    assert report["domain_window_oversize"] == 1
+    assert report["domain_window_oversize_bytes"] == 3072
+    assert report["resident_bytes"] == 1536
+
+
 def test_interval_metadata_uses_one_existing_reserve_and_fresh_public_trees(tmp_path):
     value = retired_source(65)
     graph, store, root = global_graph(tmp_path, negate(value))

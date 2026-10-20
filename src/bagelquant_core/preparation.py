@@ -38,9 +38,11 @@ class ExecutionPreparation:
 
     def _evict(self, required: int) -> None:
         while self._values and self.bytes + required > self.maximum_bytes:
-            _, (_, charge) = self._values.popitem(last=False)
+            (kind, _), (_, charge) = self._values.popitem(last=False)
             self.bytes -= charge
             self.counts["evictions"] += 1
+            self.counts[kind + "_evictions"] += 1
+            self.counts[kind + "_evicted_bytes"] += charge
 
     def remember(self, kind, key, build, size, *, check_canceled=None):
         """Coalesce immutable preparation, retaining only admitted successes."""
@@ -57,6 +59,7 @@ class ExecutionPreparation:
                     pending = self._in_flight[locator] = Event()
                     self.counts[kind + "_builds"] += 1
                     break
+                self.counts[kind + "_waits"] += 1
             while not pending.wait(timeout=0.1):
                 if check_canceled is not None:
                     check_canceled()
@@ -73,6 +76,9 @@ class ExecutionPreparation:
                     self._values[locator] = (value, charge)
                     self.bytes += charge
                     self.peak_bytes = max(self.peak_bytes, self.bytes)
+                else:
+                    self.counts[kind + "_oversize"] += 1
+                    self.counts[kind + "_oversize_bytes"] += charge
             return value
         finally:
             with self.lock:

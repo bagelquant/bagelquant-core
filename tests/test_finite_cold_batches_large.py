@@ -16,7 +16,7 @@ def test_6488_sessions_every203_block_all_ten_ids_bits_and_truthful_runtime_call
     run = ExecutionRuntime.run
     calls = []
     def observe(runtime, graph, **kwargs):
-        calls.append(graph._single_output().logical_id)
+        calls.append(frozenset(graph.logical_spec().outputs.values()))
         return run(runtime, graph, **kwargs)
     monkeypatch.setattr(ExecutionRuntime, "run", observe)
     _, store, _, plan, receipt = execute(tmp_path / "new", x, expression=expression,
@@ -47,4 +47,4 @@ def test_6488_sessions_every203_block_all_ten_ids_bits_and_truthful_runtime_call
             old.read(identity).panel.collect(dense=False, include_traces=True))
         # External/membership inputs keep the exact original 203 calls.
         if node.operator.endswith("project_domain"):
-            assert future.count(node.node_id) == calls.count(node.node_id) == 203
+            assert sum(node.node_id in call for call in future) == sum(node.node_id in call for call in calls) == 203

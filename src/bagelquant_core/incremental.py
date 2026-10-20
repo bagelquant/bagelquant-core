@@ -8,6 +8,7 @@ Unbounded/custom contracts conservatively replay their required full history.
 """
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from datetime import date, timedelta
 from dataclasses import replace
 from contextlib import ExitStack, contextmanager
@@ -155,12 +156,16 @@ def _numerical_read_start(domain: Domain, output_start: date, end: date, history
 _EXACT_WINDOW_OPERATORS = frozenset((
     'bagelquant_core.operator.basic.pct_change',
     'bagelquant_core.operator.rolling_stats.smooth',
+    # Calendar-key shifting has no floating accumulation to restart. Retain
+    # canonical proof halos while narrowing only the numerical input window.
+    'bagelquant_core.operator.temporal.lag',
 ))
 
 
 def _finite_time_index_reservation(domain, history, operator, limits: ResourceLimits):
     return _FiniteTimeIndexLease(domain, history, limits,
-        eligible=operator in _EXACT_WINDOW_OPERATORS, canonical_sessions=CANONICAL_SESSIONS)
+        eligible=operator in _EXACT_WINDOW_OPERATORS and operator != 'bagelquant_core.operator.temporal.lag',
+        canonical_sessions=CANONICAL_SESSIONS)
 
 
 def scoped_domain(domain, start, end, *, identity=None):
@@ -194,21 +199,33 @@ def _parent_window(parent, value, start, end, *, input_window_loader, stored_par
     def remember(first, last):
         return preparation.remember("parent_slab", (*source_key, first, last),
             lambda: collect(first, last), lambda frame: 2 * frame.estimated_size(), check_canceled=check_canceled)
-    own = scoped_domain(value.domain, start, end)
+    preparation_start = start
+    if stored_parent:
+        calendar = value.domain.times.to_list()
+        first, last = bisect_left(calendar, start), bisect_right(calendar, end) - 1
+        if first > last:
+            raise ValueError("calendar must contain at least one time")
+        first = first // CANONICAL_SESSIONS * CANONICAL_SESSIONS
+        preparation_start = calendar[first]
+    # Charge the complete historical prefix before admitting aligned slabs.
+    # The numerical window and external/bulk reads keep their original bounds.
+    own = scoped_domain(value.domain, preparation_start, end)
     estimate = own.size * (40 + 8 * len(value.trace_columns))
-    if not stored_parent:
-        return remember(start, end) if estimate <= preparation.maximum_bytes // 2 else collect(start, end)
     if estimate > preparation.maximum_bytes // 2:
+        preparation.counts["parent_window_bulk_bypasses"] += 1
+        preparation.counts["parent_window_bulk_estimated_bytes"] += estimate
         return collect(start, end)
-    calendar = value.domain.times.to_list()
-    first = calendar.index(own.times.min())
-    last = calendar.index(own.times.max())
+    if not stored_parent:
+        return remember(start, end)
     slabs = []
-    for origin in range(first // CANONICAL_SESSIONS * CANONICAL_SESSIONS, last + 1, CANONICAL_SESSIONS):
-        lower = calendar[max(first, origin)]
+    for origin in range(first, last + 1, CANONICAL_SESSIONS):
+        lower = calendar[origin]
         upper = calendar[min(last, origin + CANONICAL_SESSIONS - 1)]
         slabs.append(remember(lower, upper))
-    return pl.concat(slabs).sort("time", "asset_id")
+    frame = pl.concat(slabs)
+    if preparation_start < start:
+        frame = frame.filter(pl.col("time") >= start)
+    return frame.sort("time", "asset_id")
 
 
 def _calendar_sessions(calendar, start, end):
@@ -435,6 +452,11 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         if policy["history_observations"] == 0:
             return first
         if node.operator in _EXACT_WINDOW_OPERATORS:
+            if node.operator == 'bagelquant_core.operator.temporal.lag':
+                # Runtime lowers lag by keys on the complete parent calendar,
+                # including dates without member observations. Earlier sparse
+                # rows cannot shift into this output interval.
+                return calendar[max(0, calendar.index(first) - policy["history_observations"])]
             index = None if _time_index_lease is None else _time_index_lease.index
             return (_numerical_read_start(domain, first, last, policy["history_observations"])
                 if index is None else index.numerical_read_start(first, last, policy["history_observations"]))

@@ -558,7 +558,9 @@ def test_ten_node_6488_session_chain_all_block_ids_and_bits(tmp_path, monkeypatc
     results = []
     for name, disabled in (("original", True), ("view", False)):
         graph, store, _ = global_graph(tmp_path / name, expression)
-        plan = graph.plan_update({"main": {"x": x, "y": y, "members": members}}, through=x.domain.times.max())
+        durable = [node.node_id for node in graph.logical_spec().nodes if node.node_type == "operator"]
+        plan = graph.plan_update({"main": {"x": x, "y": y, "members": members}}, through=x.domain.times.max(),
+            persist_nodes=durable)
         with original_path(monkeypatch) if disabled else context_noop():
             saved = finish(plan, limits=LIMITS)
         assert len(saved["results"]["main"]) == 10

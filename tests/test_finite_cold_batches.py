@@ -143,7 +143,11 @@ def execute(tmp_path, x, *, expression=None, sources=None, limits=LIMITS):
         token = values[name].interval_identity(first, last)
         assert token is not None
         return token
-    plan = graph.plan_update({"main": values}, through=x.domain.times.max(), input_proof=proof)
+    # These tests isolate finite batching; region fusion has its own acceptance.
+    # Preserve the same explicit durable boundaries in both comparison arms.
+    durable = [node.node_id for node in graph.logical_spec().nodes if node.node_type == "operator"]
+    plan = graph.plan_update({"main": values}, through=x.domain.times.max(), input_proof=proof,
+        persist_nodes=durable)
     receipt = finish(plan, limits=limits)
     return graph, store, root, plan, receipt
 
@@ -156,8 +160,9 @@ def observe(monkeypatch):
         controllers.append(value)
         return value
     def runtime(value, graph, **kwargs):
-        node = graph._single_output()
-        calls.append((node.logical_id, len(node.domain.times)))
+        outputs = set(graph.logical_spec().outputs.values())
+        calls.append({node.logical_id: len(node.domain.times) for node in graph.nodes
+            if node.logical_id in outputs})
         return run(value, graph, **kwargs)
     monkeypatch.setattr(incremental, "_ColdFiniteBatches", controller)
     monkeypatch.setattr(ExecutionRuntime, "run", runtime)
@@ -195,7 +200,7 @@ def test_cold_bits_domains_traces_and_every_canonical_receipt_match(tmp_path, mo
     external = {node.node_id for node in plan.spec.nodes if node.node_type == "operator"
         and set(node.inputs) <= inputs}
     assert len(external) == 1
-    assert all(sum(node == first for node, _ in future_calls) == (count + 31) // 32 for first in external)
+    assert all(sum(first in call for call in future_calls) == (count + 31) // 32 for first in external)
     assert all(value._store is None and not value._schemas for value in controllers)
 
 
@@ -269,8 +274,10 @@ def test_schema_P_remains_reserved_through_single_block_tail_and_closes_before_r
     holders = [controller for controller in controllers if controller.schema_reads]
     assert len(holders) == 1
     assert_plain_store_read_delegation(entries, requests)
+    # Preparation retains canonical slabs even when the kernel coalesces them.
     assert [(entry["start"], entry["end"]) for entry in requests] == [
-        (x.domain.times[0], x.domain.times[255]), (x.domain.times[256], x.domain.times[256])]
+        (x.domain.times[first], x.domain.times[min(first + 31, 256)])
+        for first in range(0, 257, 32)]
     assert all(entry["limits"].memory_target_mib <= holders[0].planning_limits.memory_target_mib
         for entry in entries)
     assert len(closes) == 1 and requests[-1]["limits"] == closes[0] == holders[0].planning_limits
@@ -290,7 +297,8 @@ def test_unsupported_admission_uses_original_before_body_and_no_new_footer(tmp_p
     if kind == "version":
         monkeypatch.setattr(pl, "__version__", "1.41.2")
     elif kind == "budget":
-        limits = replace(LIMITS, memory_target_mib=17)
+        # Leave insufficient scratch after preparation has debited the cache.
+        limits = replace(LIMITS, memory_target_mib=4, cache_mib=3)
     elif kind == "rows":
         limits = replace(LIMITS, batch_rows=1)
     elif kind == "missing_index":
@@ -604,5 +612,6 @@ def test_unsupported_schema_preflight_returns_original_before_any_batch_body(tmp
     assert [(entry["start"], entry["end"]) for entry in requests] == [
         (x.domain.times[start], x.domain.times[min(start + 31, 95)])
         for start in range(0, 96, 32)]
-    assert all(entry["limits"] == LIMITS for entry in entries)
+    numerical_limits = replace(LIMITS, cache_mib=LIMITS.cache_mib - LIMITS.cache_mib // 4)
+    assert all(entry["limits"] == numerical_limits for entry in entries)
     assert plan.resource_usage["main"][root]["computed_blocks"] == 3

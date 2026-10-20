@@ -1,5 +1,6 @@
 """Finite consumers acquire published parents through bounded typed reads."""
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 import gc
 import sqlite3
@@ -20,6 +21,8 @@ from bagelquant_core.operator import (
     negate as _negate, operator, pct_change as _pct_change, rolling_mean as _rolling_mean,
 )
 from bagelquant_core.resources import ResourceLimits, active_resource_limits, resource_limits
+from bagelquant_core.incremental import _parent_window
+from bagelquant_core.preparation import ExecutionPreparation, preparation_scope
 from bagelquant_core.update import UpdatePlan
 from test_global_graph import finish, global_graph
 
@@ -107,8 +110,15 @@ def test_multiblock_values_and_nonempty_traces_equal_legacy(tmp_path, monkeypatc
     limits = ResourceLimits(total_threads=1, parallel_nodes=1, memory_target_mib=128, cache_mib=16)
     plan = graph.plan_update({"main": {"x": x}}, through=x.domain.times.max(), **options())
     after = finish(plan, limits=limits)
-    assert len(calls) == 4
-    assert all(c[1] is not None and c[2] is not None and c[3] is True and c[4] == limits for c in calls)
+    # Shared preparation reads canonical slabs, including clipped overlap slabs.
+    # It must not repeatedly decode an identical window or read an entire prefix.
+    windows = [(call[1], call[2]) for call in calls]
+    assert 4 <= len(calls) <= 7
+    assert len(set(windows)) == len(windows)
+    assert all(len(x.domain.times.filter(x.domain.times.is_between(first, last))) <= 32
+        for first, last in windows)
+    numerical_limits = replace(limits, cache_mib=limits.cache_mib - limits.cache_mib // 4)
+    assert all(c[1] is not None and c[2] is not None and c[3] is True and c[4] == numerical_limits for c in calls)
     assert calls[-1][2] == x.domain.times.max()
     assert {c[0] for c in calls} == set(plan.results["main"].values()) - {after["results"]["main"][root]}
     actual, expected = values(store, after, root), values(old, before, old_root)
@@ -374,3 +384,116 @@ def test_scalar_float_bits_and_datetime_trace_survive_bounded_parent_acquisition
     assert actual.schema["observed_at"] == pl.Datetime("us")
     assert np.array_equal(actual["value"].is_null().to_numpy(), before["value"].is_null().to_numpy())
     assert actual["value"].drop_nulls().to_numpy().tobytes() == before["value"].drop_nulls().to_numpy().tobytes()
+
+
+@pytest.mark.parametrize("case", ["static", "reentry", "empty"])
+@pytest.mark.parametrize("kind", ["numeric", "category"])
+def test_unaligned_stored_windows_share_complete_historical_slabs(case, kind):
+    value = source(case=case, kind=kind, datetime_trace=True)
+    days = value.domain.times.to_list()
+    original = value.collect(dense=False, include_traces=True)
+    preparation = ExecutionPreparation(1024 * 1024)
+    reads = []
+    def load(_parent, bound, first, last):
+        assert bound is value
+        reads.append((first, last))
+        return value
+    with preparation_scope(preparation):
+        for first, last in ((16, 63), (48, 95), (80, 100)):
+            actual = _parent_window("parent", value, days[first], days[last],
+                input_window_loader=load, stored_parent=True, check_canceled=None)
+            expected = original.filter(pl.col("time").is_between(days[first], days[last]))
+            assert_frame_equal(actual, expected, check_exact=True)
+            if kind == "numeric":
+                assert actual["value"].drop_nulls().to_numpy().tobytes() == expected["value"].drop_nulls().to_numpy().tobytes()
+        assert reads == [(days[0], days[31]), (days[32], days[63]),
+                         (days[64], days[95]), (days[96], days[100])]
+        assert preparation.counts["parent_slab_builds"] == 4
+        assert preparation.counts["parent_slab_hits"] == 2
+        assert preparation.bytes <= preparation.maximum_bytes
+
+
+@pytest.mark.parametrize("stored,budget", [(False, 1024 * 1024), (True, 0), (True, 4096)])
+def test_unaligned_external_or_nonadmitted_windows_keep_exact_reads(stored, budget):
+    value = source(case="static")
+    days = value.domain.times.to_list()
+    preparation = ExecutionPreparation(budget)
+    reads = []
+    def load(_parent, _bound, first, last):
+        reads.append((first, last))
+        return value
+    with preparation_scope(preparation):
+        # A one-session request fits 4096 bytes; its complete 32-session
+        # historical slab does not. Admission must include that extra prefix.
+        actual = _parent_window("parent", value, days[31], days[31],
+            input_window_loader=load, stored_parent=stored, check_canceled=None)
+        assert reads == [(days[31], days[31])]
+        expected = value.collect(dense=False, include_traces=True).filter(pl.col("time") == days[31])
+        assert_frame_equal(actual, expected, check_exact=True)
+        assert preparation.bytes <= budget
+        if stored and budget:
+            assert preparation.counts["parent_window_bulk_bypasses"] == 1
+            assert preparation.counts["parent_slab_builds"] == 0
+
+
+def test_stored_slab_alignment_never_extends_the_requested_end():
+    value = source()
+    days = value.domain.times.to_list()
+    reads = []
+    def load(_parent, _bound, first, last):
+        reads.append((first, last))
+        return value
+    with preparation_scope(ExecutionPreparation(1024 * 1024)):
+        actual = _parent_window("parent", value, days[17], days[36],
+            input_window_loader=load, stored_parent=True, check_canceled=None)
+    assert reads == [(days[0], days[31]), (days[32], days[36])]
+    assert_frame_equal(actual, value.collect(dense=False, include_traces=True).filter(
+        pl.col("time").is_between(days[17], days[36])), check_exact=True)
+
+
+def test_dense_historical_prefix_is_charged_before_a_sparse_stored_request():
+    days = [date(2024, 1, 1) + timedelta(days=index) for index in range(32)]
+    rows = [(day, f"A{asset}", float(asset), day) for day in days[:-1] for asset in range(20)]
+    rows.append((days[-1], "A0", 0.0, days[-1]))
+    frame = pl.DataFrame(rows, schema={"time": pl.Date, "asset_id": pl.String,
+        "value": pl.Float64, "available_date": pl.Date}, orient="row")
+    domain = Domain(calendar=days, universe=frame.select("time", "asset_id").with_columns(
+        pl.lit(True).alias("active")))
+    value = Node.from_domain(frame, domain, source_key="x", trace_columns=("available_date",))
+    preparation = ExecutionPreparation(8192)
+    reads = []
+    def load(_parent, _bound, first, last):
+        reads.append((first, last))
+        return value
+    with preparation_scope(preparation):
+        actual = _parent_window("parent", value, days[-1], days[-1],
+            input_window_loader=load, stored_parent=True, check_canceled=None)
+    assert reads == [(days[-1], days[-1])]
+    assert actual.height == 1
+    assert preparation.counts["parent_window_bulk_bypasses"] == 1
+    assert preparation.counts["parent_window_bulk_estimated_bytes"] == domain.size * 48
+    assert preparation.counts["parent_slab_builds"] == 0
+    assert preparation.bytes <= preparation.maximum_bytes
+
+
+def test_stored_window_uses_actual_sessions_for_noncalendar_endpoints():
+    value = source()
+    days = value.domain.times.to_list()
+    start, end = days[4] + timedelta(days=1), days[34] + timedelta(days=1)
+    assert start not in days and end not in days
+    reads = []
+    def load(_parent, _bound, first, last):
+        reads.append((first, last))
+        return value
+    with preparation_scope(ExecutionPreparation(1024 * 1024)):
+        actual = _parent_window("parent", value, start, end,
+            input_window_loader=load, stored_parent=True, check_canceled=None)
+        assert reads == [(days[0], days[31]), (days[32], days[34])]
+        assert_frame_equal(actual, value.collect(dense=False, include_traces=True).filter(
+            pl.col("time").is_between(start, end)), check_exact=True)
+        for first, last in ((start, start), (days[-1] + timedelta(days=1), days[-1] + timedelta(days=2)),
+                            (days[2], days[1])):
+            with pytest.raises(ValueError, match="calendar must contain at least one time"):
+                _parent_window("parent", value, first, last,
+                    input_window_loader=load, stored_parent=True, check_canceled=None)
+        assert len(reads) == 2

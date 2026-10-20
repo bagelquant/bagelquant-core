@@ -90,3 +90,9 @@ In an integrated checkout, read workspace `.ai/rules/wiki.md`; required missing
 wiki access blocks task completion. Keep package docs and generated references
 here, and reference them from wiki knowledge/workflows without duplicating API
 authority. Record actual authors when maintaining wiki content.
+
+Public filesystem accounting belongs to Core's `storage_usage` module and
+`CoreStore.storage_usage(within_root=...)`; consumers compose stat inventories
+without walking private artifacts. Preserve logical/allocated bytes, hidden and
+unknown files, symlink-object semantics and deterministic inode deduplication.
+This passive API never initializes storage or reads numerical bodies.

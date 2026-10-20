@@ -78,6 +78,11 @@ bulk read path. Per-key single-flight work never holds a global metadata lock
 during collection. Publication expires cached values; no missing proof or mutable
 revision guard is cached. Generic rolling canonical warm starts and resets stay
 unchanged even when an exited asset makes them expensive.
+For admitted stored parents, align slab starts to the original 32-session
+calendar boundaries and include the extra historical prefix in admission.
+Never extend a slab beyond the requested end. Filter retained prefix rows out
+before rebinding the exact numerical window. External, zero-cache and bulk
+reads retain their original bounds; alignment changes no proof or kernel reset.
 
 `CoreStore.publication_context` initializes once per finite write operation and
 expires on exit. Every writer retains schema/revision/publication checks, and a
@@ -155,6 +160,12 @@ membership coordinates, including nulls, and preserve old observations needed
 by reentering assets. Permanently exited assets absent from the missing output
 must not extend such a window. Other finite rolling kernels may depend on
 earlier floating-point accumulator state and retain their canonical warm read.
+Built-in `lag` uses a calendar-only numerical window because its runtime shifts
+keys on the complete parent calendar, including empty dates. Read `periods`
+preceding calendar sessions; older admitted observations cannot contribute to
+this output interval, even after sparse reentry. No membership-query index is
+needed. Keep canonical proofs, Date traces and sparse missing-value behavior;
+do not apply this rule to generic rolling or recursive state.
 For dynamic exact-window finite execution, an operation-local coordinate index
 may answer the same canonical and numerical date queries from the existing
 asset/time sort. Admit owned date, offset and calendar buffers against the

@@ -93,6 +93,12 @@ class CoreStore:
     survive interruption; incomplete writes never become readable receipts.
     """
 
+    def storage_usage(self, *, within_root: Path | None = None) -> dict[str, Any]:
+        """Inventory owned files and allocation without initializing storage."""
+        from .storage_usage import store_usage
+
+        return store_usage(self.meta_path, self.artifact_path, within_root=within_root)
+
     def __init__(self, meta_path: str | Path, artifact_path: str | Path):
         self.meta_path = Path(meta_path).resolve()
         self.artifact_path = Path(artifact_path).resolve()

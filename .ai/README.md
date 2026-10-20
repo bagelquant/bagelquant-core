@@ -38,3 +38,6 @@ Active authored documentation and new AI records use English. Public behavior,
 formula, metric, PIT/data or workflow changes update relevant owner docs and
 private wiki pages in the same task; integrated tasks record wiki impact, page
 UUIDs and verification. Read the verified workspace `.ai/rules/wiki.md`.
+
+For complete storage accounting, use CoreStore.storage_usage and the generic
+file_inventory primitive; see the architecture guide's public filesystem section.

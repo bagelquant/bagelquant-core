@@ -380,3 +380,16 @@ other publications; new missing scope proofs remain an explicit execution block.
 Monthly hashes cannot replace a different block/halo/Domain scope or be joined
 into a new canonical hash. Scope planning is not live acceptance or authority to
 perform maintenance.
+
+## Public filesystem accounting
+
+`CoreStore.storage_usage(within_root=None)` inventories the metadata database,
+WAL/SHM/journal sidecars and complete artifact directory, including hidden and
+unknown files. It returns owner paths, per-entry logical/allocated bytes, kind,
+device/inode and unique-inode totals. `within_root` limits traversal to selected
+root paths. The standalone `bagelquant_core.storage_usage.file_inventory` primitive
+uses lstat and never follows symlink entries or reads file bodies. Directories
+contribute allocation but no logical file bytes. Consumers merge owner inventories
+by inode and count hard links once, using deterministic lexical path attribution.
+Missing entries can disappear during a sampled scan; permission and other errors
+propagate. No initialization, recovery, audit or numerical work occurs.

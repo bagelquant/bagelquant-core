@@ -238,8 +238,12 @@ def _finite_history(operation: Callable[..., Any], parameters: Mapping[str, Any]
         return _SMOOTH_WINDOW - 1
     if name in {"lag", "diff", "pct_change"}:
         return _history_parameter(parameters.get("periods", 1))
-    if name == "remove_repeated":
+    if name == "remove_repeated" or (module == "bagelquant_core.operator.streaks"
+            and name in {"diff_from_last_change", "pct_change_from_last_change"}):
         return 1
+    if module == "bagelquant_core.operator.missing" and name == "ffill":
+        limit = parameters.get("limit")
+        return limit if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0 else None
     windows = {"rolling_mean", "rolling_std", "rolling_min", "rolling_max", "rolling_sum",
         "rolling_var", "rolling_median", "rolling_skew", "rolling_kurt", "rolling_percentile",
         "rolling_rank", "rolling_zscore", "rolling_ewm_fw", "date_age_constraint",

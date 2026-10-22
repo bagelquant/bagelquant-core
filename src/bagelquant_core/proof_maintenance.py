@@ -52,13 +52,18 @@ PLAN_DDL = """CREATE TABLE IF NOT EXISTS input_proof_rebinding_plans(
  identity TEXT PRIMARY KEY, plan_json TEXT NOT NULL)"""
 
 
-def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), require_admission=True):
+def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), require_admission=True,
+        memo=None, dependencies=None):
     """Validate immutable admission and its complete retained authority chain."""
+    if plan.get("mode") == "finite_contract.v1":
+        from .finite_contract_maintenance import verify_maintenance
+        return verify_maintenance(store_type, connection, plan, key, policy,
+            visited=visited, memo=memo, dependencies=dependencies)
     from .logical import LogicalNodeSpec
     if plan.get("mode") in {"cutoff_normalization.v1", "cutoff_tail_repair.v1"}:
         from .cutoff_proof import verify_normalization
         return verify_normalization(store_type, connection, plan, key, policy,
-            visited=visited, require_admission=require_admission)
+            visited=visited, require_admission=require_admission, memo=memo, dependencies=dependencies)
     try:
         body = {name: value for name, value in plan.items() if name != "identity"}
         if plan.get("identity") != hash_mapping(body):
@@ -72,6 +77,8 @@ def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), r
         original_id = plan["original_identity"]
         if original_id in visited or key.identity == original_id:
             raise ValueError("Proof rebinding authority contains a cycle")
+        if dependencies is not None:
+            dependencies.add(original_id)
         row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (original_id,)).fetchone()
         if row is None:
             raise ValueError("Original proof rebinding authority is missing")
@@ -80,7 +87,7 @@ def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), r
         if original.get("proof_rebinding") is not None:
             verify_rebinding(store_type, connection, original["proof_rebinding"],
                 MaterializationKey.from_dict(original["key"]), original["execution_policy"],
-                visited=(*visited, original_id))
+                visited=(*visited, original_id), memo=memo, dependencies=dependencies)
         original_policy = original["execution_policy"]
         numerical_policy = {name: value for name, value in original_policy.items() if name != "parameter_bindings"}
         if (original["content_identity"] != plan["original_content"] or original["key"] != plan["original_key"]

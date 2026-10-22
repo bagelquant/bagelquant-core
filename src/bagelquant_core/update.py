@@ -665,9 +665,10 @@ class UpdatePlan:
             for context, values in self.results.items():
                 if any(identity != self.keys[context][node].identity for node, identity in values.items()):
                     raise RevisionConflict("update result identities changed")
-            receipt = self.store.commit_update(self.graph.graph_id, revision=self.state["revision"],
-                state_revision=self.state["state_revision"], expected_previous=self.state["current_update"],
-                results=self.results, through=self.through, mode=self.mode, request_id=self.request_id,
-                coverage=self.logical_coverage)
+            with preparation_scope(self._preparation):
+                receipt = self.store.commit_update(self.graph.graph_id, revision=self.state["revision"],
+                    state_revision=self.state["state_revision"], expected_previous=self.state["current_update"],
+                    results=self.results, through=self.through, mode=self.mode, request_id=self.request_id,
+                    coverage=self.logical_coverage)
             self._preparation.clear()
             return receipt

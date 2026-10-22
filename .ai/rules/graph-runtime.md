@@ -43,10 +43,13 @@ filter these records before reading selected manifests/checkpoints; exact public
 update bodies and identities are reconstructed from the registered relations.
 Finite read contexts admit bounded thread-safe immutable manifest/index memos;
 they expire on exit and never cache revision fences or missing optional indexes.
-Explicit audits bypass metadata memos and check candidate/original bindings.
+Explicit audits start fresh metadata verification and check candidate/original bindings.
 Successful composed-source binding checks share that same finite byte budget;
 their keys bind immutable original content. Failed checks are never retained.
-Closing publication transactions and explicit full audits bypass these successes.
+Closing publication transactions and explicit full audits never borrow read-context
+successes. Their fresh bounded scopes deduplicate shared admission/ancestry within
+one transaction, using the existing reserve and expiring before that scope ends.
+Cached ancestry includes proof-only parents; cycle checks precede cache hits.
 Older schemas are incompatible; there is no migration reader or implicit reconstruction.
 
 Deterministic zero-history lazy built-ins form bounded regions. Requested roots,
@@ -76,7 +79,14 @@ Each execution restricts that operation's reserve to its actual worker share;
 a smaller admission cannot later be enlarged. Eviction/zero cache retain the
 bulk read path. Per-key single-flight work never holds a global metadata lock
 during collection. Publication expires cached values; no missing proof or mutable
-revision guard is cached. Generic rolling canonical warm starts and resets stay
+revision guard is cached. Small immutable proofs and exact window signatures are
+protected from large coordinate/value entries within the same total reserve.
+Large raw metadata bodies cannot evict compact authenticated owner bindings,
+admissions or ancestry. Interval proofs reuse the validated owner/content binding
+without re-decoding a complete historical manifest. Update promotion retains
+this reserve until its fresh closing verification completes, then expires it.
+Signature keys weakly retain the actual Domain identity, never an opaque signature
+or a source's coordinate allocation. Generic rolling canonical warm starts and resets stay
 unchanged even when an exited asset makes them expensive.
 For admitted stored parents, align slab starts to the original 32-session
 calendar boundaries and include the extra historical prefix in admission.
@@ -330,6 +340,14 @@ in the same registered context and numerical implementation unless changed
 relevant parameters are proven. Missing completion authority or unknown old
 parameter bindings require explicit recovery/maintenance before any input load
 or kernel. Independent new contexts retain initialization semantics.
+Adjacent change operators declare history=1 and bounded ffill declares its
+nonnegative limit; unbounded/future fill stays unsupported. Explicit
+`finite_contract.v1` maintenance authenticates an original generic key/context,
+completed update, source projections and typed indexed coordinates, then
+publishes only canonical references to original values. Its aggregate retains
+every block and original indexes; same-context completed ancestry and current
+block proofs remain required. Never invoke this certification from ordinary
+updates or manufacture transient-region originals. Preserve all old receipts.
 `top_n`, `equal_weight`, public Identity and EqualWeight Prediction factories
 declare pointwise history=0; their append output/read interval contains only
 new sessions. The five supervised Prediction factories declare independent-period

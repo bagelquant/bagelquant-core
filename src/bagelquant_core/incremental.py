@@ -155,6 +155,9 @@ def _numerical_read_start(domain: Domain, output_start: date, end: date, history
 
 _EXACT_WINDOW_OPERATORS = frozenset((
     'bagelquant_core.operator.basic.pct_change',
+    'bagelquant_core.operator.streaks.diff_from_last_change',
+    'bagelquant_core.operator.streaks.pct_change_from_last_change',
+    'bagelquant_core.operator.missing.ffill',
     'bagelquant_core.operator.rolling_stats.smooth',
     # Calendar-key shifting has no floating accumulation to restart. Retain
     # canonical proof halos while narrowing only the numerical input window.
@@ -404,6 +407,9 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         if same_policy(saved["execution_policy"] or {})
         and ("parameter_bindings" not in saved["execution_policy"]
              or saved["execution_policy"]["parameter_bindings"] == relevant_parameters)]
+    if not matching_prefixes and any(not same_policy(saved["execution_policy"] or {}) for saved in completed_prefixes):
+        from .finite_contract_maintenance import maintained_prefixes
+        matching_prefixes = maintained_prefixes(store, partials, completed_prefixes, publication_policy)
     # An obsolete receipt is retained historical evidence, not a veto over an
     # independently completed current-policy authority. The latter still needs
     # matching block/parameter/input proofs below before any kernel may run.
@@ -436,10 +442,10 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                         raise ValueError("Incremental update needs interval evidence for completed inputs; "
                             "run explicit owner index maintenance or supply input_proof before updating")
                     proofs.append(hash_mapping({"version": FINITE_EXECUTION_POLICY, "content": token,
-                        "domain": scoped_domain(value.domain, warm, prior_end).signature,
+                        "domain": value.domain._window_signature(warm, prior_end),
                         "type": value.value_type.value, "traces": value.trace_columns}))
-                own = scoped_domain(domain, calendar[begin], prior_end)
-                if any(MaterializationKey(node_id, key.implementation_id, tuple(proofs), own.signature, context).identity
+                signature = domain._window_signature(calendar[begin], prior_end)
+                if any(MaterializationKey(node_id, key.implementation_id, tuple(proofs), signature, context).identity
                         == candidate["identity"] for context in contexts(str(calendar[begin]), str(prior_end))):
                     reusable = True
                     break
@@ -467,10 +473,10 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         warm = halos[begin]
         proofs = []
         known = True
-        own = output_domain = value = None
+        output_domain = value = None
         try:
             for parent, value in direct.items():
-                own = scoped_domain(value.domain, warm, last)
+                signature = value.domain._window_signature(warm, last)
                 token = None if input_proof is None else input_proof(parent, value, warm, last)
                 known &= token is not None
                 if token is None and require_interval_proof:
@@ -478,14 +484,14 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                         "run explicit owner index maintenance or supply input_proof before updating")
                 proof = hash_mapping({"version": FINITE_EXECUTION_POLICY,
                     "content": token or {"source": value.identity, "start": str(warm), "end": str(last)},
-                    "domain": own.signature, "type": value.value_type.value, "traces": value.trace_columns})
+                    "domain": signature, "type": value.value_type.value, "traces": value.trace_columns})
                 proofs.append(proof)
             output_domain = scoped_domain(domain, calendar[begin], last)
             block_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature,
                 contexts(str(calendar[begin]), str(last))[0])
             return last, warm, proofs, output_domain, block_key, known
         finally:
-            own = output_domain = value = proofs = None
+            output_domain = value = proofs = None
 
     def load_scoped(proofs, first, last, *, output_start, validate=None):
         from .finite_work import admit_finite_payload, finite_payload_bytes
@@ -551,13 +557,13 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                         continue
                     prior_proofs = []
                     for parent, value in direct.items():
-                        own = scoped_domain(value.domain, warm, prior_end)
+                        signature = value.domain._window_signature(warm, prior_end)
                         token = None if input_proof is None else input_proof(parent, value, warm, prior_end)
                         if token is None and require_interval_proof:
                             raise ValueError("Incremental prefix reuse needs explicit interval-index maintenance")
                         prior_proofs.append(hash_mapping({"version": FINITE_EXECUTION_POLICY,
                             "content": token or {"source": value.identity, "start": str(warm), "end": str(prior_end)},
-                            "domain": own.signature, "type": value.value_type.value, "traces": value.trace_columns}))
+                            "domain": signature, "type": value.value_type.value, "traces": value.trace_columns}))
                     prior_domain = scoped_domain(domain, output_start, prior_end)
                     prior_keys = [MaterializationKey(node_id, key.implementation_id, tuple(prior_proofs), prior_domain.signature,
                         context) for context in contexts(str(output_start), str(prior_end))]

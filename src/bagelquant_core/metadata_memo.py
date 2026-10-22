@@ -1,7 +1,17 @@
 """Bounded immutable metadata reuse within one explicitly admitted operation."""
 from collections import OrderedDict
+from contextlib import contextmanager
 from copy import deepcopy
 from threading import RLock
+
+
+def metadata_priority(key):
+    """Keep compact authenticated authority ahead of large metadata bodies."""
+    while isinstance(key, tuple) and len(key) == 2 and type(key[0]) is object:
+        key = key[1]  # fresh transaction/audit scope
+    return 2 if isinstance(key, tuple) and key and key[0] in {
+        "manifest_authority", "source_bindings", "finite_contract_plan", "finite_contract_authority", "finite_contract_blocks"
+    } else 1
 
 
 class MetadataMemo:
@@ -32,7 +42,12 @@ class MetadataMemo:
             if previous is not None:
                 self.bytes -= previous[1]
             while self.values and self.bytes + charge > self.maximum_bytes:
-                _, (_, removed) = self.values.popitem(last=False)
+                candidate = next((item for item in self.values if metadata_priority(item) == 1), None)
+                if candidate is None:
+                    if metadata_priority(key) == 1:
+                        return
+                    candidate = next(iter(self.values))
+                _, removed = self.values.pop(candidate)
                 self.bytes -= removed
             self.values[key] = (deepcopy(value), charge)
             self.bytes += charge
@@ -42,3 +57,35 @@ class MetadataMemo:
             self.closed = True
             self.values.clear()
             self.bytes = 0
+
+    def discard_scope(self, scope):
+        with self.lock:
+            for key in list(self.values):
+                if isinstance(key, tuple) and key[0] is scope:
+                    self.bytes -= self.values.pop(key)[1]
+
+
+class _MetadataScope:
+    def __init__(self, memo, scope):
+        self.memo, self.scope = memo, scope
+
+    def get(self, key, *, copy_value=True):
+        return self.memo.get((self.scope, key), copy_value=copy_value)
+
+    def put(self, key, value, encoded_bytes):
+        self.memo.put((self.scope, key), value, encoded_bytes)
+
+
+@contextmanager
+def fresh_metadata_scope(memo):
+    """Deduplicate a fresh verification without borrowing earlier successes.
+
+    The view debits the caller's existing reserve and expires before a closing
+    transaction ends. A zero/absent reserve retains the uncached verifier.
+    """
+    scope = object()
+    try:
+        yield None if memo is None else _MetadataScope(memo, scope)
+    finally:
+        if memo is not None:
+            memo.discard_scope(scope)

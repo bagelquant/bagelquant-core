@@ -28,6 +28,14 @@ thread-safe collector. Revision guards always read fresh state; explicit audits
 read original metadata and numerical evidence. A separate finite preparation cache
 shares actual Domain windows, halo schedules, successful proofs and fitting parent
 slabs within an admitted update, then expires after publication.
+Immutable admission bodies and their complete original ancestry share that
+bounded metadata reserve. Large coordinate/value windows cannot flush the small
+proof working set; large manifest/index bodies also yield to compact authority.
+Interval reads retain authenticated owner/content bindings instead of repeatedly
+parsing the complete historical manifest. Exact window signatures survive coordinate eviction without
+retaining the source Domain. Publication and explicit audits start fresh bounded
+verification scopes, deduplicating shared authorities only within their own
+transaction. They never adopt earlier reader successes or cache missing proof.
 Use a fresh store for schema 4; older stores, including schema 3, are rejected
 without a migration/compatibility reader.
 
@@ -258,6 +266,33 @@ CoreStore owns immutable manifests and committed graph/update receipts. `describ
 
 ## Explicit input proof format maintenance
 
+Adjacent `diff_from_last_change` and `pct_change_from_last_change` need one
+preceding admitted observation. `ffill(limit=N)` needs N, including zero;
+unbounded forward fill and backward fill have no finite causal contract.
+These bounds cover both values and traces, with membership-aware halos.
+Normal updates use canonical finite blocks and compute only new or affected
+outputs. The formulas and implementation identities are unchanged.
+
+Results originally completed without these contracts require explicit
+`mode="finite_contract.v1"` on the admission/apply API below. Supply the exact
+`original_update`, `context_id`, `original_context`, direct `original_parents`,
+`original_projection`, and content-addressed `report_id`/`report_digest`.
+The projection returns `ConsumedInputEvidence` whose content token is the raw
+external `input_proof` token for the original Source. Stored parents use Core's
+registered interval evidence. Admission must reproduce the original generic
+key, actual indexed Domain, implementation, cutoff and parameter context.
+It supports only adjacent-change and bounded-forward-fill operators.
+
+Application publishes reference-only canonical blocks and an aggregate retaining
+all those blocks. It runs no kernel, rewrites no historical values and changes
+no graph completion or application Snapshot. Ordinary continuation accepts that
+aggregate only for the exact retained graph/context completion and still proves
+the current consumed block inputs. Missing authority or indexes block before
+calculation. Interrupted maintenance reuses its completed aliases; it cannot
+authorize continuation until the complete aggregate exists. Neither startup nor
+normal planning performs this certification automatically.
+
+In its default proof-format mode,
 `CoreStore.plan_input_proof_rebind(spec, identity, **source_bindings)` validates
 one original canonical finite block against frozen source-owner projections and
 registers an immutable admission record. Despite its planning name, this is an
@@ -316,8 +351,8 @@ even when callers supply equal opaque Domain identities.
 hit and in the publication transaction, then references original numerical
 partitions. It does not execute historical kernels or rehash original files.
 Original receipts, numerical keys/context, parameters and execution policy remain
-unchanged; the replacement changes only proven input identities and may record
-verified relevant parameter bindings. Reads and explicit audits validate the
+unchanged. In the default proof-format mode, the replacement changes only proven
+input identities and may record verified relevant parameter bindings. Reads and explicit audits validate the
 entire retained original/admission chain. Missing or altered authority blocks
 reuse; no normal path rebuilds it implicitly. Cancellation before admission
 leaves no positive authority; cancellation afterward may retain planned metadata

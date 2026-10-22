@@ -1,5 +1,12 @@
 # Core AI workflow and rule routes
 
+For an integrated task, validate the workspace as described in AGENTS, then use
+its `.ai/README.md` engineering skill matrix, `docs/ai-system-map.md` and
+`scripts/contracts.py --list`. Select Core owner checks before affected BT/App
+composition. Standalone work follows the local rules/tests below without a
+workspace dependency. Performance/documentation/verification skills route to
+these owner contracts; they do not redefine them.
+
 Always read [development rules](rules/development.md). Then load the rows that
 match the task; rules are authoritative instructions, linked docs explain use.
 Every calculation/update change also reads [Graph and runtime](rules/graph-runtime.md)

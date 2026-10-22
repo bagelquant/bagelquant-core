@@ -324,4 +324,6 @@ def test_empty_dynamic_membership_and_exact_builtin_gate():
     assert incremental._numerical_read_start(domain, dates[510], dates[511], 9) == dates[501]
     assert incremental._EXACT_WINDOW_OPERATORS == {
         "bagelquant_core.operator.basic.pct_change", "bagelquant_core.operator.rolling_stats.smooth",
-        "bagelquant_core.operator.temporal.lag"}
+        "bagelquant_core.operator.temporal.lag", "bagelquant_core.operator.missing.ffill",
+        "bagelquant_core.operator.streaks.diff_from_last_change",
+        "bagelquant_core.operator.streaks.pct_change_from_last_change"}

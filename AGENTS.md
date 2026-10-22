@@ -15,9 +15,13 @@ certificates and logical coverage bound to durable boundaries; never fabricate
 transient artifact IDs. Repeat planning reads flags/seals without numerical values.
 Publish completion after each durable node; interrupted retries retain the frontier.
 Candidates use indexed policy/date headers; only selected receipts are decoded.
-Finite read contexts share bounded immutable metadata; live revision guards stay fresh.
+Finite contexts share bounded immutable proofs; closing checks start fresh and
+deduplicate ancestry within the same reserve. Live revision guards stay fresh.
 Older schemas are rejected without a migration reader.
 Generic causal-version inputs use the same Graph/UpdatePlan/CoreStore path.
+Adjacent change and bounded forward fill declare finite history. Older generic
+results require explicit reference-only certification; ordinary updates never
+perform policy maintenance. See the graph/runtime rules.
 Separate source observation coverage from causal output membership; retain
 bounded version halos, shared reads and original completed output references.
 

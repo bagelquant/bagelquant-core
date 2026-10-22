@@ -250,6 +250,10 @@ class Domain:
     def window(self, start, end) -> "Domain":
         """Select observation coordinates without changing an information cutoff."""
         from .preparation import active_preparation, domain_bytes
+        from weakref import ref
+        preparation = active_preparation()
+        locator = (self, start, end)
+        signature_locator = (ref(self), start, end)
 
         def build():
             dates = self._times.filter(self._times.is_between(start, end))
@@ -269,12 +273,22 @@ class Domain:
             else:
                 window._active_membership = None
                 window._asset_ids = self._asset_ids
-            window._set_signature()
+            window._set_signature(None if preparation is None else preparation.get("domain_signature", signature_locator))
             return window
 
+        if preparation is None:
+            return build()
+        window = preparation.remember("domain_window", locator, build, domain_bytes)
+        preparation.remember("domain_signature", signature_locator, lambda: window.signature, len)
+        return window
+
+    def _window_signature(self, start, end) -> str:
+        """Retain exact coordinate evidence independently of its large window."""
+        from .preparation import active_preparation
+        from weakref import ref
         preparation = active_preparation()
-        return build() if preparation is None else preparation.remember(
-            "domain_window", (self, start, end), build, domain_bytes)
+        signature = None if preparation is None else preparation.get("domain_signature", (ref(self), start, end))
+        return self.window(start, end).signature if signature is None else signature
 
     def equivalent_to(self, other: object) -> bool:
         return isinstance(other, Domain) and self.signature == other.signature

@@ -19,7 +19,7 @@ import uuid
 import polars as pl
 from .inspection import open_metadata_snapshot
 from .artifact_verification import ArtifactVerification
-from .metadata_memo import MetadataMemo
+from .metadata_memo import MetadataMemo, fresh_metadata_scope
 
 from .domain import Domain
 from .hashing import _hash_dataframe_days, hash_mapping
@@ -68,6 +68,11 @@ def _result_content(manifest):
     return {key: _manifest_content(manifest[key]) for key in (
         "key", "value_type", "trace_columns", "trace_identity", "domain", "days", "logical_hash",
         "artifacts", "checkpoint", "training_audits", "execution_policy")}
+
+
+def _value_contract(manifest):
+    return (manifest["node_id"], manifest["key"]["implementation_id"],
+        manifest["value_type"], tuple(manifest["trace_columns"]))
 
 
 def _candidate_header(manifest):
@@ -313,11 +318,7 @@ class CoreStore:
         self._metadata_event("manifest_reads")
         self._metadata_event("manifest_json_bytes", len(row[0].encode()))
         self._verify_metadata(manifest, identity)
-        if manifest.get("proof_rebinding") is not None:
-            with self.read_transaction() as connection:
-                self._verify_proof_rebinding(connection, manifest["proof_rebinding"],
-                    MaterializationKey.from_dict(manifest["key"]), manifest["execution_policy"])
-        if manifest.get("value_sources") or any(isinstance(artifact, Mapping) and "$artifact_concat" in artifact
+        if manifest.get("proof_rebinding") is not None or manifest.get("value_sources") or any(isinstance(artifact, Mapping) and "$artifact_concat" in artifact
                 for artifact in manifest["artifacts"].values()):
             with self.read_transaction() as connection:
                 self._verify_artifact_sources(connection, manifest, memo=memo)
@@ -326,43 +327,71 @@ class CoreStore:
         return manifest
 
     def _verify_artifact_sources(self, connection, manifest, *, visiting=None, memo=None):
+        return self._verify_reference_sources(connection, manifest, visiting=visiting, memo=memo,
+            metadata_event=self._metadata_event)
+
+    @classmethod
+    def _verified_reference_manifest(cls, connection, identity, content_identity, *, memo=None, channel="value"):
+        locator = ("reference_manifest", identity, content_identity)
+        saved = None if memo is None else memo.get(locator, copy_value=False)
+        if saved is None:
+            row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
+            if row is None:
+                raise ValueError(f"original {channel} authority is missing")
+            saved = json.loads(row[0])
+            cls._verify_metadata(saved, identity)
+            if memo is not None:
+                memo.put(locator, saved, len(row[0].encode()))
+        return saved
+
+    @classmethod
+    def _verify_reference_sources(cls, connection, manifest, *, visiting=None, memo=None,
+                                  metadata_event=lambda *_: None):
         visiting = set() if visiting is None else visiting
         identity = manifest["identity"]
         if identity in visiting:
             raise ValueError("cyclic original artifact authority")
         locator = ("source_bindings", identity, manifest["content_identity"])
-        if memo is not None and memo.get(locator, copy_value=False) is not None:
-            self._metadata_event("source_binding_cache_hits")
-            return
-        self._metadata_event("source_binding_checks")
+        authority = None if memo is None else memo.get(locator, copy_value=False)
+        if authority is not None:
+            _, checked = authority
+            if visiting.intersection(checked):
+                raise ValueError("cyclic original artifact authority")
+            metadata_event("source_binding_cache_hits")
+            return checked
+        metadata_event("source_binding_checks")
+        dependencies = {identity}
         visiting.add(identity)
         try:
+            if manifest.get("proof_rebinding") is not None:
+                cls._verify_proof_rebinding(connection, manifest["proof_rebinding"],
+                    MaterializationKey.from_dict(manifest["key"]), manifest["execution_policy"],
+                    visited=tuple(visiting), memo=memo, dependencies=dependencies)
             for source in manifest.get("value_sources", ()):
-                row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (source["identity"],)).fetchone()
-                if row is None:
-                    raise ValueError("original value authority is missing")
-                original = json.loads(row[0])
-                self._verify_metadata(original, source["identity"])
+                source_locator = ("source_bindings", source["identity"], source["source_content"])
+                authority = None if memo is None else memo.get(source_locator, copy_value=False)
+                if authority is not None:
+                    contract, checked = authority
+                    if contract != _value_contract(manifest):
+                        raise ValueError("original value authority differs")
+                    if visiting.intersection(checked):
+                        raise ValueError("cyclic original artifact authority")
+                    dependencies.update(checked)
+                    metadata_event("source_binding_cache_hits")
+                    continue
+                original = cls._verified_reference_manifest(connection, source["identity"], source["source_content"],
+                    memo=memo)
                 if (original["content_identity"] != source["source_content"]
-                        or original["node_id"] != manifest["node_id"]
-                        or original["key"]["implementation_id"] != manifest["key"]["implementation_id"]
-                        or original["value_type"] != manifest["value_type"]
-                        or original["trace_columns"] != manifest["trace_columns"]):
+                        or _value_contract(original) != _value_contract(manifest)):
                     raise ValueError("original value authority differs")
-                if original.get("proof_rebinding") is not None:
-                    from .proof_maintenance import verify_rebinding
-                    verify_rebinding(type(self), connection, original["proof_rebinding"],
-                        MaterializationKey.from_dict(original["key"]), original["execution_policy"], visited=tuple(visiting))
-                self._verify_artifact_sources(connection, original, visiting=visiting, memo=memo)
+                dependencies.update(cls._verify_reference_sources(connection, original,
+                    visiting=visiting, memo=memo, metadata_event=metadata_event))
             for artifact in manifest["artifacts"].values():
                 if not isinstance(artifact, Mapping) or "$artifact_concat" not in artifact:
                     continue
                 source = artifact["original_source"]
-                row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (source["identity"],)).fetchone()
-                if row is None:
-                    raise ValueError("original artifact authority missing")
-                original = json.loads(row[0])
-                self._verify_metadata(original, source["identity"])
+                original = cls._verified_reference_manifest(connection, source["identity"], source["source_content"],
+                    memo=memo, channel="artifact")
                 if (original["content_identity"] != source["source_content"]
                         or original["node_id"] != manifest["node_id"]
                         or original["key"]["implementation_id"] != manifest["key"]["implementation_id"]):
@@ -373,19 +402,20 @@ class CoreStore:
                 leaves = original_artifact.get("$artifact_concat", [original_artifact])
                 if artifact["$artifact_concat"][:len(leaves)] != leaves or artifact["schema"] != original_artifact["schema"]:
                     raise ValueError("artifact composition lost original references")
-                if original.get("proof_rebinding") is not None:
-                    self._verify_proof_rebinding(connection, original["proof_rebinding"],
-                        MaterializationKey.from_dict(original["key"]), original["execution_policy"])
-                self._verify_artifact_sources(connection, original, visiting=visiting, memo=memo)
+                dependencies.update(cls._verify_reference_sources(connection, original,
+                    visiting=visiting, memo=memo, metadata_event=metadata_event))
         finally:
             visiting.remove(identity)
+        checked = tuple(sorted(dependencies))
         if memo is not None:
-            memo.put(locator, True, 0)
+            authority = (_value_contract(manifest), checked)
+            memo.put(locator, authority, len(_json(authority).encode()))
+        return checked
 
     @classmethod
-    def _verify_proof_rebinding(cls, connection, plan, key, policy):
+    def _verify_proof_rebinding(cls, connection, plan, key, policy, *, visited=(), memo=None, dependencies=None):
         from .proof_maintenance import verify_rebinding
-        verify_rebinding(cls, connection, plan, key, policy)
+        verify_rebinding(cls, connection, plan, key, policy, visited=visited, memo=memo, dependencies=dependencies)
 
     @staticmethod
     def _verify_metadata(manifest: Mapping[str, Any], identity: str) -> None:
@@ -397,12 +427,8 @@ class CoreStore:
 
     def verify(self, manifest: Mapping[str, Any]) -> None:
         self._verify_metadata(manifest, manifest["identity"])
-        with self.read_transaction() as connection:
-            self._verify_artifact_sources(connection, manifest)
-        if manifest.get("proof_rebinding") is not None:
-            with self.read_transaction() as connection:
-                self._verify_proof_rebinding(connection, manifest["proof_rebinding"],
-                    MaterializationKey.from_dict(manifest["key"]), manifest["execution_policy"])
+        with self.read_transaction() as connection, fresh_metadata_scope(self._read_metadata_memo()) as memo:
+            self._verify_artifact_sources(connection, manifest, memo=memo)
         self._verify_files(manifest, receipt=manifest["content_identity"])
 
     def _verify_files(self, value, *, receipt: str) -> None:
@@ -713,9 +739,10 @@ class CoreStore:
                             require_artifact_files(child)
                 require_artifact_files(manifest["artifacts"])
                 require_artifact_files(manifest["partitions"])
-                self._verify_artifact_sources(connection, manifest)
-                if _proof_rebinding is not None:
-                    self._verify_proof_rebinding(connection, _proof_rebinding, value.key, execution_policy)
+                # Closing checks start fresh in this writer snapshot. Shared
+                # ancestry is checked once here, never adopted from readers.
+                with fresh_metadata_scope(self._read_metadata_memo()) as memo:
+                    self._verify_artifact_sources(connection, manifest, memo=memo)
                 connection.execute(computation_index.DDL)
                 registered_domain = self._registered_domain(connection, domain.signature)
                 if registered_domain is not None:
@@ -949,7 +976,17 @@ class CoreStore:
     def interval_identity(self, identity: str, *, start, end) -> str | None:
         """Prove selected values, full calendar and membership from index records."""
         from .computation_index import interval
-        manifest = self.manifest(identity)
+        memo = self._read_metadata_memo()
+        manifest = None if memo is None else memo.get(("manifest_authority", identity), copy_value=False)
+        if manifest is None:
+            manifest = self.manifest(identity)
+            if manifest is not None and memo is not None:
+                # Admit this compact binding only when an interval consumes it;
+                # ordinary manifest reads keep their exact serialized charge.
+                authority = {name: manifest[name] for name in ("identity", "content_identity")}
+                memo.put(("manifest_authority", identity), authority, len(_json(authority).encode()))
+        else:
+            self._metadata_event("manifest_authority_cache_hits")
         if manifest is None:
             return None
         indexed = self._computation_index(manifest)
@@ -1225,6 +1262,9 @@ class CoreStore:
         infers equivalence from saved output values or changes original receipts.
         """
         mode = source_bindings.pop("mode", None)
+        if mode == "finite_contract.v1":
+            from .finite_contract_maintenance import plan_maintenance
+            return plan_maintenance(self, spec, identity, **source_bindings)
         if mode in {"cutoff_normalization.v1", "cutoff_tail_repair.v1"}:
             from .cutoff_proof import plan_normalization
             if (mode == "cutoff_tail_repair.v1") != (source_bindings.get("repair_from") is not None):
@@ -1237,6 +1277,9 @@ class CoreStore:
 
     def apply_input_proof_rebind(self, plan, *, check_canceled=lambda: None, update_plan=None) -> dict[str, Any]:
         """Apply exact references, or admit bounded repair in an ordinary UpdatePlan."""
+        if plan.get("mode") == "finite_contract.v1":
+            from .finite_contract_maintenance import apply_maintenance
+            return apply_maintenance(self, plan, check_canceled=check_canceled)
         if plan.get("mode") == "cutoff_tail_repair.v1":
             from .cutoff_repair import admit_repair
             return admit_repair(self, plan, update_plan, check_canceled)
@@ -1661,26 +1704,28 @@ class CoreStore:
                 raise ValueError("global update requires every active computed node")
         elif mode != "branch":
             raise ValueError("update mode must be global or branch")
-        for values in results.values():
-            for node_id, identity in values.items():
-                if state["statuses"].get(node_id) != "active":
-                    raise RevisionConflict("a result belongs to an inactive node")
-                record = self.describe(identity)
-                if record is None or record["coverage_start"] == "None" or record["through"] != through:
-                    raise ValueError("result Domain does not cover the requested final session")
-                if record["node_id"] != node_id:
-                    raise ValueError("result receipt belongs to a different node")
         body = {"request_id": request_id, "graph_id": graph_id, "revision": revision, "state_revision": state_revision,
                 "previous": expected_previous, "results": {k: dict(v) for k, v in results.items()},
                 "coverage": {k: dict(v) for k, v in coverage.items()}, "through": through, "mode": mode}
         receipt = {"identity": hash_mapping(body), **body}
-        with self.transaction() as connection:
+        with self.transaction() as connection, fresh_metadata_scope(self._read_metadata_memo()) as memo:
             row = connection.execute("SELECT revision,state_revision,current_update FROM graphs WHERE graph_id=?", (graph_id,)).fetchone()
             if tuple(row[:2]) != (revision, state_revision):
                 raise RevisionConflict("graph/state changed before publication")
             if mode == "global" and row[2] not in (expected_previous, receipt["identity"]):
                 raise RevisionConflict("current global version changed before publication")
-            self._validate_logical_coverage(results, coverage)
+            checker = copy(self)
+            checker._metadata_memo = memo
+            checker._validate_logical_coverage(results, coverage)
+            for values in results.values():
+                for node_id, identity in values.items():
+                    if state["statuses"].get(node_id) != "active":
+                        raise RevisionConflict("a result belongs to an inactive node")
+                    record = checker.describe(identity)
+                    if record is None or record["coverage_start"] == "None" or record["through"] != through:
+                        raise ValueError("result Domain does not cover the requested final session")
+                    if record["node_id"] != node_id:
+                        raise ValueError("result receipt belongs to a different node")
             connection.execute("INSERT OR IGNORE INTO updates VALUES(?,?,?,?,?,?,?,?)",
                 tuple(receipt[name] for name in ("identity", "graph_id", "revision", "state_revision", "previous", "through", "mode", "request_id")))
             for context_id, values in receipt["results"].items():

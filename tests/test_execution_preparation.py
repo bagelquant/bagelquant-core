@@ -182,7 +182,7 @@ def test_preparation_metadata_namespaces_stores_and_never_caches_absent_index(tm
         assert stores[1][0].interval_identity(stores[1][1], start=value.domain.times.min(), end=value.domain.times.max())
 
 
-def test_metadata_and_numerical_preparation_compete_in_one_reserve():
+def test_large_numerical_preparation_preserves_proofs_in_one_reserve():
     preparation = ExecutionPreparation(4096)
     memo = PreparationMetadataMemo(preparation, "fixture")
     preparation.remember("numerical", "window", lambda: "x" * 2000, len)
@@ -191,7 +191,83 @@ def test_metadata_and_numerical_preparation_compete_in_one_reserve():
     assert ("numerical", "window") not in preparation._values
     assert preparation.bytes <= preparation.maximum_bytes
     preparation.remember("numerical", "other", lambda: "z" * 2000, len)
+    assert memo.get("original") == "y" * 200
+    assert preparation.bytes <= preparation.maximum_bytes
+    assert preparation.report()["numerical_nonadmissions"] == 1
+    memo.put("replacement", "z" * 200, 200)
     assert memo.get("original") is None
+    assert memo.get("replacement") == "z" * 200
+    preparation.restrict(0)
+    assert preparation.bytes == 0
+
+
+def test_large_metadata_cannot_flush_compact_authenticated_ancestry():
+    preparation = ExecutionPreparation(4096)
+    memo = PreparationMetadataMemo(preparation, "fixture")
+    authority = ("source_bindings", "original", "immutable-content")
+    memo.put(authority, ("header", ("original", "parent")), 100)
+    for index in range(8):
+        memo.put(("manifest", index), "large-body", 350)
+        assert memo.get(authority) == ("header", ("original", "parent"))
+    assert preparation.bytes <= preparation.maximum_bytes
+
+
+def test_interval_proofs_keep_authenticated_binding_when_manifest_body_is_evicted(tmp_path, monkeypatch):
+    value = retired_source(65)
+    graph, store, root = global_graph(tmp_path, negate(value))
+    receipt = finish(graph.plan_update({"main": {"x": value}}, through=value.domain.times.max()))
+    identity = receipt["results"]["main"][root]
+    first, last = value.domain.times.min(), value.domain.times.max()
+    preparation = ExecutionPreparation(1024 * 1024)
+    with preparation_scope(preparation):
+        expected = store.interval_identity(identity, start=first, end=last)
+        # Model pressure from unrelated large metadata while retaining exact
+        # interval evidence and its compact, authenticated owner binding.
+        for index in range(3):
+            PreparationMetadataMemo(preparation, (store.meta_path, store.artifact_path)).put(
+                ("manifest", f"unrelated-{index}"), "body", 100 * 1024)
+        monkeypatch.setattr(store, "manifest", lambda *_: pytest.fail("interval proof decoded full manifest again"))
+        assert store.interval_identity(identity, start=first, end=last) == expected
+        assert preparation.bytes <= preparation.maximum_bytes
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_proof_only_window_retains_exact_signature_after_coordinate_eviction(dynamic):
+    source = retired_source(65).domain
+    domain = source if dynamic else Domain(calendar=source.times, universe=source.asset_ids, identity="opaque")
+    first, last = domain.times.min(), domain.times.max()
+    expected = domain.window(first, last).signature
+    preparation = ExecutionPreparation(4096)
+    with preparation_scope(preparation):
+        assert domain._window_signature(first, last) == expected
+        builds = preparation.report()["domain_window_builds"]
+        for index in range(10):
+            preparation.remember("parent_slab", index, lambda: b"x" * 2500, len)
+            assert domain._window_signature(first, last) == expected
+        assert preparation.report()["domain_window_builds"] == builds
+        other = Domain(calendar=source.times, universe=["foreign"], identity=domain.signature)
+        assert other._window_signature(first, last) != expected
+        assert preparation.peak_bytes <= preparation.maximum_bytes
+
+
+def test_lightweight_window_proof_cannot_retain_an_oversized_source_domain():
+    import gc
+    from weakref import ref
+    preparation = ExecutionPreparation(4096)
+
+    def transient_signature():
+        days = [date(2000, 1, 1) + timedelta(days=index) for index in range(4096)]
+        domain = Domain(calendar=days, universe=["asset"])
+        observed = ref(domain)
+        assert domain._window_signature(days[0], days[-1])
+        return observed
+
+    with preparation_scope(preparation):
+        observed = transient_signature()
+        gc.collect()
+        assert observed() is None
+        assert preparation.report()["domain_window_oversize"] == 1
+        assert preparation.bytes <= preparation.maximum_bytes
 
 
 def test_warm_preparation_never_caches_graph_revision_guards(tmp_path):

@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event, RLock
 
+from .metadata_memo import metadata_priority
+
 
 class ExecutionPreparation:
     def __init__(self, maximum_bytes: int):
@@ -36,13 +38,43 @@ class ExecutionPreparation:
     def histories(self, domain, history: int) -> tuple[int, ...]:
         return tuple(sorted(self._histories.get(domain, set()) | {history}))
 
-    def _evict(self, required: int) -> None:
+    def get(self, kind, key):
+        with self.lock:
+            locator = (kind, key)
+            found = self._values.pop(locator, None)
+            if found is None:
+                return None
+            self._values[locator] = found
+            self.counts[kind + "_hits"] += 1
+            return found[0]
+
+    @staticmethod
+    def _priority(locator):
+        kind, key = locator
+        if kind == "metadata":
+            return metadata_priority(key[1])
+        return 2 if kind in {"interval_proof", "domain_signature"} else 0
+
+    def _evict(self, required: int, *, locator=None) -> bool:
         while self._values and self.bytes + required > self.maximum_bytes:
-            (kind, _), (_, charge) = self._values.popitem(last=False)
+            # Coordinate windows and decoded values must not flush immutable
+            # proofs. Both classes still debit this one reserve; metadata can
+            # evict metadata when its own working set fills the budget.
+            priority = 2 if locator is None else self._priority(locator)
+            candidate = None
+            for level in range(priority + 1):
+                candidate = next((key for key in self._values if self._priority(key) == level), None)
+                if candidate is not None:
+                    break
+            if candidate is None:
+                return False
+            removed_kind = candidate[0]
+            _, charge = self._values.pop(candidate)
             self.bytes -= charge
             self.counts["evictions"] += 1
-            self.counts[kind + "_evictions"] += 1
-            self.counts[kind + "_evicted_bytes"] += charge
+            self.counts[removed_kind + "_evictions"] += 1
+            self.counts[removed_kind + "_evicted_bytes"] += charge
+        return self.bytes + required <= self.maximum_bytes
 
     def remember(self, kind, key, build, size, *, check_canceled=None):
         """Coalesce immutable preparation, retaining only admitted successes."""
@@ -72,10 +104,12 @@ class ExecutionPreparation:
             charge = 1024 + size(value)
             with self.lock:
                 if charge <= self.maximum_bytes:
-                    self._evict(charge)
-                    self._values[locator] = (value, charge)
-                    self.bytes += charge
-                    self.peak_bytes = max(self.peak_bytes, self.bytes)
+                    if self._evict(charge, locator=locator):
+                        self._values[locator] = (value, charge)
+                        self.bytes += charge
+                        self.peak_bytes = max(self.peak_bytes, self.bytes)
+                    else:
+                        self.counts[kind + "_nonadmissions"] += 1
                 else:
                     self.counts[kind + "_oversize"] += 1
                     self.counts[kind + "_oversize_bytes"] += charge
@@ -123,6 +157,16 @@ class PreparationMetadataMemo:
     def put(self, key, value, encoded_bytes):
         self.preparation.remember("metadata", (self.namespace, key),
             lambda: deepcopy(value), lambda _: 8 * encoded_bytes)
+
+    def discard_scope(self, scope):
+        preparation = self.preparation
+        with preparation.lock:
+            for locator in list(preparation._values):
+                if locator[0] != "metadata":
+                    continue
+                namespace, key = locator[1]
+                if namespace == self.namespace and isinstance(key, tuple) and key[0] is scope:
+                    preparation.bytes -= preparation._values.pop(locator)[1]
 
 
 _active: ContextVar[ExecutionPreparation | None] = ContextVar("core_execution_preparation", default=None)

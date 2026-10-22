@@ -155,7 +155,8 @@ def plan_normalization(store, spec, identity, *, original_update, context_id,
     return plan
 
 
-def verify_normalization(store_type, connection, plan, key, policy, *, visited=(), require_admission=True):
+def verify_normalization(store_type, connection, plan, key, policy, *, visited=(), require_admission=True,
+        memo=None, dependencies=None):
     """Recheck original authority, canonical recipes and admitted source equality."""
     from .proof_maintenance import ConsumedInputEvidence
     body = {name: value for name, value in plan.items() if name != "identity"}
@@ -234,6 +235,8 @@ def verify_normalization(store_type, connection, plan, key, policy, *, visited=(
             continue
         if original_id in visited or original_id == key.identity:
             raise ValueError("Cutoff normalization contains a reference cycle")
+        if dependencies is not None:
+            dependencies.add(original_id)
         row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (original_id,)).fetchone()
         if row is None:
             raise ValueError("Cutoff normalization original materialization is missing")
@@ -246,7 +249,8 @@ def verify_normalization(store_type, connection, plan, key, policy, *, visited=(
         if manifest.get("proof_rebinding") is not None:
             from .proof_maintenance import verify_rebinding
             verify_rebinding(store_type, connection, manifest["proof_rebinding"],
-                MaterializationKey.from_dict(before), manifest["execution_policy"], visited=(*visited, original_id))
+                MaterializationKey.from_dict(before), manifest["execution_policy"],
+                visited=(*visited, original_id), memo=memo, dependencies=dependencies)
         seal = item["original_seal"]
         if seal is not None:
             rows = connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
@@ -255,7 +259,7 @@ def verify_normalization(store_type, connection, plan, key, policy, *, visited=(
                     seal["nodes"][member] != plan["nodes"][member]["original_key"] for member in seal["nodes"]):
                 raise ValueError("Cutoff normalization lost original region authority")
             coordinates = _verify_region_blocks(store_type, connection, manifest, seal,
-                visited=(*visited, original_id))
+                visited=(*visited, original_id), memo=memo, dependencies=dependencies)
             if coordinates != item["region_coordinates"]:
                 raise ValueError("Cutoff normalization region coordinates changed")
             replacement = {**seal, "nodes": {member: plan["nodes"][member]["replacement_key"] for member in seal["nodes"]}}
@@ -270,7 +274,7 @@ def verify_normalization(store_type, connection, plan, key, policy, *, visited=(
         raise ValueError("Cutoff normalization does not admit this replacement")
 
 
-def _verify_region_blocks(store_type, connection, manifest, seal, *, visited=()):
+def _verify_region_blocks(store_type, connection, manifest, seal, *, visited=(), memo=None, dependencies=None):
     """Retain content-bound block certificates and their full original coverage."""
     from .computation_index import read
     full = read(connection, manifest)
@@ -279,6 +283,8 @@ def _verify_region_blocks(store_type, connection, manifest, seal, *, visited=())
     calendar = []
     coordinates = {node: {"calendar": [], "membership": {}} for node in seal["nodes"]}
     for identity in seal["blocks"]:
+        if dependencies is not None:
+            dependencies.add(identity)
         row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
         if row is None:
             raise ValueError("Cutoff normalization lost original region block")
@@ -289,7 +295,8 @@ def _verify_region_blocks(store_type, connection, manifest, seal, *, visited=())
             if identity in visited:
                 raise ValueError("Cutoff normalization contains a region reference cycle")
             verify_rebinding(store_type, connection, block["proof_rebinding"],
-                MaterializationKey.from_dict(block["key"]), block["execution_policy"], visited=(*visited, identity))
+                MaterializationKey.from_dict(block["key"]), block["execution_policy"],
+                visited=(*visited, identity), memo=memo, dependencies=dependencies)
         rows = connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
             "WHERE identity=? AND kind='block'", (identity,)).fetchall()
         certificates = store_type._decode_region_evidence(block, "block", rows)

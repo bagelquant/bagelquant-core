@@ -93,7 +93,7 @@ def test_cutoff_normalization_rejects_changed_or_unknown_evidence(tmp_path, chan
     assert len(store.inventory()) == initial
 
 
-def test_unadmitted_generic_history_guard_and_forged_admission_remain_closed(tmp_path):
+def test_unadmitted_history_guard_and_forged_admission_remain_closed(tmp_path):
     _, after, graph, store, root, update, kwargs = prepared(tmp_path)
     plan = store.plan_input_proof_rebind(graph.snapshot()["spec"], update["results"]["main"][root], **kwargs)
     forged = deepcopy(plan)
@@ -102,7 +102,7 @@ def test_unadmitted_generic_history_guard_and_forged_admission_remain_closed(tmp
     with pytest.raises(ValueError, match="admission"):
         store.apply_input_proof_rebind(forged)
     graph.register_context("main", **kwargs["replacement_context"])
-    with pytest.raises(ValueError, match="no declared finite or checkpoint"):
+    with pytest.raises(ValueError, match="needs interval evidence for completed inputs"):
         finish(graph.plan_update({"main": {"x": after}}, through="2024-01-05"))
 
 

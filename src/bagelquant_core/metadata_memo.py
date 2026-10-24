@@ -1,8 +1,8 @@
 """Bounded immutable metadata reuse within one explicitly admitted operation."""
-from collections import OrderedDict
 from contextlib import contextmanager
 from copy import deepcopy
 from threading import RLock
+from ._priority_lru import PriorityLRU
 
 
 def metadata_priority(key):
@@ -20,7 +20,7 @@ class MetadataMemo:
             raise ValueError("max_metadata_bytes must be a nonnegative integer")
         self.maximum_bytes = maximum_bytes
         self.bytes = 0
-        self.values = OrderedDict()
+        self.values = PriorityLRU(metadata_priority)
         self.lock = RLock()
         self.closed = False
 
@@ -42,7 +42,7 @@ class MetadataMemo:
             if previous is not None:
                 self.bytes -= previous[1]
             while self.values and self.bytes + charge > self.maximum_bytes:
-                candidate = next((item for item in self.values if metadata_priority(item) == 1), None)
+                candidate = self.values.first_at_most(1)
                 if candidate is None:
                     if metadata_priority(key) == 1:
                         return

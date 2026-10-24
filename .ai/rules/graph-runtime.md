@@ -88,6 +88,11 @@ this reserve until its fresh closing verification completes, then expires it.
 Signature keys weakly retain the actual Domain identity, never an opaque signature
 or a source's coordinate allocation. Generic rolling canonical warm starts and resets stay
 unchanged even when an exited asset makes them expensive.
+Priority eviction uses per-class ordered key indexes over the same single value
+authority; admission never scans every retained proof to find a lower priority.
+Keep exact priority/LRU order, existing locks and per-entry overhead accounting,
+and synchronize hits, removal, shrinking, fresh-scope cleanup and clearing. These
+indexes are operation-local mechanics, not numerical/currentness authority.
 For admitted stored parents, align slab starts to the original 32-session
 calendar boundaries and include the extra historical prefix in admission.
 Never extend a slab beyond the requested end. Filter retained prefix rows out

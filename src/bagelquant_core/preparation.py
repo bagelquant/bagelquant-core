@@ -6,13 +6,14 @@ an opaque caller-provided signature cannot hide different coordinates.
 """
 from __future__ import annotations
 
-from collections import Counter, OrderedDict
+from collections import Counter
 from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event, RLock
 
 from .metadata_memo import metadata_priority
+from ._priority_lru import PriorityLRU
 
 
 class ExecutionPreparation:
@@ -20,7 +21,7 @@ class ExecutionPreparation:
         self.maximum_bytes = maximum_bytes
         self.bytes = 0
         self.peak_bytes = 0
-        self._values = OrderedDict()
+        self._values = PriorityLRU(self._priority)
         self._histories = {}
         self._in_flight = {}
         self.lock = RLock()
@@ -61,11 +62,7 @@ class ExecutionPreparation:
             # proofs. Both classes still debit this one reserve; metadata can
             # evict metadata when its own working set fills the budget.
             priority = 2 if locator is None else self._priority(locator)
-            candidate = None
-            for level in range(priority + 1):
-                candidate = next((key for key in self._values if self._priority(key) == level), None)
-                if candidate is not None:
-                    break
+            candidate = self._values.first_at_most(priority)
             if candidate is None:
                 return False
             removed_kind = candidate[0]

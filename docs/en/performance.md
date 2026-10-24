@@ -8,6 +8,14 @@ entries carry conservative encoded-size charges, and metadata hits are reported
 in `preparation_usage`. Public manifest calls return fresh trees. Missing proofs
 are never cached; eviction and scope exit require an ordinary reread.
 
+Eviction keeps ordered key indexes for the existing priority classes, selecting
+the same least-recently-used eligible entry without scanning retained proofs.
+Hits, insertion, removal, shrinking and scope cleanup update those indexes under
+the existing lock. Indexes retain references to the same keys and fit within the
+existing per-entry overhead charge; values have one authority and no new cache
+budget. Victim selection uses at most three priority lookups, so a full protected
+proof cache does not turn repeated low-priority admissions into quadratic work.
+
 An explicit finite store read context remains authoritative when present.
 Explicit original-byte audits and closing publication checks still validate
 fresh authority; mutable revision/state guards are not memoized. This reduces

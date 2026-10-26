@@ -22,6 +22,47 @@ def value(domain, *, node_id="node", prediction=False, sparse=False):
         training_audits=({"fit_date": domain.times.min(), "model": "fixture"},))
 
 
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_value_read_rows_uses_metadata_and_includes_physical_domain_rows(tmp_path, monkeypatch, dynamic):
+    dates = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 2, 1)]
+    universe = pl.DataFrame({"time": dates, "asset_id": ["A", "B", "C"], "active": [True] * 3}) if dynamic else ["A", "B"]
+    domain = Domain(calendar=dates, universe=universe)
+    record = value(domain)
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
+    store.publish(record)
+    with monkeypatch.context() as patch:
+        patch.setattr(pl, "read_parquet", lambda *_a, **_k: pytest.fail("metadata estimate read values"))
+        patch.setattr(pl, "scan_parquet", lambda *_a, **_k: pytest.fail("metadata estimate scanned values"))
+        bound = store.value_read_rows(record.key.identity, start=dates[0], end=dates[0])
+        assert bound == (5 if dynamic else 9)
+        assert store.value_read_rows("missing", start=dates[0], end=dates[0]) is None
+        with pytest.raises(ValueError, match="end precedes"):
+            store.value_read_rows(record.key.identity, start=dates[-1], end=dates[0])
+    # Optional count enrichment never changes original value/interval identity.
+    original = store.interval_identity(record.key.identity, start=dates[0], end=dates[0])
+    with store.transaction() as db:
+        db.execute("DELETE FROM value_read_bounds WHERE identity=?", (record.key.identity,))
+    assert store.value_read_rows(record.key.identity, start=dates[0], end=dates[0]) is None
+    store.verify_identity(record.key.identity)
+    store.build_index(store.index_plan())
+    assert store.value_read_rows(record.key.identity, start=dates[0], end=dates[0]) == bound
+    assert store.interval_identity(record.key.identity, start=dates[0], end=dates[0]) == original
+
+
+def test_full_audit_rejects_missing_mandatory_index_evidence(tmp_path):
+    from bagelquant_core.computation_index import read, save
+    record = value(Domain(calendar=[date(2024, 1, 2)], universe=["A"]))
+    store = CoreStore(tmp_path / "meta.sqlite", tmp_path / "artifacts")
+    store.publish(record)
+    manifest = store.manifest(record.key.identity)
+    with store.transaction() as db:
+        indexed = read(db, manifest)
+        del indexed["membership"]
+        save(db, record.key.identity, manifest["content_identity"], indexed)
+    with pytest.raises(ValueError, match="index differs"):
+        store.verify_identity(record.key.identity)
+
+
 @pytest.mark.parametrize("sparse", [False, True])
 def test_bounded_monthly_publication_restart_and_all_evidence(tmp_path, monkeypatch, sparse):
     store = CoreStore(tmp_path/"core.sqlite", tmp_path/"artifacts")

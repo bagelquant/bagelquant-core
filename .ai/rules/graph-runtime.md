@@ -415,3 +415,11 @@ Counts/endpoints/opaque identities do not prove membership or typed authority.
 Real window/hash/proof/publication/read/Node scopes and P/R/A/index reservations
 stay unchanged. Scalar lookup source alone proves no native RSS or latency
 bound; isolated Root checks and measurements remain required.
+
+
+`CoreStore.value_read_rows` exposes optional metadata-only bounded-read row counts
+for caller admission, including physical partitions and Domain membership. Capture
+counts during admitted publication or explicit index maintenance. Missing counts
+return unknown; never read values to estimate them on a passive prerequisite.
+These optional resource counts live in their own content-bound derived table;
+they never enter numerical proof/certificate payloads or change saved identities.

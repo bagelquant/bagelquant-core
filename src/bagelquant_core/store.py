@@ -763,6 +763,8 @@ class CoreStore:
                         raise ValueError("immutable materialization conflict: different results or evidence for the same key")
                     if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
                         computation_index.save(connection, value.key.identity, existing["content_identity"], indexed)
+                    from .read_bounds import save
+                    save(connection, existing, domain)
                     self._save_region_evidence(connection, existing, region_evidence)
                     return
                 os.replace(temporary, final)
@@ -773,6 +775,8 @@ class CoreStore:
                     tuple(header.values()))
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
                     computation_index.save(connection, value.key.identity, manifest["content_identity"], indexed)
+                from .read_bounds import save
+                save(connection, manifest, domain)
                 self._save_region_evidence(connection, manifest, region_evidence)
         finally:
             if temporary.exists():
@@ -991,6 +995,35 @@ class CoreStore:
             return None
         indexed = self._computation_index(manifest)
         return None if indexed is None else interval(indexed, start, end)
+
+    def value_read_rows(self, identity: str, *, start, end) -> int | None:
+        """Metadata-only upper bound on rows consumed by a bounded value read.
+
+        Includes overlapping physical partitions, calendar and membership rows.
+        Unknown legacy counts require explicit ``build_index(index_plan())``;
+        this estimate never reads numerical bodies or changes saved authority.
+        """
+        lower, upper = date.fromisoformat(str(start)), date.fromisoformat(str(end))
+        if lower > upper:
+            raise ValueError("end precedes start")
+        manifest = self.manifest(identity)
+        if manifest is None:
+            return None
+        from .read_bounds import read
+        with self.read_transaction() as connection:
+            indexed = read(connection, manifest)
+        if indexed is None:
+            return None
+        parts = [part for part in manifest["partitions"] if
+            (part.get("end") is None or part["end"] >= str(lower)) and
+            (part.get("start") is None or part["start"] <= str(upper))]
+        if any(not isinstance(part.get("rows"), int) for part in parts):
+            return None
+        calendar = [day for day in indexed["calendar"] if str(lower) <= day <= str(upper)]
+        membership = indexed["static_assets"] if indexed["static_assets"] is not None else sum(
+            count for day, count in indexed["reader_rows"].items() if str(lower) <= day <= str(upper))
+        return sum(part["rows"] for part in parts) + len(calendar) + membership + sum(
+            indexed["reader_rows"].get(day, 0) for day in calendar)
 
     def _evidence_parents(self, manifest):
         """Follow original logical ancestry through sealed transient nodes.
@@ -1323,6 +1356,8 @@ class CoreStore:
                 if current is None or json.loads(current[0])["content_identity"] != item["content_identity"]:
                     raise RevisionConflict("Core index plan changed")
                 computation_index.save(connection, item["identity"], item["content_identity"], indexed)
+                from .read_bounds import save
+                save(connection, manifest, value.panel.domain)
             completed += 1
             progress(position, len(plan["identities"]))
         return {"status": "partial" if unknown else "complete", "materializations": completed,
@@ -1353,6 +1388,14 @@ class CoreStore:
                 value_type=manifest["value_type"], trace_columns=manifest["trace_columns"])
             if indexed != expected:
                 raise ValueError("Core computation index differs from original evidence")
+        from .read_bounds import read as read_bounds, describe as describe_bounds
+        with self.read_transaction() as connection:
+            bounds = read_bounds(connection, manifest)
+        if bounds is not None:
+            if indexed is None:
+                value = self.lookup(MaterializationKey.from_dict(manifest["key"]), evidence=False)
+            if bounds != describe_bounds(value.panel.domain):
+                raise ValueError("Core value read bounds differ from original evidence")
         for certificate in self._read_region_evidence(manifest, "block"):
             if indexed is None or certificate["nodes"][manifest["node_id"]]["index"] != indexed:
                 raise ValueError("region boundary interval evidence differs from original values")

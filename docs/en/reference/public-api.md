@@ -18,3 +18,12 @@ types; the [catalog](operators/index.md) documents each operator.
 - `CoreStore.publish(..., value_references=[{"identity": ..., "start": ..., "end": ...}, ...])` composes original typed intervals and new repair materializations. References must cover the complete ordered calendar exactly once with identical original membership/type/traces. Each retained Parquet partition carries its selected bounds, which are pushed down on reads. Publication fences original authority and file existence without historical decoding or rewriting.
 - `CoreStore.describe_artifact(identity, name)` describes the same recursively selected original channel as `evidence`; `artifact_interval_identity(identity, name, start=..., end=...)` proves all dated columns, including decision status/reason and empty calendar dates, from original-bound metadata. Missing optional proof returns `None` without reading values.
 - `CoreStore.read_artifact(identity, name, start=..., end=...)` prunes original concat leaves before Parquet reads and pushes date predicates down. `artifact_index_plan(identity, name)` / `build_artifact_index(plan)` explicitly audit and index older original artifacts while preserving receipts/files. Missing legacy indexes require this explicit maintenance, never an implicit historical read. Subsequent concatenations reuse the retained original index.
+
+
+`CoreStore.value_read_rows(identity, start=..., end=...)` returns a metadata-only
+conservative row bound for a bounded value read: overlapping physical partitions,
+selected calendar/Domain coordinates and consumed membership. It returns `None`
+for missing optional counts. Callers choose memory policy; Core neither detects
+hardware nor grants global admission. Explicit `build_index(index_plan())` enriches
+old counts without changing receipt/content/interval identities. Passive reads
+never scan numerical bodies or initialize/rebuild these indexes.

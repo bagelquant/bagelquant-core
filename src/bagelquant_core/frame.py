@@ -126,7 +126,8 @@ def align_frames(
         return tuple(frames)
     keys = frames[0].select(*PANEL_KEYS)
     for frame in frames[1:]:
-        keys = keys.join(frame.select(*PANEL_KEYS), on=list(PANEL_KEYS), how=join)
+        keys = keys.join(frame.select(*PANEL_KEYS), on=list(PANEL_KEYS),
+            how="full" if join == "outer" else join, coalesce=True)
     keys = keys.unique().sort(list(PANEL_KEYS))
     return tuple(keys.join(frame, on=list(PANEL_KEYS), how="left") for frame in frames)
 

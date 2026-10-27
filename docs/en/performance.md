@@ -1,5 +1,9 @@
 # Performance Notes
 
+`ResourceLimits.cache_mib` accepts an integer from zero up to, but excluding,
+`memory_target_mib`. Boolean, fractional, nonfinite and `None` values raise
+`ValueError`; zero explicitly disables the cache.
+
 An update's existing `ExecutionPreparation` budget also admits immutable store
 metadata: decoded computation indexes, serialized manifests and successful
 original source bindings. The adapter shares the numerical preparation LRU;

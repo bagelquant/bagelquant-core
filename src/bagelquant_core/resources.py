@@ -28,7 +28,8 @@ class ResourceLimits:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
-        if self.cache_mib < 0 or self.cache_mib >= self.memory_target_mib:
+        if (isinstance(self.cache_mib, bool) or not isinstance(self.cache_mib, int)
+                or self.cache_mib < 0 or self.cache_mib >= self.memory_target_mib):
             raise ValueError("cache_mib must be nonnegative and below memory_target_mib")
 
     def effective(self, logical_cpus: int):

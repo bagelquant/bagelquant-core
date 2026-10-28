@@ -274,7 +274,7 @@ Cleanup preserves committed historical evidence and only reclaims verified
 unreferenced completed generations. New storage rejects old schemas.
 
 Run standalone temporary-store tests and owner checks before BT/Workbench.
-See [architecture](../../docs/en/architecture.md) for callable examples.
+See [architecture](../architecture.md) for callable examples.
 
 CoreStore.inspect is a public read-only readiness contract for application setup.
 Missing storage is uninitialized; mismatched versions, tables or required columns

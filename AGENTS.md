@@ -1,73 +1,14 @@
-# Core agent entry
+# BagelQuant Core agent entrance
 
-This repository owns Domain, typed Node, Operator and Graph, safe DSL, deterministic
-numerical/ML primitives and CoreStore graph/cache/checkpoint/artifact persistence.
-Caller-supplied paths, source evidence, cutoffs and resource budgets are explicit.
-Calculation changes must prove actual incremental intervals and historical reuse
-for Alpha, Prediction/training and Portfolio, with metadata-only prerequisites;
-follow graph/runtime acceptance, including explicit calendar checkpoints,
-per-period supervised Prediction evidence and original artifact references.
-Core has no BagelQuant package dependency; Workbench owns global scheduling and
-machine policy. Do not add providers, accounts, China rules or governance here.
-Core schema 4 owns indexed updates, materialization candidates and one completion
-per durable graph/context/node. Pointwise regions retain exact transient interval
-certificates and logical coverage bound to durable boundaries; never fabricate
-transient artifact IDs. Repeat planning reads flags/seals without numerical values.
-Publish completion after each durable node; interrupted retries retain the frontier.
-Candidates use indexed policy/date headers; only selected receipts are decoded.
-Finite contexts share bounded immutable proofs; closing checks start fresh and
-deduplicate ancestry within the same reserve. Live revision guards stay fresh.
-Older schemas are rejected without a migration reader.
-Generic causal-version inputs use the same Graph/UpdatePlan/CoreStore path.
-Adjacent change and bounded forward fill declare finite history. Older generic
-results require explicit reference-only certification; ordinary updates never
-perform policy maintenance. See the graph/runtime rules.
-Separate source observation coverage from causal output membership; retain
-bounded version halos, shared reads and original completed output references.
+Read [CONTRIBUTING.md](CONTRIBUTING.md), [README.md](README.md) and
+[pyproject.toml](pyproject.toml), then the affected technical contracts routed
+by the contributor guide. [Owner boundaries](docs/en/engineering/development.md) remain authoritative.
 
-Before work, read [`.ai/README.md`](.ai/README.md), the mandatory development
-rules, the affected topic rules, [`README.md`](README.md), [`pyproject.toml`](pyproject.toml)
-and relevant local docs. Inspect tracked and untracked Git changes first.
-Keep this entry short; detailed owner contracts live under `.ai/rules/`.
+Core owns typed Nodes, Operators, Graphs, numerical/ML primitives and CoreStore artifacts. It has no BagelQuant package dependencies. Callers supply neutral inputs, paths, immutable evidence and resource budgets.
 
-- Use Python 3.13 and `uv`; run commands from this repository.
-- Preserve unrelated work, Git metadata, credentials, environments and data.
-- Tests use isolated temporary roots and synthetic inputs; never read or
-  mutate the workspace's real data root or call a real provider for validation.
-- Do not commit, push, create PRs, merge, release, deploy, install services,
-  update real data or change governance unless explicitly requested.
-- Keep immutable sparse Nodes and explicit value_type; BT has a typed
-  prediction boundary and a separate saved-target boundary.
-- Accept neutral input data and immutable evidence through public APIs; Core
-  owns conversion and numerical persistence, Data owns frozen input authority.
-- `CoreStore.inspect(runtime=True)` uses coordinated committed SQLite reads during
-  live writes, permitting WAL/SHM coordination without initialization/recovery;
-  default inspection leaves originals/sidecars untouched. Hot recovery fails closed.
-- Receipt descriptions validate published metadata without claiming a new byte
-  audit; selected value reads decode typed Domain/partitions without rehashing. Explicit full
-  integrity APIs retain all channels. Finite read contexts expire checksum proofs.
-- Explicit initialization enables WAL. Graph/status reads never initialize or
-  acquire writer ownership; mutations retain revision/publication fences.
-- Regenerate operation references from their generator after catalog changes;
-  coordinate separate Workbench catalog updates when the public contract changes.
-- Immutable finite work descriptors separate numerical workers from coordinator
-  publication. Callers configure fresh worker native pools and aggregate admission;
-  Core never chooses machine resources. Physical regions and dispatch preserve
-  canonical mathematical policies, material keys, historical references and fences.
-
-For formal work in an integrated workspace, create/resume a root `.ai/tasks/`
-record using the workspace CLI. Discover the workspace with
-`git rev-parse --show-superproject-working-tree`. If empty, inspect checkout
-ancestors as candidates. Accept only a candidate that is its own Git root,
-declares the four component paths in `.gitmodules` and has their index gitlinks
-(mode `160000`); this checkout must match its exact declared relative owner path.
-For every candidate, also verify
-root `AGENTS.md`, `.ai/README.md`, `.ai/workflow.md`, `.ai/rules/workspace.md`
-and `scripts/ai.py` exist. Read the root workflow and workspace rules; load
-cross-repository contracts only for affected topics. Never guess parent paths.
-In a standalone checkout, follow these local rules and record plan, validation
-and handoff in the conversation; do not create a component task directory.
-Plan/read-only mode never writes task records or implementation files.
-
-Validate code changes with `uv run ruff check .` and `uv run python -m pytest`.
-Report affected contracts, checks/results, unrun checks and next steps honestly.
+Inspect tracked and untracked Git changes before editing. Preserve unrelated
+work, Git metadata and historical evidence. Use Python 3.13 and uv; tests use
+isolated temporary roots and synthetic inputs or fake providers.
+Run the applicable owner checks in CONTRIBUTING.md and report actual results.
+Publication, commits, provider calls and real-data/service changes require
+explicit authorization. Keep generated references owned by their generators.

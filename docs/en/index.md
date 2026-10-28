@@ -14,6 +14,7 @@ prediction, or weight panels.
 - [Performance notes](performance.md)
 - [Concepts](concepts.md)
 - [Architecture and design](architecture.md)
+- [Engineering contracts](engineering/index.md)
 - [Public API](reference/public-api.md)
 - [Internal documentation](reference/internals.md)
 - [Node](reference/concepts/node.md)

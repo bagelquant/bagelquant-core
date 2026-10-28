@@ -9,7 +9,7 @@ Python 3.13; install with `uv add bagelquant-core`. Optional extras: `ml`, `opti
 - [Architecture and runnable standalone example](docs/en/architecture.md)
 - [Causal version inputs and bounded replay](docs/en/causal-inputs.md)
 - [Generated Operator catalog](docs/en/reference/operators/index.md)
-- [AI workflow](.ai/README.md)
+- [Contributor guide and engineering contracts](CONTRIBUTING.md)
 
 Development: `uv sync --all-extras`, `uv run ruff check .`,
 `uv run python -m pytest`, and

@@ -70,6 +70,28 @@ def _result_content(manifest):
         "artifacts", "checkpoint", "training_audits", "execution_policy")}
 
 
+def _revival_content(manifest):
+    """Compare dated tables by logical days only after explicit retirement."""
+    def artifact(item):
+        if isinstance(item, Mapping):
+            leaves = item.get("$artifact_concat", [item])
+            if all(isinstance(leaf, Mapping) and "$file" in leaf and leaf.get("unique_time") is True
+                    and {"schema", "days", "day_rows", "rows", "start", "end"} <= leaf.keys()
+                    for leaf in leaves):
+                calendar = [day for leaf in leaves for day in leaf["days"]]
+                if (calendar == sorted(set(calendar))
+                        and all(leaf["schema"] == leaves[0]["schema"] for leaf in leaves)):
+                    return {"schema": leaves[0]["schema"], "rows": sum(leaf["rows"] for leaf in leaves),
+                        "days": {day: token for leaf in leaves for day, token in leaf["days"].items()},
+                        "day_rows": {day: count for leaf in leaves for day, count in leaf["day_rows"].items()}}
+            return {key: artifact(child) for key, child in item.items()
+                if not (key == "$file" and "sha256" in item)}
+        if isinstance(item, list):
+            return [artifact(child) for child in item]
+        return item
+    return {**_result_content(manifest), "artifacts": artifact(manifest["artifacts"])}
+
+
 def _value_contract(manifest):
     return (manifest["node_id"], manifest["key"]["implementation_id"],
         manifest["value_type"], tuple(manifest["trace_columns"]))
@@ -302,15 +324,48 @@ class CoreStore:
             raise ValueError("artifact path escapes Core storage")
         return path
 
+    def released_identities(self) -> frozenset[str]:
+        """Inspect explicit retirement metadata without opening numerical files."""
+        if not self.meta_path.is_file():
+            return frozenset()
+        from .release import released
+        with self.read_transaction() as connection:
+            return frozenset(released(connection))
+
+    def release_status(self, plan_id: str) -> str:
+        """Return unknown, pending or completed for an explicit release request."""
+        if not self.meta_path.is_file():
+            return "unknown"
+        with self.read_transaction() as connection:
+            if not connection.execute("SELECT 1 FROM sqlite_master WHERE name='artifact_release_plans'").fetchone():
+                return "unknown"
+            row = connection.execute("SELECT completed FROM artifact_release_plans WHERE identity=?", (plan_id,)).fetchone()
+        return "unknown" if row is None else "completed" if row[0] else "pending"
+
+    def plan_release(self, identities: Sequence[str], *, retained: Sequence[str] = ()) -> dict[str, Any]:
+        """Preview explicit result retirement, protecting retained ancestry/files."""
+        from .release import plan_release
+        return plan_release(self, identities, retained=retained)
+
+    def apply_release(self, plan: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply or resume an exact owner-generated retirement preview."""
+        from .release import apply_release
+        return apply_release(self, plan)
+
     def manifest(self, identity: str) -> dict[str, Any] | None:
-        memo = self._read_metadata_memo()
-        cached = None if memo is None else memo.get(("manifest", identity))
-        if cached is not None:
-            self._metadata_event("manifest_cache_hits")
-            return json.loads(cached)
         if not self.meta_path.is_file():
             return None
+        from .release import is_released
+        memo = self._read_metadata_memo()
         with self.read_transaction() as connection:
+            if is_released(connection, identity):
+                return None
+            header = connection.execute("SELECT content_identity FROM materialization_headers WHERE identity=?", (identity,)).fetchone()
+            locator = ("manifest", identity, None if header is None else header[0])
+            cached = None if memo is None else memo.get(locator)
+            if cached is not None:
+                self._metadata_event("manifest_cache_hits")
+                return json.loads(cached)
             row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
         if row is None:
             return None
@@ -323,7 +378,7 @@ class CoreStore:
             with self.read_transaction() as connection:
                 self._verify_artifact_sources(connection, manifest, memo=memo)
         if memo is not None:
-            memo.put(("manifest", identity), row[0], len(row[0].encode()))
+            memo.put(locator, row[0], len(row[0].encode()))
         return manifest
 
     def _verify_artifact_sources(self, connection, manifest, *, visiting=None, memo=None):
@@ -332,16 +387,20 @@ class CoreStore:
 
     @classmethod
     def _verified_reference_manifest(cls, connection, identity, content_identity, *, memo=None, channel="value"):
+        from .release import original_manifest
         locator = ("reference_manifest", identity, content_identity)
         saved = None if memo is None else memo.get(locator, copy_value=False)
         if saved is None:
-            row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
-            if row is None:
-                raise ValueError(f"original {channel} authority is missing")
-            saved = json.loads(row[0])
+            try:
+                raw = original_manifest(connection, identity, content_identity)
+            except KeyError as error:
+                raise ValueError(f"original {channel} authority is missing") from error
+            saved = json.loads(raw)
             cls._verify_metadata(saved, identity)
+            if saved["content_identity"] != content_identity:
+                raise ValueError(f"original {channel} authority differs")
             if memo is not None:
-                memo.put(locator, saved, len(row[0].encode()))
+                memo.put(locator, saved, len(raw.encode()))
         return saved
 
     @classmethod
@@ -537,7 +596,9 @@ class CoreStore:
         if not self.meta_path.is_file():
             return MaterializationLookup(MaterializationStatus.MISS)
         with self.read_transaction() as connection:
-            row = connection.execute("SELECT key_json FROM materializations WHERE node_id=? ORDER BY identity LIMIT 1", (key.node_id,)).fetchone()
+            exclusion = (" AND NOT EXISTS (SELECT 1 FROM materialization_releases r WHERE r.identity=materializations.identity)"
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE name='materialization_releases'").fetchone() else "")
+            row = connection.execute("SELECT key_json FROM materializations WHERE node_id=?" + exclusion + " ORDER BY identity LIMIT 1", (key.node_id,)).fetchone()
         if row is not None:
             return MaterializationLookup(MaterializationStatus.PARTIAL, None, "different context or coverage; reuse requires proof")
         return MaterializationLookup(MaterializationStatus.MISS)
@@ -757,21 +818,48 @@ class CoreStore:
                             or registered_index["membership"] != indexed["membership"]):
                         raise ValueError("registered Domain identity differs from actual calendar/membership")
                 old = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (value.key.identity,)).fetchone()
+                replacing = False
                 if old is not None:
                     existing = json.loads(old[0])
-                    if _result_content(existing) != _result_content(manifest):
+                    self._verify_metadata(existing, value.key.identity)
+                    from .release import is_released, files, safe_file
+                    retired = is_released(connection, value.key.identity)
+                    compare = _revival_content if retired else _result_content
+                    if compare(existing) != compare(manifest):
                         raise ValueError("immutable materialization conflict: different results or evidence for the same key")
-                    if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
-                        computation_index.save(connection, value.key.identity, existing["content_identity"], indexed)
-                    from .read_bounds import save
-                    save(connection, existing, domain)
-                    self._save_region_evidence(connection, existing, region_evidence)
-                    return
+                    replacing = retired and existing["content_identity"] != manifest["content_identity"]
+                    if retired and not replacing:
+                        originals, replacements = files(existing), files(manifest)
+                        by_checksum = {checksum: relative for relative, checksum in replacements.items()}
+                        for relative, checksum in originals.items():
+                            destination = safe_file(self, relative)
+                            if destination.is_file() and _checksum(destination) == checksum:
+                                continue
+                            source_relative = by_checksum.get(checksum)
+                            if source_relative is None:
+                                raise ValueError("recomputed Core result cannot restore original evidence")
+                            source = self._file(source_relative)
+                            if source_relative.startswith(f"values/{value.key.identity}/{generation}/"):
+                                source = temporary / Path(source_relative).name
+                            destination.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(source, destination)
+                        connection.execute("DELETE FROM materialization_releases WHERE identity=?", (value.key.identity,))
+                    if not replacing:
+                        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
+                            computation_index.save(connection, value.key.identity, existing["content_identity"], indexed)
+                        from .read_bounds import save
+                        save(connection, existing, domain)
+                        self._save_region_evidence(connection, existing, region_evidence)
+                        return
                 os.replace(temporary, final)
-                connection.execute("INSERT INTO materializations VALUES(?,?,?,?)",
-                    (value.key.identity, value.key.node_id, _json(value.key.to_dict()), serialized))
+                if replacing:
+                    connection.execute("UPDATE materializations SET manifest_json=? WHERE identity=?", (serialized, value.key.identity))
+                    connection.execute("DELETE FROM materialization_releases WHERE identity=?", (value.key.identity,))
+                else:
+                    connection.execute("INSERT INTO materializations VALUES(?,?,?,?)",
+                        (value.key.identity, value.key.node_id, _json(value.key.to_dict()), serialized))
                 header = _candidate_header(manifest)
-                connection.execute("INSERT INTO materialization_headers VALUES(" + ",".join("?" for _ in header) + ")",
+                connection.execute("INSERT OR REPLACE INTO materialization_headers VALUES(" + ",".join("?" for _ in header) + ")",
                     tuple(header.values()))
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
                     computation_index.save(connection, value.key.identity, manifest["content_identity"], indexed)
@@ -826,12 +914,49 @@ class CoreStore:
         return self._read_region_evidence(header, kind)
 
     def _read_region_evidence(self, manifest, kind):
-        identity = manifest["identity"]
         with self.read_transaction() as connection:
-            rows = connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
-                "WHERE identity=? AND kind=? ORDER BY payload_identity", (identity, kind)).fetchall()
+            rows = self._region_evidence_rows(connection, manifest, kind)
         self._metadata_event("region_evidence_rows", len(rows))
         return self._decode_region_evidence(manifest, kind, rows)
+
+    @staticmethod
+    def _region_evidence_rows(connection, manifest, kind):
+        identity = manifest["identity"]
+        archive = (" UNION SELECT content_identity FROM materialization_originals WHERE identity=:identity"
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='materialization_originals'").fetchone() else "")
+        unknown = connection.execute("SELECT 1 FROM region_evidence WHERE identity=:identity AND kind=:kind "
+            "AND content_identity NOT IN (SELECT :content UNION SELECT content_identity FROM materialization_headers WHERE identity=:identity" + archive + ") LIMIT 1",
+            {"identity": identity, "kind": kind, "content": manifest["content_identity"]}).fetchone()
+        if unknown is not None:
+            raise ValueError("corrupt original region evidence")
+        return connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
+            "WHERE identity=? AND kind=? AND content_identity=? ORDER BY payload_identity", (identity, kind, manifest["content_identity"])).fetchall()
+
+    @classmethod
+    def _region_block_manifest(cls, connection, manifest, identity, *, memo=None):
+        source = next((item for item in manifest.get("value_sources", ()) if item["identity"] == identity), None)
+        if source is not None:
+            return cls._verified_reference_manifest(connection, identity, source["source_content"], memo=memo)
+        row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (identity,)).fetchone()
+        if row is None:
+            raise ValueError("region seal original boundary is missing")
+        block = json.loads(row[0])
+        cls._verify_metadata(block, identity)
+        return block
+
+    def _historical_seals(self, identity):
+        """Audit old update coverage without making retired values reusable."""
+        seals = []
+        with self.read_transaction() as connection:
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='materialization_originals'").fetchone():
+                for raw, content in connection.execute("SELECT manifest_json,content_identity FROM materialization_originals WHERE identity=?", (identity,)):
+                    manifest = json.loads(raw)
+                    self._verify_metadata(manifest, identity)
+                    if manifest["content_identity"] != content:
+                        raise ValueError("corrupt original Core content authority")
+                    rows = self._region_evidence_rows(connection, manifest, "seal")
+                    seals.extend(self._decode_region_evidence(manifest, "seal", rows))
+        return seals
 
     @staticmethod
     def _decode_region_evidence(manifest, kind, rows):
@@ -862,6 +987,8 @@ class CoreStore:
                 if identity is None:
                     raise ValueError("logical coverage requires a durable result boundary")
                 seals = self.region_evidence(identity, kind="seal")
+                if not any(node in seal["nodes"] for seal in seals):
+                    seals = (*seals, *self._historical_seals(identity))
                 if not any(node in seal["nodes"] and MaterializationKey.from_dict(seal["nodes"][node]).node_id == node
                         for seal in seals):
                     raise ValueError("logical coverage has no original durable region seal")
@@ -871,7 +998,11 @@ class CoreStore:
         receipt = self.describe_update(identity)
         if context_id not in receipt["results"]:
             return False
-        return set(node_ids) <= set(receipt["results"][context_id]) | set(receipt["coverage"][context_id])
+        from .release import is_released
+        with self.read_transaction() as connection:
+            available = {node for node, value in receipt["results"][context_id].items() if not is_released(connection, value)}
+        available.update(node for node, boundary in receipt["coverage"][context_id].items() if boundary in available)
+        return set(node_ids) <= available
 
     def read(self, identity: str) -> NodeMaterialization:
         manifest = self.manifest(identity)
@@ -883,19 +1014,21 @@ class CoreStore:
     def _registered_domain(connection, signature):
         """Select available registered coordinate evidence at both publication fences."""
         from .computation_index import VERSION
+        exclusion = (" AND NOT EXISTS (SELECT 1 FROM materialization_releases r WHERE r.identity=m.identity)"
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='materialization_releases'").fetchone() else "")
         if connection.execute("SELECT 1 FROM sqlite_master WHERE name='computation_index'").fetchone():
             # Older missing optional indexes do not invalidate another original
             # receipt's available proof. Its binding, payload and coordinates
             # are still validated normally; no index is warmed implicitly.
             return connection.execute("SELECT m.identity,m.manifest_json FROM materializations m "
                 "LEFT JOIN computation_index i ON i.identity=m.identity "
-                "JOIN materialization_headers h ON h.identity=m.identity WHERE h.domain_identity=? "
-                "ORDER BY CASE WHEN i.version=? AND i.content_identity="
+                "JOIN materialization_headers h ON h.identity=m.identity WHERE h.domain_identity=? " + exclusion +
+                " ORDER BY CASE WHEN i.version=? AND i.content_identity="
                 "h.content_identity THEN 0 ELSE 1 END,m.rowid LIMIT 1",
                 (signature, VERSION)).fetchone()
         return connection.execute("SELECT m.identity,m.manifest_json FROM materializations m "
             "JOIN materialization_headers h ON h.identity=m.identity "
-            "WHERE h.domain_identity=? ORDER BY m.rowid LIMIT 1", (signature,)).fetchone()
+            "WHERE h.domain_identity=? " + exclusion + " ORDER BY m.rowid LIMIT 1", (signature,)).fetchone()
 
     def inventory(self, *, node_id: str | None = None,
                   implementation_id: str | None = None) -> tuple[dict[str, Any], ...]:
@@ -913,7 +1046,9 @@ class CoreStore:
             rows = connection.execute("SELECT identity,node_id,key_json FROM materializations"
                 + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY identity",
                 parameters).fetchall()
-        return tuple({"identity": row[0], "node_id": row[1], "key": json.loads(row[2])} for row in rows)
+            from .release import is_released
+            available = [row for row in rows if not is_released(connection, row[0])]
+        return tuple({"identity": row[0], "node_id": row[1], "key": json.loads(row[2])} for row in available)
 
     def materialization_candidates(self, node_id: str, implementation_id: str, *,
             policy_name: str | None = None, policy_key: str | None = None,
@@ -942,6 +1077,9 @@ class CoreStore:
             rows = connection.execute("SELECT * FROM materialization_headers WHERE " + " AND ".join(clauses)
                 + " ORDER BY through DESC,identity", arguments).fetchall()
         result = []
+        with self.read_transaction() as connection:
+            from .release import is_released
+            rows = [row for row in rows if not is_released(connection, row["identity"])]
         for row in rows:
             header = dict(row)
             digest = header.pop("header_identity")
@@ -980,15 +1118,23 @@ class CoreStore:
     def interval_identity(self, identity: str, *, start, end) -> str | None:
         """Prove selected values, full calendar and membership from index records."""
         from .computation_index import interval
+        from .release import is_released
+        if not self.meta_path.is_file():
+            return None
+        with self.read_transaction() as connection:
+            if is_released(connection, identity):
+                return None
+            header = connection.execute("SELECT content_identity FROM materialization_headers WHERE identity=?", (identity,)).fetchone()
+        locator = ("manifest_authority", identity, None if header is None else header[0])
         memo = self._read_metadata_memo()
-        manifest = None if memo is None else memo.get(("manifest_authority", identity), copy_value=False)
+        manifest = None if memo is None else memo.get(locator, copy_value=False)
         if manifest is None:
             manifest = self.manifest(identity)
             if manifest is not None and memo is not None:
                 # Admit this compact binding only when an interval consumes it;
                 # ordinary manifest reads keep their exact serialized charge.
                 authority = {name: manifest[name] for name in ("identity", "content_identity")}
-                memo.put(("manifest_authority", identity), authority, len(_json(authority).encode()))
+                memo.put(locator, authority, len(_json(authority).encode()))
         else:
             self._metadata_event("manifest_authority_cache_hits")
         if manifest is None:
@@ -1405,11 +1551,7 @@ class CoreStore:
                 if block == identity:
                     raise ValueError("cyclic region boundary evidence")
                 with self.read_transaction() as connection:
-                    row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (block,)).fetchone()
-                if row is None:
-                    raise ValueError("region seal original boundary is missing")
-                block_manifest = json.loads(row[0])
-                self._verify_metadata(block_manifest, block)
+                    block_manifest = self._region_block_manifest(connection, manifest, block)
                 candidates = self._read_region_evidence(block_manifest, "block")
                 certificate = next((item for item in candidates if item["boundary_node"] == seal["boundary_node"]
                     and set(seal["nodes"]) <= set(item["nodes"])), None)
@@ -1794,7 +1936,9 @@ class CoreStore:
         results = [] if current is None else [current[0]]
         results.extend(row[0] for row in rows)
         self._metadata_event("completion_rows", len(rows))
-        return tuple(dict.fromkeys(results))
+        from .release import is_released
+        with self.read_transaction() as connection:
+            return tuple(key for key in dict.fromkeys(results) if not is_released(connection, key))
 
     def node_completions(self, graph_id: str, context_id: str, *, node_ids: Sequence[str] | None = None) -> dict[str, dict[str, Any]]:
         """Read compact successful-node flags in one committed metadata query.
@@ -1889,8 +2033,12 @@ class CoreStore:
         receipt = self.describe_update(identity)
         for results in receipt["results"].values():
             for materialization in results.values():
-                self.verify_identity(materialization)
-                self.read(materialization)
+                from .release import is_released
+                with self.read_transaction() as connection:
+                    retired = is_released(connection, materialization)
+                if not retired:
+                    self.verify_identity(materialization)
+                    self.read(materialization)
         return receipt
 
     def describe_update(self, identity: str) -> dict[str, Any]:

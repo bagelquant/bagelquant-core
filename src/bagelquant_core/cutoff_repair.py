@@ -201,11 +201,8 @@ def verify_region_prefix(store_type, connection, plan, key, policy):
             or prefix["end"] != plan["repair"]["prefix_through"]
             or prefix["start"] > prefix["end"]):
         raise ValueError("Cutoff region prefix lacks original closure authority")
-    row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (prefix["original"],)).fetchone()
-    original = json.loads(row[0])
-    store_type._verify_metadata(original, prefix["original"])
-    rows = connection.execute("SELECT content_identity,payload_json,payload_identity FROM region_evidence "
-        "WHERE identity=? AND kind='block'", (prefix["original"],)).fetchall()
+    original = store_type._verified_reference_manifest(connection, prefix["original"], prefix["original_content"])
+    rows = store_type._region_evidence_rows(connection, original, "block")
     if (original["content_identity"] != prefix["original_content"]
             or prefix["certificate"] not in store_type._decode_region_evidence(original, "block", rows)
             or prefix["certificate"]["nodes"][key.node_id]["index"] != read(connection, original)

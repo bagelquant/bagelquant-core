@@ -423,3 +423,35 @@ counts during admitted publication or explicit index maintenance. Missing counts
 return unknown; never read values to estimate them on a passive prerequisite.
 These optional resource counts live in their own content-bound derived table;
 they never enter numerical proof/certificate payloads or change saved identities.
+
+## Explicit result retirement
+
+`CoreStore.plan_release(identities, retained=...)` and `apply_release(plan)` are
+explicit maintenance APIs. They validate original receipt/seal metadata, traverse
+the selected ancestry and protect the closure of every other available result
+plus caller-retained roots. Only exact registered Core files exclusively owned
+by retired results can be unlinked; shared Domain and original evidence files
+remain. Ordinary orphan cleanup still never retires committed receipts.
+
+An optional release journal and original-content archive are created by explicit
+release, not startup. Original materialization manifests and interval indexes
+are archived under `(identity, content_identity)`; region and update evidence
+remain immutable. A missing archived optional interval index may be filled by
+later validated index evidence; existing original manifests and indexes are
+never replaced. Retired results
+leave lookup/candidate/completion inventories, while deep update verification
+validates surviving results and recognizes intentional retirement. A direct
+retired lookup is unavailable, not a valid cache hit. Retry resumes exact pending
+plans; newly retained files win over unlinking. `release_status(plan_id)` reports
+unknown/pending/completed. File-level durable accounting reports actual removed
+bytes. Recomputing an identical key must reproduce its values, traces, Domain,
+policy and auxiliary evidence. Dated unique-time artifacts compare ordered day
+digests, schemas and row counts; checkpoints and other evidence retain strict
+content equality. An identical physical layout restores original paths. A cold
+recomputation of an originally composed result may instead replace its active
+availability projection with fresh partitions. Original receipts, indexes and
+certificates remain independently selectable by content identity for historical
+proof validation. Ordinary available-key conflicts remain strict. Read-session
+memos bind to the active content identity, so revival cannot return deleted
+paths. Retirement checks use indexed identity lookups, independent of unrelated
+retired-history length.

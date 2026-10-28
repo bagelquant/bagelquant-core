@@ -205,11 +205,7 @@ def _verify_original_authority(store_type, connection, plan, key, visited, memo)
     """Authenticate each shared admission ancestry once per bounded session."""
     original_id = plan["original_identity"]
     dependencies = {original_id}
-    row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (original_id,)).fetchone()
-    if row is None:
-        raise ValueError("Original finite contract maintenance authority is missing")
-    original = json.loads(row[0])
-    store_type._verify_metadata(original, original_id)
+    original = store_type._verified_reference_manifest(connection, original_id, plan["original_content"], memo=memo)
     from .computation_index import read
     if read(connection, original) is None:
         raise ValueError("Finite contract maintenance lost original result index authority")
@@ -220,11 +216,7 @@ def _verify_original_authority(store_type, connection, plan, key, visited, memo)
     if update["results"].get(plan["context_id"], {}).get(key.node_id) != original_id:
         raise ValueError("Finite contract maintenance lost original completed update authority")
     for parent in plan["parents"].values():
-        row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (parent["identity"],)).fetchone()
-        if row is None:
-            raise ValueError("Original finite contract parent authority is missing")
-        saved = json.loads(row[0])
-        store_type._verify_metadata(saved, parent["identity"])
+        saved = store_type._verified_reference_manifest(connection, parent["identity"], parent["content_identity"], memo=memo)
         if read(connection, saved) is None:
             raise ValueError("Finite contract maintenance lost original parent index authority")
         if saved["content_identity"] != parent["content_identity"]:

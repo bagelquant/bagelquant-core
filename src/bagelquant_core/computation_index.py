@@ -40,6 +40,11 @@ def read(db, manifest) -> dict | None:
         return None
     row = db.execute("SELECT content_identity,version,payload_json,payload_identity "
                      "FROM computation_index WHERE identity=?", (manifest["identity"],)).fetchone()
+    if (row is None or row[0] != manifest["content_identity"]) and db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='materialization_originals'").fetchone():
+        original = db.execute("SELECT index_json FROM materialization_originals WHERE identity=? AND content_identity=?",
+            (manifest["identity"], manifest["content_identity"])).fetchone()
+        row = json.loads(original[0]) if original is not None and original[0] is not None else None
     if row is None or row[0] != manifest["content_identity"] or row[1] != VERSION:
         return None
     value = json.loads(row[2])

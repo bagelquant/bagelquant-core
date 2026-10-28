@@ -79,11 +79,7 @@ def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), r
             raise ValueError("Proof rebinding authority contains a cycle")
         if dependencies is not None:
             dependencies.add(original_id)
-        row = connection.execute("SELECT manifest_json FROM materializations WHERE identity=?", (original_id,)).fetchone()
-        if row is None:
-            raise ValueError("Original proof rebinding authority is missing")
-        original = json.loads(row[0])
-        store_type._verify_metadata(original, original_id)
+        original = store_type._verified_reference_manifest(connection, original_id, plan["original_content"], memo=memo)
         if original.get("proof_rebinding") is not None:
             verify_rebinding(store_type, connection, original["proof_rebinding"],
                 MaterializationKey.from_dict(original["key"]), original["execution_policy"],

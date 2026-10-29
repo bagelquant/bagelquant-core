@@ -11,7 +11,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from datetime import date, timedelta
 from dataclasses import replace
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from typing import Mapping
 
 import numpy as np
@@ -369,11 +369,12 @@ def _publish_finite_block(frame, *, domain, output_domain, output_start, last, b
 def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed: Mapping[str, Node],
                         parameters, key, domain, policy, store, check_canceled, input_proof=None,
                         input_window_loader=None, completed_materializations=(), _time_index_lease=None,
-                        _stored_parent_keys=None, kernel_dispatch=None, load_inputs=None):
+                        _stored_parent_keys=None, kernel_dispatch=None, load_inputs=None, _memory_only=False):
     """Execute one admitted node, verifying content proofs before reusing blocks."""
     declared = {node.node_id: node for node in spec.nodes}
     node = declared[node_id]
-    _validate_declared_calendar_axes(spec, inputs, completed, parameters)
+    if not _memory_only:
+        _validate_declared_calendar_axes(spec, inputs, completed, parameters)
     relevant_parameters = _relevant_parameters(node, parameters)
     publication_policy = {**policy, "parameter_bindings": relevant_parameters}
     def same_policy(saved):
@@ -439,6 +440,9 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                 for parent, value in direct.items():
                     token = None if input_proof is None else input_proof(parent, value, warm, prior_end)
                     if token is None:
+                        if _memory_only:
+                            from .finite_work import _MemoryProofUnavailable
+                            raise _MemoryProofUnavailable
                         raise ValueError("Incremental update needs interval evidence for completed inputs; "
                             "run explicit owner index maintenance or supply input_proof before updating")
                     proofs.append(hash_mapping({"version": FINITE_EXECUTION_POLICY, "content": token,
@@ -480,6 +484,9 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                 token = None if input_proof is None else input_proof(parent, value, warm, last)
                 known &= token is not None
                 if token is None and require_interval_proof:
+                    if _memory_only:
+                        from .finite_work import _MemoryProofUnavailable
+                        raise _MemoryProofUnavailable
                     raise ValueError("Incremental update needs interval evidence for completed inputs; "
                         "run explicit owner index maintenance or supply input_proof before updating")
                 proof = hash_mapping({"version": FINITE_EXECUTION_POLICY,
@@ -493,14 +500,18 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         finally:
             output_domain = value = proofs = None
 
-    def load_scoped(proofs, first, last, *, output_start, validate=None):
-        from .finite_work import admit_finite_payload, finite_payload_bytes
-        nonlocal direct
+    def payload(first, last, output_start):
+        from .finite_work import finite_payload_bytes
         missing_domain = scoped_domain(domain, output_start, last)
         traces = tuple(dict.fromkeys(trace for value in direct.values() for trace in value.trace_columns))
-        estimate = finite_payload_bytes([
+        return finite_payload_bytes([
             *((scoped_domain(value.domain, first, last), value.trace_columns) for value in direct.values()),
             (missing_domain, traces)])
+
+    def load_scoped(proofs, first, last, *, output_start, validate=None):
+        from .finite_work import admit_finite_payload
+        nonlocal direct
+        estimate = payload(first, last, output_start)
         admit_finite_payload(estimate)
         if load_inputs is not None:
             load_inputs()
@@ -527,11 +538,13 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
         finally:
             frame = value = own = None
 
-    cold = _ColdFiniteBatches(node, direct, domain, policy, store, active_resource_limits(), _stored_parent_keys)
+    cold = None if _memory_only else _ColdFiniteBatches(
+        node, direct, domain, policy, store, active_resource_limits(), _stored_parent_keys)
     # Once a batch is selected, held schemas/metadata stay charged under P
     # between R scopes. Close the controller before restoring that outer debit.
-    with ExitStack() as planning_scope, cold:
+    with ExitStack() as planning_scope, (nullcontext() if cold is None else cold):
         planning_held = False
+        peak_payload = 0
         computed_sessions = 0
         kernel_sessions = 0
         input_sessions = 0
@@ -540,12 +553,14 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
             if begin < skip_until:
                 continue
             check_canceled()
-            cold.guard()
+            if cold is not None:
+                cold.guard()
             last, warm, proofs, output_domain, block_key, known_proofs = block_authority(begin)
             record = None
             for context in contexts(str(calendar[begin]), str(last)):
                 candidate_key = MaterializationKey(node_id, key.implementation_id, tuple(proofs), output_domain.signature, context)
-                record = store.lookup(candidate_key, domain=output_domain, evidence=False)
+                record = (store.describe(candidate_key.identity) if _memory_only else
+                    store.lookup(candidate_key, domain=output_domain, evidence=False))
                 if record is not None:
                     break
             if record is None:
@@ -560,6 +575,9 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                         signature = value.domain._window_signature(warm, prior_end)
                         token = None if input_proof is None else input_proof(parent, value, warm, prior_end)
                         if token is None and require_interval_proof:
+                            if _memory_only:
+                                from .finite_work import _MemoryProofUnavailable
+                                raise _MemoryProofUnavailable
                             raise ValueError("Incremental prefix reuse needs explicit interval-index maintenance")
                         prior_proofs.append(hash_mapping({"version": FINITE_EXECUTION_POLICY,
                             "content": token or {"source": value.identity, "start": str(warm), "end": str(prior_end)},
@@ -569,9 +587,14 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                         context) for context in contexts(str(output_start), str(prior_end))]
                     prior_key = next((value for value in prior_keys if value.identity == candidate["identity"]), None)
                     if prior_key is not None:
-                        prefix = store.lookup(prior_key, domain=prior_domain, evidence=False)
+                        prefix = (store.describe(prior_key.identity) if _memory_only else
+                            store.lookup(prior_key, domain=prior_domain, evidence=False))
                         output_start = calendar[calendar.index(prior_end)+1]
                         break
+                if _memory_only:
+                    read_start = numerical_start(output_start, last, begin)
+                    peak_payload = max(peak_payload, payload(read_start, last, output_start))
+                    continue
                 batch = (cold.plan(begin, calendar,
                     lambda origin, end: numerical_start(calendar[origin], end, origin), CANONICAL_SESSIONS)
                     if prefix is None and known_proofs else None)
@@ -641,10 +664,12 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                         planning_held = False
                     if batched:
                         continue
-                elif not planning_held:
-                    # No first batch fits or has original interval authority.
-                    # Discard selection metadata before original consumption.
+                else:
+                    # A later single block must not inherit an optional
+                    # batching reservation when no batch is admitted.
                     cold.close()
+                    planning_scope.close()
+                    planning_held = False
                 scoped = kernel = frame = None
                 try:
                     read_start = numerical_start(output_start, last, begin)
@@ -669,8 +694,12 @@ def execute_finite_node(spec, node_id, *, inputs: Mapping[str, Node], completed:
                 kernel_sessions += _calendar_sessions(calendar, read_start, last)
             else:
                 reused += 1
+            if _memory_only:
+                continue
             blocks.append(record.panel)
             references.append(record.key.identity)
+        if _memory_only:
+            return peak_payload * 8
         result = _reference_node(pl.concat([value.lazy(include_traces=True) for value in blocks]), domain,
             key, value_type=blocks[0].value_type, trace_columns=blocks[0].trace_columns)
         check_canceled()

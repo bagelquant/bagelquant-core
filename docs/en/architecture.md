@@ -59,6 +59,15 @@ consumes typed results under current cancellation/revision fences and deletes th
 staging files. `native_admission` wraps each complete execution unit; Workbench
 chooses native profiles, worker admission and aggregate budgets before imports.
 
+Before admitting a ready node, callers can ask
+`plan.required_memory_bytes(context_id, node_id, limits=limits)`. It sizes only
+missing finite/region windows from registered proof metadata and resident
+coordinates, including input lookbacks, retained outputs, temporary copies and
+cache. Zero means complete work; None means sizing is unavailable and the caller
+must choose conservative admission. This reads no numerical payload, starts no
+kernel and changes no receipt. It never replaces execution's proof/publication
+guards. See the [runtime contract](engineering/graph-runtime.md).
+
 ## Objects and types
 
 - `Domain(calendar=..., universe=...)` defines trading sessions and static or

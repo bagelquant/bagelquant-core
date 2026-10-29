@@ -69,7 +69,7 @@ def plan_regions(spec, *, policies, requested, persist_nodes, causal_nodes):
     return tuple(regions)
 
 
-def _block_key(plan, context, node_id, start, end, indexes, direct, *, require_proof=False):
+def _block_key(plan, context, node_id, start, end, indexes, direct, *, require_proof=False, metadata_only=False):
     node = plan._nodes[node_id]
     proofs = []
     for parent in parents(node):
@@ -81,8 +81,11 @@ def _block_key(plan, context, node_id, start, end, indexes, direct, *, require_p
             source = plan.keys[context][parent].identity
         else:
             value = direct[parent]
-            token = plan._proof_reader(context)(parent, value, start, end)
+            token = plan._proof_reader(context, metadata_only=metadata_only)(parent, value, start, end)
             if token is None and require_proof:
+                if metadata_only:
+                    from .finite_work import _MemoryProofUnavailable
+                    raise _MemoryProofUnavailable
                 raise ValueError("Completed region history requires interval proofs; run explicit owner evidence maintenance")
             domain, kind, traces, source = value.domain, value.value_type.value, value.trace_columns, value.identity
         own = scoped_domain(domain, start, end)
@@ -96,13 +99,14 @@ def _block_key(plan, context, node_id, start, end, indexes, direct, *, require_p
         scoped_domain(plan.domains[context][node_id], start, end).signature, key_context)
 
 
-def _matching_certificate(plan, context, region, certificate, start, end, direct, *, require_proof=False):
+def _matching_certificate(plan, context, region, certificate, start, end, direct, *, require_proof=False, metadata_only=False):
     if certificate.get("boundary_node") != region.output_node or not set(region.nodes) <= set(certificate.get("nodes", {})):
         return False
     indexes = {}
     for node in region.nodes:
         item = certificate["nodes"][node]
-        expected = _block_key(plan, context, node, start, end, indexes, direct, require_proof=require_proof)
+        expected = _block_key(plan, context, node, start, end, indexes, direct,
+            require_proof=require_proof, metadata_only=metadata_only)
         if expected.to_dict() != item["key"]:
             return False
         index = item["index"]
@@ -113,10 +117,11 @@ def _matching_certificate(plan, context, region, certificate, start, end, direct
     return True
 
 
-def execute_region(plan, context, region, guard, *, proof_rebinding=None):
+def execute_region(plan, context, region, guard, *, proof_rebinding=None, _memory_only=False, _direct=None):
     """Execute only missing region intervals with the original block identities."""
     declared = {node.node_id: node for node in plan.spec.nodes}
-    direct = {parent: (plan._inputs[context][declared[parent].input_key] if declared[parent].node_type == "input"
+    direct = _direct if _direct is not None else {
+        parent: (plan._inputs[context][declared[parent].input_key] if declared[parent].node_type == "input"
         else plan._values[context][parent]) for parent in region.external_inputs}
     root = region.output_node
     domain = plan.domains[context][root]
@@ -146,7 +151,8 @@ def execute_region(plan, context, region, guard, *, proof_rebinding=None):
             prior_end = date.fromisoformat(header["through"])
             if prior_end not in calendar[begin:begin + CANONICAL_SESSIONS] or prior_end > end:
                 continue
-            if _matching_certificate(plan, context, region, certificate, start, prior_end, direct, require_proof=require_proof):
+            if _matching_certificate(plan, context, region, certificate, start, prior_end, direct,
+                    require_proof=require_proof, metadata_only=_memory_only):
                 selected[begin] = (header, certificate)
                 break
     if require_proof and not selected:
@@ -163,6 +169,7 @@ def execute_region(plan, context, region, guard, *, proof_rebinding=None):
     usage = {node: {"computed_blocks": 0, "reused_blocks": 0, "computed_output_sessions": 0,
         "kernel_sessions": 0, "input_sessions": 0, "canonical_sessions": CANONICAL_SESSIONS} for node in region.nodes}
     references, panels = [], []
+    peak_payload = 0
     for begin in range(0, len(calendar), CANONICAL_SESSIONS):
         guard()
         start, end = calendar[begin], calendar[min(begin + CANONICAL_SESSIONS, len(calendar)) - 1]
@@ -172,8 +179,11 @@ def execute_region(plan, context, region, guard, *, proof_rebinding=None):
             header, certificate = retained
             old_end = date.fromisoformat(header["through"])
             key = MaterializationKey.from_dict(certificate["nodes"][root]["key"])
-            prefix = plan.store.lookup(key, domain=scoped_domain(domain, start, old_end), evidence=False)
+            if not _memory_only:
+                prefix = plan.store.lookup(key, domain=scoped_domain(domain, start, old_end), evidence=False)
             if old_end == end:
+                if _memory_only:
+                    continue
                 references.append(prefix.key.identity)
                 panels.append(prefix.panel)
                 for node in region.nodes:
@@ -188,6 +198,9 @@ def execute_region(plan, context, region, guard, *, proof_rebinding=None):
         estimate = finite_payload_bytes([
             *((scoped_domain(value.domain, output_start, end), value.trace_columns) for value in direct.values()),
             *((scoped_domain(plan.domains[context][node], output_start, end), traces) for node in region.nodes)])
+        if _memory_only:
+            peak_payload = max(peak_payload, estimate)
+            continue
         admit_finite_payload(estimate)
         if plan._input_window_loader is None:
             for member in region.nodes:
@@ -277,6 +290,8 @@ def execute_region(plan, context, region, guard, *, proof_rebinding=None):
         record = plan.store.lookup(block_key, domain=block_domain, evidence=False)
         references.append(record.key.identity)
         panels.append(record.panel)
+    if _memory_only:
+        return peak_payload * 8
     key = plan.keys[context][root]
     result = _reference_node(pl.concat([panel.lazy(include_traces=True) for panel in panels]), domain,
         key, value_type=panels[0].value_type, trace_columns=panels[0].trace_columns)

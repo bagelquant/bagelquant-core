@@ -109,6 +109,22 @@ coordinator validates result types/traces, fences cancellation/revisions, publis
 and advances completion. Fresh process/native setup, worker counts and machine
 admission remain caller-owned. Staging expires on success, failure or cancellation.
 
+`UpdatePlan.required_memory_bytes(context_id, node_id, limits=...)` sizes a ready
+durable node through the same finite/region window and retained-block selection
+used by execution. It reads registered receipts, interval proofs and resident
+Domain coordinates, never numerical values, original-file schemas, kernels or
+new indexes. The actual sizing phase uses the supplied columnar native admission, outside
+the plan lock, so coordinate operations cannot overlap suspended parent work.
+External proof callbacks must provide metadata evidence; missing
+metadata proof or an unsupported execution strategy returns None. Completed
+work returns zero. The conservative byte estimate includes missing lookback
+inputs, mandatory outputs/intermediates, temporary copies and the supplied cache
+reserve. It is a scheduling estimate, not a readiness receipt or hard RSS bound.
+Optional cold preparation and percentage views keep their own admission guards;
+unadmitted batching releases its held planning reservation before ordinary
+consumption. Execution always rechecks revision/proof/local-memory/publication
+fences. Machine concurrency and allocation policy remain the caller's concern.
+
 `plan_update(causal_inputs=..., input_version_loader=..., input_scope_proof=...,
 causal_output_domains=...)` admits typed CausalInputWindow versions in the same
 update engine. Effective known_at/revision precedence comes from the source;

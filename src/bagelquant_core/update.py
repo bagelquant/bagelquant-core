@@ -389,6 +389,69 @@ class UpdatePlan:
                 and all(parent not in self._nodes or parent in complete for parent in
                     (self._region_outputs[node_id].external_inputs if node_id in self._region_outputs else parents(node))))
 
+    def required_memory_bytes(self, context_id: str, node_id: str, *, limits: ResourceLimits) -> int | None:
+        """Conservatively size remaining finite work using registered metadata.
+
+        Return zero for completed work, or None for unsupported strategies or
+        missing metadata proofs. No values, kernels, indexes or publications
+        are consumed/created. Callers retain machine policy and must still use
+        execute's revision, proof and local resource guards. The estimate
+        reserves canonical working buffers and cache; optional preparation
+        retains its own admission guards. This is not an RSS cap.
+        """
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        from .finite_work import _MemoryProofUnavailable
+        from .node import ValueType
+        from .regions import execute_region
+
+        self.guard()
+        with self._lock:
+            if node_id not in self._nodes or context_id not in self.results:
+                raise KeyError((context_id, node_id))
+            if node_id in self.results[context_id]:
+                return 0
+            if node_id not in self.ready(context_id):
+                raise ValueError("memory sizing requires a ready durable node")
+            region = self._region_outputs.get(node_id)
+            if (node_id in self._causal_nodes or context_id in self._input_proof_repairs
+                    or region is None and node_id not in self.policies[context_id]):
+                return None
+            key = self.keys[context_id][node_id]
+            if self.store.describe(key.identity) is not None:
+                return 0
+            selected = region.external_inputs if region is not None else parents(self._nodes[node_id])
+            declared = {node.node_id: node for node in self.spec.nodes}
+            direct = {}
+            for parent in selected:
+                if declared[parent].node_type == "input":
+                    direct[parent] = self._inputs[context_id][declared[parent].input_key]
+                else:
+                    identity = self.results[context_id][parent]
+                    header = self.store.describe(identity)
+                    if header is None:
+                        raise ValueError("completed parent numerical authority is missing; explicit Core recovery is required")
+                    direct[parent] = SimpleNamespace(identity=identity, domain=self.domains[context_id][parent],
+                        value_type=ValueType(header["value_type"]), trace_columns=tuple(header["trace_columns"]))
+        admission = nullcontext() if self._native_admission is None else self._native_admission("columnar")
+        with admission, resource_limits(limits), preparation_scope(self._preparation):
+            try:
+                if region is not None:
+                    working = execute_region(self, context_id, region, self.guard, _memory_only=True, _direct=direct)
+                else:
+                    working = execute_finite_node(self.spec, node_id,
+                        inputs=self._inputs[context_id], completed=direct, parameters=self._parameters[context_id],
+                        key=key, domain=self.domains[context_id][node_id], policy=self.policies[context_id][node_id],
+                        store=self.store, check_canceled=self.guard, input_proof=self._proof_reader(context_id, metadata_only=True),
+                        completed_materializations=self.store.completed_materializations(self.graph.graph_id, context_id, node_id),
+                        _memory_only=True)
+            except _MemoryProofUnavailable:
+                return None
+        self.guard()
+        if not working:
+            return 0
+        return working + limits.cache_mib * 1024**2
+
     def execute(self, context_id, node_id, *, limits: ResourceLimits | None = None, check_canceled=None):
         """Execute one ready node, reusing already completed immutable parents."""
         from contextlib import nullcontext
@@ -615,10 +678,10 @@ class UpdatePlan:
                 self._inputs[context_id][source] = value
                 self._loaded_inputs.add(locator)
 
-    def _proof_reader(self, context_id):
+    def _proof_reader(self, context_id, *, metadata_only=False):
         def proof(parent, value, start, end, consumption_cutoff=None):
             locator = (context_id, parent, value.identity, value.domain, value.value_type,
-                value.trace_columns, value.trace_identity, start, end, consumption_cutoff)
+                value.trace_columns, getattr(value, "trace_identity", None), start, end, consumption_cutoff, metadata_only)
             return self._preparation.remember("interval_proof", locator,
                 lambda: read(parent, value, start, end, consumption_cutoff), lambda token: len(token) * 4)
 
@@ -640,7 +703,7 @@ class UpdatePlan:
                     # distinguish actual immutable Domain objects in this
                     # operation-local memo, retaining them against id reuse.
                     return value.source_interval_identity(token, start, end)
-            return value.interval_identity(start, end)
+            return None if metadata_only else value.interval_identity(start, end)
         return proof
 
     def _checkpoint_supported(self, node_id):

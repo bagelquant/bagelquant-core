@@ -92,6 +92,10 @@ class FiniteKernelResult:
 KernelDispatch = Callable[[FiniteKernelWork], FiniteKernelResult]
 
 
+class _MemoryProofUnavailable(Exception):
+    """Sizing cannot authenticate retained work without consuming values."""
+
+
 def finite_payload_bytes(frames) -> int:
     """Charge every required frame from its immutable coordinate metadata.
 

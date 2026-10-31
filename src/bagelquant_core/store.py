@@ -425,7 +425,7 @@ class CoreStore:
             if manifest.get("proof_rebinding") is not None:
                 cls._verify_proof_rebinding(connection, manifest["proof_rebinding"],
                     MaterializationKey.from_dict(manifest["key"]), manifest["execution_policy"],
-                    visited=tuple(visiting), memo=memo, dependencies=dependencies)
+                    visited=tuple(visiting), memo=memo, dependencies=dependencies, checkpoint=manifest["checkpoint"])
             for source in manifest.get("value_sources", ()):
                 source_locator = ("source_bindings", source["identity"], source["source_content"])
                 authority = None if memo is None else memo.get(source_locator, copy_value=False)
@@ -472,9 +472,11 @@ class CoreStore:
         return checked
 
     @classmethod
-    def _verify_proof_rebinding(cls, connection, plan, key, policy, *, visited=(), memo=None, dependencies=None):
+    def _verify_proof_rebinding(cls, connection, plan, key, policy, *, visited=(), memo=None, dependencies=None, checkpoint=None):
         from .proof_maintenance import verify_rebinding
-        verify_rebinding(cls, connection, plan, key, policy, visited=visited, memo=memo, dependencies=dependencies)
+        admitted = verify_rebinding(cls, connection, plan, key, policy, visited=visited, memo=memo, dependencies=dependencies)
+        if plan.get("mode") == "streak_checkpoint.v1" and checkpoint != admitted["checkpoint"]:
+            raise ValueError("Streak certification checkpoint differs from immutable admission")
 
     @staticmethod
     def _verify_metadata(manifest: Mapping[str, Any], identity: str) -> None:
@@ -1439,8 +1441,13 @@ class CoreStore:
         explicit maintenance operation registers immutable plan metadata after
         validation; it is not a read-only prerequisite or preview. It never
         infers equivalence from saved output values or changes original receipts.
+        Explicit streak_checkpoint.v1 certification consumes bounded original
+        output/parent tails to add continuation state with original value references.
         """
         mode = source_bindings.pop("mode", None)
+        if mode == "streak_checkpoint.v1":
+            from .streak_maintenance import plan_maintenance
+            return plan_maintenance(self, spec, identity, **source_bindings)
         if mode == "finite_contract.v1":
             from .finite_contract_maintenance import plan_maintenance
             return plan_maintenance(self, spec, identity, **source_bindings)
@@ -1456,6 +1463,9 @@ class CoreStore:
 
     def apply_input_proof_rebind(self, plan, *, check_canceled=lambda: None, update_plan=None) -> dict[str, Any]:
         """Apply exact references, or admit bounded repair in an ordinary UpdatePlan."""
+        if plan.get("mode") == "streak_checkpoint.v1":
+            from .streak_maintenance import apply_maintenance
+            return apply_maintenance(self, plan, check_canceled=check_canceled)
         if plan.get("mode") == "finite_contract.v1":
             from .finite_contract_maintenance import apply_maintenance
             return apply_maintenance(self, plan, check_canceled=check_canceled)

@@ -10,6 +10,7 @@ import polars as pl
 from bagelquant_core.frame import ASSET_ID, TIME, VALUE
 from bagelquant_core.operation_contract import InputDensity, OperationContract, TraceRule
 from bagelquant_core.operator._definition import operator
+from bagelquant_core.streak_state import checkpoint_streak, valid_streak_state
 
 _VALID = "__bq_streak_valid"
 _PREVIOUS = "__bq_streak_previous"
@@ -23,6 +24,10 @@ _RUN_START = "__bq_streak_run_start"
 _REVERSAL = "__bq_streak_reversal"
 _POSITION = "__bq_streak_position"
 _OFFSET = "__bq_streak_offset"
+_FIRST = "__bq_streak_first"
+_SEED_VALUE = "__bq_streak_seed_value"
+_SEED_DIRECTION = "__bq_streak_seed_direction"
+_SEED_COUNT = "__bq_streak_seed_count"
 
 Frame = pl.DataFrame | pl.LazyFrame
 
@@ -75,11 +80,14 @@ def _repeat_state(frame: Frame) -> Frame:
     )
 
 
-def _change_state(frame: Frame) -> Frame:
+def _change_state(frame: Frame, *, restored: bool = False) -> Frame:
     value = pl.col(VALUE)
+    previous = value.shift(1).over(ASSET_ID)
+    if restored:
+        previous = pl.when(pl.col(_FIRST)).then(pl.col(_SEED_VALUE)).otherwise(previous)
     prepared = frame.with_columns(
         _valid_value().alias(_VALID),
-        value.shift(1).over(ASSET_ID).alias(_PREVIOUS),
+        previous.alias(_PREVIOUS),
     ).with_columns(
         (
             pl.col(_PREVIOUS).is_not_null()
@@ -89,8 +97,8 @@ def _change_state(frame: Frame) -> Frame:
     return prepared
 
 
-def _streak_state(frame: Frame, *, reset_on_equal: bool) -> Frame:
-    prepared = _change_state(frame).with_columns(
+def _streak_state(frame: Frame, *, reset_on_equal: bool, restored: bool = False) -> Frame:
+    prepared = _change_state(frame, restored=restored).with_columns(
         pl.when(pl.col(_VALID) & pl.col(_PREVIOUS_VALID))
         .then((pl.col(VALUE) - pl.col(_PREVIOUS)).sign())
         .otherwise(None)
@@ -98,16 +106,16 @@ def _streak_state(frame: Frame, *, reset_on_equal: bool) -> Frame:
         .alias(_DIRECTION)
     )
     if reset_on_equal:
-        return _resetting_streak_state(prepared)
-    return _holding_streak_state(prepared)
+        return _resetting_streak_state(prepared, restored=restored)
+    return _holding_streak_state(prepared, restored=restored)
 
 
-def _resetting_streak_state(frame: Frame) -> Frame:
+def _resetting_streak_state(frame: Frame, *, restored: bool = False) -> Frame:
+    previous = pl.col(_DIRECTION).shift(1).over(ASSET_ID)
+    if restored:
+        previous = pl.when(pl.col(_FIRST)).then(pl.col(_SEED_DIRECTION)).otherwise(previous)
     prepared = frame.with_columns(
-        pl.col(_DIRECTION)
-        .shift(1)
-        .over(ASSET_ID)
-        .alias(_PREVIOUS_DIRECTION)
+        previous.alias(_PREVIOUS_DIRECTION)
     ).with_columns(
         (
             pl.col(_VALID)
@@ -127,10 +135,10 @@ def _resetting_streak_state(frame: Frame) -> Frame:
             & (pl.col(_DIRECTION) != pl.col(_PREVIOUS_DIRECTION))
         ).alias(_REVERSAL),
     )
-    return _finish_streak_state(prepared, hold_equal=False)
+    return _finish_streak_state(prepared, hold_equal=False, restored=restored)
 
 
-def _holding_streak_state(frame: Frame) -> Frame:
+def _holding_streak_state(frame: Frame, *, restored: bool = False) -> Frame:
     prepared = frame.with_columns(
         (pl.col(_VALID) & ~pl.col(_PREVIOUS_VALID)).alias(_RUN_START)
     ).with_columns(
@@ -140,7 +148,7 @@ def _holding_streak_state(frame: Frame) -> Frame:
         .over(ASSET_ID)
         .alias(_BLOCK)
     )
-    prepared = prepared.with_columns(
+    effective = (
         pl.when(
             pl.col(_DIRECTION).is_not_null()
             & (pl.col(_DIRECTION) != 0)
@@ -149,13 +157,15 @@ def _holding_streak_state(frame: Frame) -> Frame:
         .otherwise(None)
         .forward_fill()
         .over([ASSET_ID, _BLOCK])
-        .alias(_EFFECTIVE_DIRECTION)
-    ).with_columns(
-        pl.col(_EFFECTIVE_DIRECTION)
-        .shift(1)
-        .over(ASSET_ID)
-        .alias(_PREVIOUS_DIRECTION)
     )
+    if restored:
+        effective = pl.when(pl.col(_BLOCK) == 0).then(
+            pl.coalesce(effective, pl.col(_SEED_DIRECTION))).otherwise(effective)
+    previous = pl.col(_EFFECTIVE_DIRECTION).shift(1).over(ASSET_ID)
+    if restored:
+        previous = pl.when(pl.col(_FIRST)).then(pl.col(_SEED_DIRECTION)).otherwise(previous)
+    prepared = prepared.with_columns(effective.alias(_EFFECTIVE_DIRECTION)).with_columns(
+        previous.alias(_PREVIOUS_DIRECTION))
     prepared = prepared.with_columns(
         (
             pl.col(_VALID)
@@ -168,10 +178,10 @@ def _holding_streak_state(frame: Frame) -> Frame:
     ).with_columns(
         (pl.col(_RUN_START) | pl.col(_REVERSAL)).alias(_RUN_START)
     )
-    return _finish_streak_state(prepared, hold_equal=True)
+    return _finish_streak_state(prepared, hold_equal=True, restored=restored)
 
 
-def _finish_streak_state(frame: Frame, *, hold_equal: bool) -> Frame:
+def _finish_streak_state(frame: Frame, *, hold_equal: bool, restored: bool = False) -> Frame:
     prepared = frame.with_columns(
         pl.col(_RUN_START)
         .cast(pl.Int64)
@@ -202,6 +212,8 @@ def _finish_streak_state(frame: Frame, *, hold_equal: bool) -> Frame:
         if hold_equal
         else pl.col(_DIRECTION)
     )
+    carry = (pl.when(pl.col(_RUN) == 0).then(pl.col(_SEED_COUNT).fill_null(0)).otherwise(0)
+             if restored else pl.lit(0))
     return prepared.with_columns(
         pl.when(~pl.col(_VALID))
         .then(None)
@@ -210,6 +222,7 @@ def _finish_streak_state(frame: Frame, *, hold_equal: bool) -> Frame:
         .otherwise(
             direction.cast(pl.Int64)
             * (pl.col(_POSITION) - pl.col(_OFFSET))
+            + carry
         )
         .cast(pl.Int64)
         .alias(VALUE)
@@ -220,26 +233,31 @@ def _run_trace(
     frame: Frame,
     *,
     traces: tuple[str, ...],
+    restored: bool = False,
 ) -> Frame:
     dependency_columns = {
         trace: f"__bq_streak_trace_dependency_{index}"
         for index, trace in enumerate(traces)
     }
-    prepared = frame.with_columns(
-        pl.max_horizontal(
-            pl.col(trace).cast(pl.Int32),
-            pl.col(trace).cast(pl.Int32).shift(1).over(ASSET_ID),
-        ).alias(dependency)
-        for trace, dependency in dependency_columns.items()
-    )
+    dependencies = []
+    for index, (trace, dependency) in enumerate(dependency_columns.items()):
+        previous = pl.col(trace).cast(pl.Int32).shift(1).over(ASSET_ID)
+        if restored:
+            previous = pl.when(pl.col(_FIRST)).then(
+                pl.col(f"__bq_streak_seed_previous_trace_{index}").cast(pl.Int32)).otherwise(previous)
+        dependencies.append(pl.max_horizontal(pl.col(trace).cast(pl.Int32), previous).alias(dependency))
+    prepared = frame.with_columns(dependencies)
     expressions: list[pl.Expr] = []
-    for trace in traces:
+    for index, trace in enumerate(traces):
         cumulative = (
             pl.col(dependency_columns[trace])
             .cum_max()
             .over([ASSET_ID, _RUN])
             .cast(pl.Date)
         )
+        if restored:
+            cumulative = pl.when(pl.col(_RUN) == 0).then(pl.max_horizontal(
+                cumulative, pl.col(f"__bq_streak_seed_run_trace_{index}"))).otherwise(cumulative)
         expressions.append(
             pl.when(pl.col(_VALID))
             .then(cumulative)
@@ -269,6 +287,10 @@ def _streak_trace(
 ) -> pl.LazyFrame:
     reset_on_equal = config.get("reset_on_equal", True)
     _validate_reset_on_equal(reset_on_equal)
+    from bagelquant_core.operator_state import checkpoint_capture_enabled
+    if checkpoint_capture_enabled():
+        traced = checkpoint_streak(parents[0].collect(), reset_on_equal=reset_on_equal, traces=traces)
+        return traced.select(TIME, ASSET_ID, *traces).lazy()
     state = _streak_state(
         parents[0].sort([ASSET_ID, TIME]),
         reset_on_equal=reset_on_equal,
@@ -287,6 +309,9 @@ _STREAK_CONTRACT = OperationContract(
     density=InputDensity.DENSE_REQUIRED,
     trace_rule=TraceRule.CUSTOM,
     trace_function=_streak_trace,
+    checkpoint_replay=True,
+    checkpoint_history=0,
+    checkpoint_validator=valid_streak_state,
 )
 
 
@@ -336,6 +361,9 @@ def streak_count(
     reset_on_equal: bool = True,
 ) -> pl.DataFrame:
     _validate_reset_on_equal(reset_on_equal)
+    continued = checkpoint_streak(frame, reset_on_equal=reset_on_equal)
+    if continued is not None:
+        return continued.select(TIME, ASSET_ID, VALUE)
     state = _streak_state(
         frame.sort([ASSET_ID, TIME]),
         reset_on_equal=reset_on_equal,

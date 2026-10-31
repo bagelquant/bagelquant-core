@@ -55,6 +55,10 @@ PLAN_DDL = """CREATE TABLE IF NOT EXISTS input_proof_rebinding_plans(
 def verify_rebinding(store_type, connection, plan, key, policy, *, visited=(), require_admission=True,
         memo=None, dependencies=None):
     """Validate immutable admission and its complete retained authority chain."""
+    if plan.get("mode") == "streak_checkpoint.v1":
+        from .streak_maintenance import verify_maintenance
+        return verify_maintenance(store_type, connection, plan, key, policy,
+            visited=visited, memo=memo, dependencies=dependencies)
     if plan.get("mode") == "finite_contract.v1":
         from .finite_contract_maintenance import verify_maintenance
         return verify_maintenance(store_type, connection, plan, key, policy,

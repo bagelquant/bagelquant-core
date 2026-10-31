@@ -65,8 +65,8 @@ def test_cached_original_json_preserves_nested_types_bits_and_public_mutation_is
         assert _tree(first) == token
         memo = reader._metadata_memo
         assert memo is not None
-        assert memo.get(('manifest', identity), copy_value=False) == raw
-        assert type(memo.get(('manifest', identity), copy_value=False)) is str
+        assert memo.get(('manifest', identity, expected['content_identity']), copy_value=False) == raw
+        assert type(memo.get(('manifest', identity, expected['content_identity']), copy_value=False)) is str
         for value in (first, reader.manifest(identity)):
             assert value is not None
             value['key']['inputs'].append('caller-only')
@@ -128,7 +128,7 @@ def test_serialized_entry_keeps_existing_utf8_charge_admission_and_events(serial
         assert memo.bytes <= memo.maximum_bytes
         assert events.count('manifest_reads') == (1 if admitted else 3)
         assert events.count('manifest_cache_hits') == (2 if admitted else 0)
-        assert (memo.get(('manifest', identity), copy_value=False) == raw) is admitted
+        assert (memo.get(('manifest', identity, expected['content_identity']), copy_value=False) == raw) is admitted
     assert memo.closed and memo.bytes == 0
 
 
@@ -144,11 +144,11 @@ def test_failed_metadata_is_not_cached_and_restoration_is_revalidated(serialized
             db.execute('UPDATE materializations SET manifest_json=? WHERE identity=?', (corrupted, identity))
         with pytest.raises(ValueError):
             reader.manifest(identity)
-        assert memo.get(('manifest', identity), copy_value=False) is None
+        assert memo.get(('manifest', identity, expected['content_identity']), copy_value=False) is None
         with sqlite3.connect(store.meta_path) as db:
             db.execute('UPDATE materializations SET manifest_json=? WHERE identity=?', (raw, identity))
         assert _tree(reader.manifest(identity)) == _tree(expected)
-        assert memo.get(('manifest', identity), copy_value=False) == raw
+        assert memo.get(('manifest', identity, expected['content_identity']), copy_value=False) == raw
 
 
 @pytest.mark.parametrize('nonfinite', [float('nan'), float('inf'), -float('inf')])

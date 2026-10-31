@@ -254,7 +254,7 @@ def test_schema_preflight_is_once_per_parent_under_P_before_bodies_and_runtime(t
 
 
 @NATIVE
-def test_schema_P_remains_reserved_through_single_block_tail_and_closes_before_restore(tmp_path, monkeypatch):
+def test_schema_P_is_released_before_unbatched_tail_and_limits_restore(tmp_path, monkeypatch):
     x, controllers, closes = source(257), [], []
     factory, close = incremental._ColdFiniteBatches, cold_module._ColdFiniteBatches.close
     outer = active_resource_limits()
@@ -264,8 +264,13 @@ def test_schema_P_remains_reserved_through_single_block_tail_and_closes_before_r
         return controller
     def observe_close(controller):
         if controller._schemas:
-            closes.append(active_resource_limits())
-            assert active_resource_limits() == controller.planning_limits
+            limits = active_resource_limits()
+            assert limits == controller.planning_limits
+            closes.append((limits, len(requests)))
+            result = close(controller)
+            assert not controller._schemas and controller._parents is None and controller._store is None
+            assert active_resource_limits() == limits
+            return result
         return close(controller)
     monkeypatch.setattr(incremental, "_ColdFiniteBatches", capture)
     monkeypatch.setattr(cold_module._ColdFiniteBatches, "close", observe_close)
@@ -279,8 +284,11 @@ def test_schema_P_remains_reserved_through_single_block_tail_and_closes_before_r
         (x.domain.times[first], x.domain.times[min(first + 31, 256)])
         for first in range(0, 257, 32)]
     assert all(entry["limits"].memory_target_mib <= holders[0].planning_limits.memory_target_mib
-        for entry in entries)
-    assert len(closes) == 1 and requests[-1]["limits"] == closes[0] == holders[0].planning_limits
+        for entry in entries[:-2])
+    # Release held schema/parent/store state under P after the eight batched
+    # reads, before restoring the ordinary final block's original budget.
+    assert closes == [(holders[0].planning_limits, 8)]
+    assert len(requests) == 9 and requests[-1]["limits"] == holders[0]._limits
     assert active_resource_limits() == outer
 
 

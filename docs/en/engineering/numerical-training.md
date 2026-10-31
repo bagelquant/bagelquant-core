@@ -21,8 +21,10 @@ legacy checkpoints require explicit proof maintenance, never silent old refits.
   seeded stable keys before gathering wide matrices. Both estimators default
   to seed 1729. Actual training-key hashes and bounded fit audits are explicit
   numerical evidence, preserved by checkpoints.
-- Respect exact requested dates and both label end and availability gates;
-  sparse embargo/decay weights must match direct eligible-row references.
+- Respect exact requested dates and both label end and availability gates.
+  `LabelBoundary.validate()` requires the complete label interval to end on or
+  before its availability date, which must be strictly before the fit cutoff.
+  Sparse embargo/decay weights must match direct eligible-row references.
   Rescale exponential moments from each admitted batch, never a future frame end.
   Current consumers supply multi-horizon lifecycle/kernel identities and Raw
   timing evidence. In the target, Workbench owns research lifecycle/bindings,

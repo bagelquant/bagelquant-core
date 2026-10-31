@@ -107,12 +107,17 @@ def smooth_prediction(
     accidentally substitute a visible UI window for the required history. The
     calendar unit is an evaluation period, not an elapsed day. Null, NaN, infinity
     and inactive membership all interrupt continuity without emitting a value.
+    This helper accepts untraced predictions only; declared traces are rejected
+    before value reads because its checkpoints retain values without trace state.
     """
 
     if not (isinstance(prediction, Node) and prediction.value_type == "prediction"):
         raise TypeError("smoothing requires a Node")
     if not isinstance(config, PredictionSmoothingConfig):
         raise TypeError("config must be a PredictionSmoothingConfig")
+    traces = prediction.output.trace_columns if prediction.node_type == "operator" else prediction.trace_columns
+    if traces:
+        raise ValueError("prediction smoothing does not support declared traces; use trace-aware graph operators")
     raw = pl.DataFrame({"time": evaluation_calendar})
     days = raw.select(normalize_date_expression("time", raw.schema["time"]))["time"]
     if (

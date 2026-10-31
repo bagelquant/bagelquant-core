@@ -395,6 +395,34 @@ unique dated artifact and same-schema nonoverlapping tail. Publication fences th
 original content/channel/file authority and retains old artifact references;
 ordinary continuation never decodes or rewrites historical decision tables.
 
+`streak_count` declares checkpoint replay with zero historical input lookback.
+Its vectorized value and custom trace formulas retain both equality-reset modes,
+including the original zero count on a reversal. Checkpoints retain each asset's
+last input, effective direction, signed count and previous/run trace channels.
+Empty sessions advance the explicit completed boundary while retaining state
+for absent assets. A proven append consumes only new sessions; revisions require
+an unchanged preceding checkpoint. The Runtime supplies a physical checkpoint
+barrier without changing the existing lazy numerical implementation identity.
+Active keys outside the explicit execution calendar are unsupported by this
+checkpoint proof/read contract and fail during planning before value loads or
+kernels; historical stored values remain readable.
+
+Explicit `plan_input_proof_rebind(..., mode="streak_checkpoint.v1")` certifies
+an original generic `streak_count(reset_on_equal=True)` result over one original
+durable Core parent. Supply its completed `original_update`, `context_id`,
+`original_context`, and immutable `report_id`/`report_digest`. Core reproduces
+the original numerical key and validates complete indexed Domain/parent authority.
+It selects at most two admitted parent keys and the saved final output per asset
+using bounded reads, then registers continuation state. Admission accounts for
+the resident Domain, actual trace-channel width, retained tails and asset state.
+`apply_input_proof_rebind` publishes a distinct `checkpoint_prefix.v2` candidate
+referencing all original numerical values. It never changes original receipts,
+updates graph completion or calculates historical streaks. Reads, apply, audit
+and retirement retain the original result, parent and completed-update ancestry;
+the stored checkpoint must equal its immutable admission. Holding streaks,
+external/unavailable parents, unknown indexes and unproven calendars require
+their own explicit resolution. Ordinary updates never invoke certification.
+
 `describe_artifact` and `artifact_interval_identity` inspect committed metadata
 only. `read_artifact(start=..., end=...)` consumes typed bounded values with
 Parquet predicate pushdown and does not claim a current byte audit. Missing

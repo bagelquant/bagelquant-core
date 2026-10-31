@@ -104,6 +104,29 @@ def test_label_boundary_requires_strict_availability_before_fit() -> None:
         ).validate()
 
 
+@pytest.mark.parametrize(("label_end", "available", "cutoff", "valid"), [
+    (date(2024, 3, 1), date(2024, 3, 1), date(2024, 3, 2), True),
+    (date(2024, 3, 1), date(2024, 3, 3), date(2024, 3, 4), True),
+    (date(2024, 3, 1), date(2024, 2, 2), date(2024, 2, 3), False),
+    (date(2024, 3, 1), date(2024, 2, 2), date(2024, 3, 1), False),
+    (date(2024, 3, 1), date(2024, 2, 2), date(2024, 3, 2), False),
+])
+def test_label_boundary_cannot_be_available_before_its_return_interval_ends(
+    label_end, available, cutoff, valid,
+):
+    boundary = LabelBoundary(
+        feature_date=date(2024, 1, 30), prediction_date=date(2024, 1, 31),
+        execution_date=date(2024, 2, 1), label_start_date=date(2024, 2, 1),
+        label_end_date=label_end, label_available_date=available,
+        model_fit_cutoff=cutoff,
+    )
+    if valid:
+        boundary.validate()
+    else:
+        with pytest.raises(ValueError, match="label_available_date.*label_end_date"):
+            boundary.validate()
+
+
 def test_rms_scaler_preserves_gated_zeros_and_drops_constant_zero_column() -> None:
     sample = np.array([[0.0, 0.0, 1.0], [2.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     scaler = ZeroPreservingRmsScaler.fit(

@@ -409,14 +409,11 @@ def _plan_rolling_operation(
 
     source = frame if asset_time_ordered else frame.sort([ASSET_ID, TIME])
     output_order = order if asset_time_ordered else "asset_time"
-    window = int(config.get("window", 0))
+    window = config.get("window", 0)
     min_periods = config.get("min_periods")
 
     if name.startswith("rolling_") and name != "rolling_ewm_fw":
-        minp = _validate_window(
-            window,
-            None if min_periods is None else int(min_periods),
-        )
+        minp = _validate_window(window, min_periods)
         values = pl.col(VALUE)
         if name == "rolling_mean":
             expression = values.rolling_mean(window, min_samples=minp)
@@ -489,10 +486,7 @@ def _plan_rolling_operation(
         else:
             rolling_min_periods = config.get("min_periods", 0)
             halflife = float(config["halflife"])
-        minp = _validate_window(
-            window,
-            None if rolling_min_periods is None else int(rolling_min_periods),
-        )
+        minp = _validate_window(window, rolling_min_periods)
         if halflife <= 0:
             raise ValueError("rolling_ewm_fw halflife must be positive")
         expression = _rolling_ewm_fw_expr(

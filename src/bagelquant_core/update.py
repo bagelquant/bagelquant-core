@@ -178,6 +178,16 @@ class UpdatePlan:
                 planner = ExecutionRuntime(node_contexts=self.numerical_contexts[context_id])
                 self.keys[context_id] = planner.plan_materialization_keys(bound)
             self.domains[context_id] = dict(planner.node_domains)
+            from .operator import OPERATOR_REGISTRY
+            from .streak_state import validate_streak_calendar
+            checked_streak_domains = set()
+            for node_id, node in self._nodes.items():
+                if (node.operator == "bagelquant_core.operator.streaks.streak_count"
+                        and OPERATOR_REGISTRY.get(node.operator).contract.checkpoint_replay):
+                    own = self.domains[context_id][node_id]
+                    if own not in checked_streak_domains:
+                        validate_streak_calendar(own)
+                        checked_streak_domains.add(own)
             if context_id in self._causal_output_domains:
                 from .materialization import MaterializationKey
                 from .domain import Domain

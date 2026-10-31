@@ -172,3 +172,38 @@ def test_typed_boundary_and_no_input_mutation():
             PredictionSmoothingConfig(),
             evaluation_calendar=panel.domain.times,
         )
+
+
+@pytest.mark.parametrize("method", ["none", "sma", "ewma"])
+def test_smoothing_rejects_traces_before_reading_values(method, monkeypatch):
+    panel = _panel([1.0, 2.0])
+    frame = panel.collect().with_columns(
+        pl.col("time").alias("available_date"),
+    )
+    traced = Node.from_domain(frame, panel.domain, value_type="prediction",
+        trace_columns=("available_date",))
+    config = PredictionSmoothingConfig(method,
+        window=2 if method == "sma" else None,
+        half_life=1 if method == "ewma" else None)
+    monkeypatch.setattr(traced, "collect", lambda **_kwargs: pytest.fail("read numerical values"))
+
+    with pytest.raises(ValueError, match="does not support.*traces"):
+        smooth_prediction(traced, config, evaluation_calendar=panel.domain.times)
+
+
+@pytest.mark.parametrize("traced", [False, True])
+def test_smoothing_checks_metadata_of_already_computed_operator_nodes(traced):
+    from bagelquant_core.operator import rolling_mean
+
+    panel = _panel([1.0, 2.0])
+    if traced:
+        panel = Node.from_domain(panel.collect().with_columns(pl.col("time").alias("available_date")),
+            panel.domain, value_type="prediction", trace_columns=("available_date",))
+    derived = rolling_mean(panel, window=1)
+    expected = derived.compute().collect()
+    if traced:
+        with pytest.raises(ValueError, match="does not support.*traces"):
+            smooth_prediction(derived, PredictionSmoothingConfig(), evaluation_calendar=panel.domain.times)
+    else:
+        result = smooth_prediction(derived, PredictionSmoothingConfig(), evaluation_calendar=panel.domain.times)
+        assert_frame_equal(result.prediction.collect(), expected)

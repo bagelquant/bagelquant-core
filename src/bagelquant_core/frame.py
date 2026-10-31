@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-import numpy as np
 import polars as pl
 
 TIME = "time"
@@ -187,35 +186,3 @@ def cross_section_rank(frame: pl.DataFrame, *, pct: bool = False) -> pl.DataFram
     if pct:
         rank = rank / pl.col(VALUE).count().over(TIME)
     return panel_like(frame, rank)
-
-
-def cross_section_mean(frame: pl.DataFrame) -> pl.Expr:
-    return pl.col(VALUE).mean().over(TIME)
-
-
-def cross_section_std(frame: pl.DataFrame) -> pl.Expr:
-    return pl.col(VALUE).std(ddof=1).over(TIME)
-
-
-def rolling_expr(
-    expr: pl.Expr, *, window: int, min_periods: int | None = None
-) -> pl.Expr:
-    resolved_min = window if min_periods is None else min_periods
-    return expr.over(ASSET_ID).rolling_mean(
-        window_size=window, min_samples=resolved_min
-    )
-
-
-def map_groups_numpy(
-    frame: pl.DataFrame,
-    func: Callable[[np.ndarray], np.ndarray],
-) -> pl.DataFrame:
-    rows: list[dict[str, object]] = []
-    for group in frame.sort([ASSET_ID, TIME]).partition_by(ASSET_ID):
-        values = np.array(group[VALUE], dtype=float)
-        output = func(values)
-        for row, value in zip(group.iter_rows(named=True), output, strict=True):
-            rows.append({TIME: row[TIME], ASSET_ID: row[ASSET_ID], VALUE: value})
-    return pl.DataFrame(
-        rows, schema={TIME: pl.Date, ASSET_ID: pl.String, VALUE: pl.Float64}
-    ).sort(list(PANEL_KEYS))

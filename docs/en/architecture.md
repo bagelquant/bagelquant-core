@@ -72,6 +72,12 @@ guards. See the [runtime contract](engineering/graph-runtime.md).
 
 - `Domain(calendar=..., universe=...)` defines trading sessions and static or
   dynamic membership. `window(start, end)` selects observation coordinates.
+  An explicit `identity` is caller-supplied immutable coordinate evidence:
+  equal identities must bind exactly the same ordered calendar, asset keys and
+  active membership. It is not a reusable display label. Runtime equivalence
+  trusts that binding instead of rehashing all coordinates at each operator;
+  the caller must change the identity when any coordinate changes. Omit it to
+  derive the identity from coordinates, and use `window` for canonical subsets.
 - `Node.from_domain(frame, domain, source_key="close", identity="immutable-v1")`
   accepts a Polars DataFrame or LazyFrame in sparse `(time, asset_id, value)` form.
   Values outside membership are removed. `value_type` is `numeric`, `category`,

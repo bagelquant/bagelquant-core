@@ -16,6 +16,10 @@
   Regenerate catalogs after exports/contract changes; never edit generated pages.
 - Tests cover zero/NaN/empty/sparse/type/trace equivalence and typed downstream boundaries.
 
+Rolling windows require positive integers; `min_periods` is either `None` or an
+integer from zero through the window size. Eager and lazy execution reject
+booleans, fractional numbers and strings instead of coercing their values.
+
 CURRENT_AND_SHIFT_MAX requires current trace support. Missing current support
 produces a null trace, even if the shifted coordinate is known. An explicitly
 known null value keeps its current trace; paired operations retain session-based

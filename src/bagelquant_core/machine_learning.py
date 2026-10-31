@@ -180,6 +180,8 @@ class LabelBoundary:
             raise ValueError("label_start_date must equal execution_date")
         if self.label_end_date <= self.label_start_date:
             raise ValueError("label_end_date must be after label_start_date")
+        if self.label_available_date < self.label_end_date:
+            raise ValueError("label_available_date must be on or after label_end_date")
         if self.label_available_date >= self.model_fit_cutoff:
             raise ValueError(
                 "label_available_date must be strictly before model_fit_cutoff"

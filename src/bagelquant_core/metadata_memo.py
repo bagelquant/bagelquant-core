@@ -10,7 +10,8 @@ def metadata_priority(key):
     while isinstance(key, tuple) and len(key) == 2 and type(key[0]) is object:
         key = key[1]  # fresh transaction/audit scope
     return 2 if isinstance(key, tuple) and key and key[0] in {
-        "manifest_authority", "source_bindings", "finite_contract_plan", "finite_contract_authority", "finite_contract_blocks"
+        "manifest_authority", "source_bindings", "finite_contract_plan", "finite_contract_authority", "finite_contract_blocks",
+        "streak_checkpoint_plan", "streak_checkpoint_authority"
     } else 1
 
 

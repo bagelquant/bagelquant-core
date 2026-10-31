@@ -8,6 +8,13 @@ Use `Domain`, `Node`, `ValueType`, `Operator`, `Graph`, `CoreStore`,
 The [architecture guide](../architecture.md) documents persistent execution and
 types; the [catalog](operators/index.md) documents each operator.
 
+`smooth_prediction` is an eager, resumable helper for untraced Prediction Nodes.
+Its value-only checkpoints cannot preserve availability or other trace state,
+so it rejects declared traces before reading values, including method `none`.
+For traced predictions, use graph operators such as `rolling_mean` or `ewm_mean`
+whose contracts propagate traces; their gap and warm-up semantics differ from
+this helper's contiguous finite-observation reset policy.
+
 - `ArtifactVerification` provides finite, bounded checksum proofs keyed by receipt and file identity. `CoreStore.read_context()` owns its lifetime.
 - `CoreStore.describe_update(identity)` and `describe_evidence(identity)` inspect committed metadata without loading numerical artifacts.
 - `Graph.plan_update(..., persist_nodes=(), native_admission=None, kernel_dispatch=None)` preserves canonical mathematics while choosing durable boundaries and caller-admitted execution. `plan.regions` describes bounded pointwise regions; existing `ready`/`execute` calls use durable boundary IDs. `plan.logical_coverage` names satisfied transient nodes separately from real artifact results; `plan.preparation_usage` reports bounded preparation and transport work.
@@ -19,6 +26,7 @@ types; the [catalog](operators/index.md) documents each operator.
 - `CoreStore.publish(..., value_references=[{"identity": ..., "start": ..., "end": ...}, ...])` composes original typed intervals and new repair materializations. References must cover the complete ordered calendar exactly once with identical original membership/type/traces. Each retained Parquet partition carries its selected bounds, which are pushed down on reads. Publication fences original authority and file existence without historical decoding or rewriting.
 - `CoreStore.describe_artifact(identity, name)` describes the same recursively selected original channel as `evidence`; `artifact_interval_identity(identity, name, start=..., end=...)` proves all dated columns, including decision status/reason and empty calendar dates, from original-bound metadata. Missing optional proof returns `None` without reading values.
 - `CoreStore.read_artifact(identity, name, start=..., end=...)` prunes original concat leaves before Parquet reads and pushes date predicates down. `artifact_index_plan(identity, name)` / `build_artifact_index(plan)` explicitly audit and index older original artifacts while preserving receipts/files. Missing legacy indexes require this explicit maintenance, never an implicit historical read. Subsequent concatenations reuse the retained original index.
+- `CoreStore.plan_input_proof_rebind(spec, identity, mode="streak_checkpoint.v1", original_update=..., context_id=..., original_context=..., report_id=..., report_digest=...)` explicitly certifies saved resetting streak state over its original durable Core parent. It reads admitted original tails and registers immutable metadata. `apply_input_proof_rebind(plan)` publishes a checkpoint candidate referencing original values; it never replays historical streaks or changes graph completion. See the [checkpoint contract](../engineering/graph-runtime.md).
 
 
 `CoreStore.value_read_rows(identity, start=..., end=...)` returns a metadata-only

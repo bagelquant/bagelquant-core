@@ -857,7 +857,11 @@ class ExecutionRuntime:
         eager_result: pl.DataFrame | None = None
         plan_order: str | None = None
         plan_asset_time_ordered = False
-        if contract.execution == ExecutionMode.LAZY:
+        # A stateful custom trace must finish its checkpoint exchange before
+        # publication. This is a physical barrier, leaving its numerical
+        # execution contract and existing materialization identity unchanged.
+        if contract.execution == ExecutionMode.LAZY and not (
+                contract.checkpoint_replay and contract.trace_rule == TraceRule.CUSTOM):
             plan_operation = getattr(
                 getattr(node, "operation", None),
                 "_plan_operation",
@@ -951,15 +955,23 @@ class ExecutionRuntime:
             else (_TIME_ASSET_ORDER if builtin else None)
         )
         exact_domain = self._result_exact_domain(node, prepared)
-        trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
-            result,
-            prepared,
-            contract,
-            self._node_parameters(node),
-            traces,
-            result_key_identity=key_identity,
-            result_order=order,
-        )
+        from contextlib import nullcontext
+        from .operator_state import operator_checkpoint_node, operator_checkpoint_signature
+        from .operator import OPERATOR_REGISTRY
+        trace_scope = (operator_checkpoint_node(node.logical_id,
+            operator_checkpoint_signature(OPERATOR_REGISTRY.get(node.config()["operator"]), self._node_parameters(node)),
+            execution_calendar=domain.times.to_list())
+            if contract.checkpoint_replay and contract.trace_rule == TraceRule.CUSTOM else nullcontext())
+        with trace_scope:
+            trace_frame, trace_key_identity, trace_order = self._build_trace_plan(
+                result,
+                prepared,
+                contract,
+                self._node_parameters(node),
+                traces,
+                result_key_identity=key_identity,
+                result_order=order,
+            )
         value = PlanValue(
             frame=result,
             domain=domain,

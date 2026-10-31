@@ -4,11 +4,11 @@ Clip each finite cross-section by median/MAD and standardize with population var
 
 ## Contract
 
-Registry: `bagelquant_core.operator.robust.mad_zscore`. Version: `1`.
+Registry: `bagelquant_core.operator.robust.mad_zscore`. Version: `2`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `eager_barrier`; density: `sparse_ok`; traces: `custom`.
+Execution: `eager_barrier`; density: `sparse_ok`; traces: `cross_section_max`.
 
 ## Numerical signature
 

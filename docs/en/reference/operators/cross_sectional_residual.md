@@ -4,11 +4,11 @@ Return full-rank cross-sectional OLS residuals with explicit controls and interc
 
 ## Contract
 
-Registry: `bagelquant_core.operator.robust.cross_sectional_residual`. Version: `1`.
+Registry: `bagelquant_core.operator.robust.cross_sectional_residual`. Version: `2`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `eager_barrier`; density: `sparse_ok`; traces: `custom`.
+Execution: `eager_barrier`; density: `sparse_ok`; traces: `cross_section_max`.
 
 ## Numerical signature
 

@@ -34,6 +34,19 @@ legacy checkpoints require explicit proof maintenance, never silent old refits.
 
 ## IC and OLS
 
+- `orthogonalize` version 2 excludes nonfinite target/factor pairs consistently
+  for single- and multi-factor fits. With an intercept, its single-factor path
+  forms centered moments and centered residuals to avoid cancellation from
+  subtracting large raw second moments when factor levels have a large offset.
+  A constant factor retains the demeaned target, and insufficient finite pairs
+  remain null. Without an intercept, a zero factor retains the finite target.
+- `mad_zscore`, `cross_sectional_residual` and `cross_sectional_weighted_mean`
+  version 2 use the standard daily maximum of every parent dependency-date
+  channel, including auxiliary inputs and missing-valued peers. Common
+  Date/Datetime channels retain their finest declared temporal precision;
+  differing timezones require explicit alignment. These operator versions
+  establish new implementation identities without rewriting original receipts.
+
 - Public supervised Prediction checkpoints persist each period's original IC
   vector or single OLS beta/covariance and diagnostics, availability, sample
   identity, complete calendar and pending status. Append processes new and newly

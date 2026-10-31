@@ -29,13 +29,18 @@ def _grouped(frame: pl.DataFrame, group: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-@operator
+@operator(version="2")
 def orthogonalize(
     frame: pl.DataFrame,
     *,
     factors: tuple[pl.DataFrame, ...],
     fit_intercept: bool = False,
 ) -> pl.DataFrame:
+    """Return same-date residuals using finite target/factor pairs.
+
+    The single-factor intercept fit uses centered moments and residuals so
+    translating a factor does not subtract nearly equal raw second moments.
+    """
     if not factors:
         raise ValueError("orthogonalize requires at least one factor")
     if len(factors) == 1:
@@ -190,35 +195,27 @@ def _orthogonalize_one_factor(
         on=[TIME, ASSET_ID],
         how="inner",
     )
-    valid = (
-        pl.col("target").is_not_null()
-        & pl.col("factor").is_not_null()
-        & ~pl.col("target").is_nan()
-        & ~pl.col("factor").is_nan()
-    )
+    valid = pl.col("target").is_finite().fill_null(False) & pl.col("factor").is_finite().fill_null(False)
     data = data.with_columns(
         pl.when(valid).then(pl.col("target")).otherwise(None).alias("y"),
         pl.when(valid).then(pl.col("factor")).otherwise(None).alias("x"),
     )
     n = pl.col("x").count().over(TIME)
-    sum_x = pl.col("x").sum().over(TIME)
-    sum_y = pl.col("y").sum().over(TIME)
-    sum_xx = (pl.col("x") * pl.col("x")).sum().over(TIME)
-    sum_xy = (pl.col("x") * pl.col("y")).sum().over(TIME)
     if fit_intercept:
-        centered_xx = sum_xx - (sum_x * sum_x) / n
-        centered_xy = sum_xy - (sum_x * sum_y) / n
-        mean_y = sum_y / n
-        slope = pl.when(centered_xx == 0).then(0.0).otherwise(centered_xy / centered_xx)
-        intercept = mean_y - slope * (sum_x / n)
-        fitted = intercept + slope * pl.col("factor")
-    else:
+        data = data.with_columns(
+            (pl.col("x") - pl.col("x").mean().over(TIME)).alias("centered_x"),
+            (pl.col("y") - pl.col("y").mean().over(TIME)).alias("centered_y"),
+        )
+        sum_xx = pl.col("centered_x").pow(2).sum().over(TIME)
+        sum_xy = (pl.col("centered_x") * pl.col("centered_y")).sum().over(TIME)
         slope = pl.when(sum_xx == 0).then(0.0).otherwise(sum_xy / sum_xx)
-        fitted = slope * pl.col("factor")
-    residual = pl.when(valid & (n >= (2 if fit_intercept else 1))).then(
-        pl.col("target") - fitted
-    )
-    return panel_like(data, residual)
+        residual = pl.col("centered_y") - slope * pl.col("centered_x")
+    else:
+        sum_xx = pl.col("x").pow(2).sum().over(TIME)
+        sum_xy = (pl.col("x") * pl.col("y")).sum().over(TIME)
+        slope = pl.when(sum_xx == 0).then(0.0).otherwise(sum_xy / sum_xx)
+        residual = pl.col("y") - slope * pl.col("x")
+    return panel_like(data, pl.when(valid & (n >= (2 if fit_intercept else 1))).then(residual))
 
 
 @operator

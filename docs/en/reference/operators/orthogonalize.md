@@ -4,7 +4,7 @@ Return same-date cross-sectional residuals after regressing the source on the na
 
 ## Contract
 
-Registry: `bagelquant_core.operator.cross_sectional.orthogonalize`. Version: `1`.
+Registry: `bagelquant_core.operator.cross_sectional.orthogonalize`. Version: `2`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 

@@ -45,26 +45,11 @@ def ols_residual_values(values, controls, *, fit_intercept=True):
     return result
 
 
-def _cross_section_trace(parents, result, config, traces):
-    daily = []
-    for parent in parents:
-        names = [trace for trace in traces if trace in parent.collect_schema()]
-        if names:
-            daily.append(parent.group_by(TIME).agg(pl.col(name).max().alias(name) for name in names))
-    output = result.select(TIME, ASSET_ID)
-    for trace in traces:
-        parts = [frame.select(TIME, trace) for frame in daily if trace in frame.collect_schema()]
-        if parts:
-            maximum = pl.concat(parts).group_by(TIME).agg(pl.col(trace).max())
-            output = output.join(maximum, on=TIME, how="left")
-    return output
-
-
 _CROSS_SECTION = OperationContract(execution=ExecutionMode.EAGER_BARRIER,
-    trace_rule=TraceRule.CUSTOM, trace_function=_cross_section_trace, history=0)
+    trace_rule=TraceRule.CROSS_SECTION_MAX, history=0)
 
 
-@operator(contract=_CROSS_SECTION)
+@operator(contract=_CROSS_SECTION, version="2")
 def mad_zscore(frame: pl.DataFrame, *, clip_multiplier: float = 5.0,
                mad_scale: float = 1.4826, min_scale: float = 1e-12) -> pl.DataFrame:
     """Finite median/MAD clipping followed by population cross-sectional z-score."""
@@ -75,7 +60,7 @@ def mad_zscore(frame: pl.DataFrame, *, clip_multiplier: float = 5.0,
     return pl.concat(pieces) if pieces else frame.select(TIME, ASSET_ID, VALUE)
 
 
-@operator(contract=_CROSS_SECTION)
+@operator(contract=_CROSS_SECTION, version="2")
 def cross_sectional_residual(frame: pl.DataFrame, *, controls: tuple[pl.DataFrame, ...],
                              fit_intercept: bool = True) -> pl.DataFrame:
     """Cross-sectional OLS residuals; incomplete or rank-deficient samples are null."""
@@ -93,7 +78,7 @@ def cross_sectional_residual(frame: pl.DataFrame, *, controls: tuple[pl.DataFram
     return pl.concat(pieces) if pieces else frame.select(TIME, ASSET_ID, VALUE)
 
 
-@operator(contract=_CROSS_SECTION, auxiliary_types={"weights": "numeric"})
+@operator(contract=_CROSS_SECTION, version="2", auxiliary_types={"weights": "numeric"})
 def cross_sectional_weighted_mean(frame: pl.DataFrame, *, weights: pl.DataFrame,
                                   positive_weights: bool = True) -> pl.DataFrame:
     """Broadcast the finite weighted daily mean across the input coordinates."""

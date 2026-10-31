@@ -34,6 +34,10 @@ class TraceRule(StrEnum):
     NONE = "none"
     PASSTHROUGH = "passthrough"
     PARENT_MAX = "parent_max"
+    CROSS_SECTION_MAX = "cross_section_max"
+    GROUP_MAX = "group_max"
+    CROSS_SECTION_ROLLING_MAX = "cross_section_rolling_max"
+    CROSS_SECTION_CUMULATIVE_MAX = "cross_section_cumulative_max"
     SHIFT = "shift"
     CURRENT_AND_SHIFT_MAX = "current_and_shift_max"
     ROLLING_MAX = "rolling_max"
@@ -175,6 +179,14 @@ def default_operation_contract(
 
 
 def _operator_trace_rule(name: str) -> TraceRule:
+    if name.startswith("group_"):
+        return TraceRule.GROUP_MAX
+    if name in {"kelly_nonan_standardize", "kelly_rank_boxcox"}:
+        return TraceRule.CROSS_SECTION_ROLLING_MAX
+    if name in {"rank", "rankpct", "nrank", "zscore", "winsorize", "min_max_scale",
+                "normalize", "net_scale", "demean", "translate_to_pos", "trim_quantile",
+                "log_rank", "inv_log_sqrt_rank", "anscombe", "orthogonalize"}:
+        return TraceRule.CROSS_SECTION_MAX
     if name in _AUXILIARY_OPERATIONS:
         return TraceRule.PARENT_MAX
     if name == "lag":

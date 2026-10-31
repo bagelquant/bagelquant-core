@@ -29,13 +29,15 @@ def _valid_rebalance_state(state):
 
 
 _CONTRACT = OperationContract(execution=ExecutionMode.EAGER_BARRIER,
-    density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.PARENT_MAX, checkpoint_replay=True, checkpoint_history=1,
+    density=InputDensity.DENSE_REQUIRED, trace_rule=TraceRule.CROSS_SECTION_MAX, checkpoint_replay=True, checkpoint_history=1,
     checkpoint_validator=_valid_target_state)
 
 
 def _register(function):
     rebalance_contract = function.__name__ == "rebalance"
     operation = Operator(function, contract=replace(_CONTRACT,
+        trace_rule=(TraceRule.PARENT_MAX if rebalance_contract else TraceRule.CROSS_SECTION_CUMULATIVE_MAX
+            if function.__name__ in {"regularized_weights", "exposure_constrained_weights"} else TraceRule.CROSS_SECTION_MAX),
         history=0 if function.__name__ in {"top_n", "equal_weight"} else None,
         checkpoint_replay=function.__name__ in {"rebalance", "regularized_weights", "exposure_constrained_weights"},
         checkpoint_history=0 if rebalance_contract else 1,

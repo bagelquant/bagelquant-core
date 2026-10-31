@@ -31,10 +31,10 @@ def mask(
     frame: pl.DataFrame,
     *,
     mask_frame: pl.DataFrame,
-    replace_value: float = float("nan"),
+    replace_value: float | None = None,
 ) -> pl.DataFrame:
-    if not isinstance(replace_value, Real) or isinstance(replace_value, bool):
-        raise TypeError("mask replace_value must be a real number")
+    if replace_value is not None and (not isinstance(replace_value, Real) or isinstance(replace_value, bool)):
+        raise TypeError("mask replace_value must be a real number or None")
     data = frame.rename({VALUE: "x"}).join(
         mask_frame.rename({VALUE: "mask"}),
         on=["time", "asset_id"],
@@ -45,7 +45,7 @@ def mask(
         data,
         pl.when(condition)
         .then(pl.col("x"))
-        .otherwise(pl.lit(float(replace_value))),
+        .otherwise(pl.lit(None if replace_value is None else float(replace_value))),
     )
 
 
@@ -147,19 +147,18 @@ def _plan_general(
             pl.when(values[1] == 1.0).then(values[0]).otherwise(None)
         )
     elif operation == "mask":
-        replace_value = config.get("replace_value", float("nan"))
-        if (
-            not isinstance(replace_value, Real)
-            or isinstance(replace_value, bool)
+        replace_value = config.get("replace_value")
+        if replace_value is not None and (
+            not isinstance(replace_value, Real) or isinstance(replace_value, bool)
         ):
-            raise TypeError("mask replace_value must be a real number")
+            raise TypeError("mask replace_value must be a real number or None")
         condition = values[1].fill_nan(None).fill_null(0.0).cast(
             pl.Boolean
         )
         expression = (
             pl.when(condition)
             .then(values[0])
-            .otherwise(pl.lit(float(replace_value)))
+            .otherwise(pl.lit(None if replace_value is None else float(replace_value)))
         )
     else:
         expression = pl.coalesce(values)

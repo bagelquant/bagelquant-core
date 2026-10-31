@@ -8,7 +8,7 @@ Registry: `bagelquant_core.operator.kelly.kelly_nonan_standardize`. Version: `1`
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `lazy`; density: `dense_required`; traces: `rolling_max`.
+Execution: `lazy`; density: `dense_required`; traces: `cross_section_rolling_max`.
 
 ## Numerical signature
 

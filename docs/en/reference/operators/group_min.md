@@ -8,7 +8,7 @@ Registry: `bagelquant_core.operator.cross_sectional.group_min`. Version: `1`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `lazy`; density: `sparse_ok`; traces: `parent_max`.
+Execution: `lazy`; density: `sparse_ok`; traces: `group_max`.
 
 ## Numerical signature
 

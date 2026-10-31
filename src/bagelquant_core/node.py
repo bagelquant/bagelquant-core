@@ -103,7 +103,7 @@ class Node(NodeDefinition):
             isinstance(data, pl.DataFrame)
             and domain._contains_exact_keys(data)
         )
-        frame = domain.apply_membership_lazy(frame)
+        frame = domain.apply_membership_lazy(frame, _preserve_invalid_keys=not validated_keys)
         indexed = None
         if identity is None and isinstance(data, pl.DataFrame):
             from .computation_index import describe
@@ -288,7 +288,8 @@ class Node(NodeDefinition):
             raise RuntimeError(f"source {self.source_key!r} requires an explicit data binding")
         frame = (
             self._domain.align_lazy(
-                self._frame, trace_columns=self._trace_columns
+                self._frame, trace_columns=self._trace_columns,
+                _preserve_invalid_keys=not self._validated_keys,
             )
             if dense
             else self._frame
@@ -350,12 +351,28 @@ class Node(NodeDefinition):
             raise RuntimeError(f"source {self.source_key!r} requires an explicit data binding")
         frame = (
             self._domain.align_lazy(
-                self._frame, trace_columns=self._trace_columns
+                self._frame, trace_columns=self._trace_columns,
+                _preserve_invalid_keys=not self._validated_keys,
             )
             if dense
             else self._frame
         )
         return self._validate_collected(frame.collect())
+
+    @staticmethod
+    def _validate_consumed_keys(frame: pl.DataFrame, *, unique: bool = False) -> pl.DataFrame:
+        """Reject malformed keys in an already bounded lazy source batch.
+
+        Run before numerical joins or reductions can erase null keys. No
+        second source read or history materialization is required. Eager
+        boundaries additionally check uniqueness in their already collected
+        frame, without retaining a global streaming key set.
+        """
+        if frame.select(pl.any_horizontal(pl.col(TIME).is_null(), pl.col(ASSET_ID).is_null()).any()).item():
+            raise ValueError("panel keys must be valid")
+        if unique and frame.select(pl.struct(TIME, ASSET_ID).is_duplicated().any()).item():
+            raise ValueError("panel data must be unique by (time, asset_id)")
+        return frame
 
     def _validate_collected(self, collected: pl.DataFrame) -> pl.DataFrame:
         if not self._trace_columns:

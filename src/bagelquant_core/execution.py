@@ -700,14 +700,22 @@ class ExecutionRuntime:
         if node_id in evaluated:
             return evaluated[node_id]
         if node.node_type == "input":
+            source_frame = node._frame
+            if not node._validated_keys:
+                # The source is already scoped by its admitted Domain/window.
+                # Keep downstream joins/filters outside this streaming typed
+                # boundary so they cannot hide malformed consumed keys.
+                source_frame = source_frame.map_batches(Node._validate_consumed_keys,
+                    predicate_pushdown=False, projection_pushdown=False,
+                    slice_pushdown=False, streamable=True)
             value = PlanValue(
-                frame=node._frame.select(TIME, ASSET_ID, VALUE),
+                frame=source_frame.select(TIME, ASSET_ID, VALUE),
                 domain=node.domain,
                 density=InputDensity.SPARSE_OK,
                 identity=node.identity,
                 trace_columns=node.trace_columns,
                 trace_frame=(
-                    node._frame.select(
+                    source_frame.select(
                         TIME, ASSET_ID, *node.trace_columns
                     )
                     if node.trace_columns
@@ -1070,10 +1078,17 @@ class ExecutionRuntime:
                 self._active_eager_inputs[identity] = owner.select(
                     TIME, ASSET_ID
                 ).with_columns(collected_frame.get_column(VALUE))
-        return tuple(
+        frames = tuple(
             self._active_eager_inputs[value.identity]
             for value in prepared
         )
+        for value, frame in zip(prepared, frames, strict=True):
+            if not value.validated_keys:
+                # Eager consumers already own this entire admitted frame.
+                # Validate before a reduction can hide duplicate source keys;
+                # do not create a second scan or a global streaming seen set.
+                Node._validate_consumed_keys(frame, unique=True)
+        return frames
 
     def _eager_layout(
         self,
@@ -1896,6 +1911,11 @@ class ExecutionRuntime:
         result_key_identity: str | None,
         result_order: str | None,
     ) -> tuple[pl.LazyFrame, str | None, str | None]:
+        if rule in {TraceRule.CROSS_SECTION_MAX, TraceRule.GROUP_MAX,
+                    TraceRule.CROSS_SECTION_ROLLING_MAX, TraceRule.CROSS_SECTION_CUMULATIVE_MAX}:
+            from ._cross_sectional_traces import cross_sectional_traces
+            return (cross_sectional_traces(keys, parents, rule, config, traces),
+                    result_key_identity, result_order)
         if rule == TraceRule.PARENT_MAX:
             return self._parent_max_traces(
                 keys,

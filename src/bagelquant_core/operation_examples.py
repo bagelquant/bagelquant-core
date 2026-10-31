@@ -321,8 +321,6 @@ def _config(name: str) -> dict[str, Any]:
         return {"window": 2}
     if name in {"ffill", "bfill"}:
         return {"limit": 1}
-    if name == "mask":
-        return {"replace_value": 0.0}
     return {}
 
 

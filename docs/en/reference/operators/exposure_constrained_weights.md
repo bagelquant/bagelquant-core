@@ -8,7 +8,7 @@ Registry: `bagelquant_core.operator.portfolio.exposure_constrained_weights`. Ver
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `eager_barrier`; density: `dense_required`; traces: `parent_max`.
+Execution: `eager_barrier`; density: `dense_required`; traces: `cross_section_cumulative_max`.
 
 ## Numerical signature
 

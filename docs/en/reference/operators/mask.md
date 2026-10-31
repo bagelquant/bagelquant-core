@@ -13,7 +13,7 @@ Execution: `lazy`; density: `sparse_ok`; traces: `parent_max`.
 ## Numerical signature
 
 ```python
-mask(frame: 'pl.DataFrame', *, mask_frame: 'pl.DataFrame', replace_value: 'float' = nan) -> 'pl.DataFrame'
+mask(frame: 'pl.DataFrame', *, mask_frame: 'pl.DataFrame', replace_value: 'float | None' = None) -> 'pl.DataFrame'
 ```
 
 DataFrame arguments are Node dependencies in public calls. Scalar configuration is separate. Call `.compute()` to materialize.
@@ -21,7 +21,7 @@ DataFrame arguments are Node dependencies in public calls. Scalar configuration 
 ## Executable example
 
 ```python
-mask(source, mask_frame=mask_frame, replace_value=0.0)
+mask(source, mask_frame=mask_frame)
 ```
 
 ### source
@@ -43,4 +43,4 @@ mask(source, mask_frame=mask_frame, replace_value=0.0)
 | time | a | b | c |
 |---|---:|---:|---:|
 | 2024-01-02 | 1 | 4 | 3 |
-| 2024-01-03 | 0 | 0 | 0 |
+| 2024-01-03 | missing | missing | missing |

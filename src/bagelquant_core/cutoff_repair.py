@@ -29,7 +29,8 @@ def repair_history(node):
             or not operation.contract.deterministic):
         raise ValueError("Cutoff repair requires a supported causal built-in")
     if (operation.history(node.parameters) == 0 and operation.contract.trace_rule in
-            {TraceRule.NONE, TraceRule.PASSTHROUGH, TraceRule.PARENT_MAX}):
+            {TraceRule.NONE, TraceRule.PASSTHROUGH, TraceRule.PARENT_MAX,
+             TraceRule.CROSS_SECTION_MAX, TraceRule.GROUP_MAX}):
         return 0
     if module == "bagelquant_core.operator.streaks" and name in {"diff_from_last_change", "pct_change_from_last_change"}:
         return 1

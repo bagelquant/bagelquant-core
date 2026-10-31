@@ -8,7 +8,7 @@ Registry: `bagelquant_core.operator.normalization.winsorize`. Version: `1`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `lazy`; density: `sparse_ok`; traces: `passthrough`.
+Execution: `lazy`; density: `sparse_ok`; traces: `cross_section_max`.
 
 ## Numerical signature
 

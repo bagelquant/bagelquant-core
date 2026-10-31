@@ -869,6 +869,21 @@ def execute_checkpoint_node(spec, node_id, *, inputs, completed, parameters, key
     audits = tuple(runtime.node_training_audits.get(node_id, ()))
     checkpoint = checkpoints.captured.get(node_id)
     from .operation_contract import TraceRule
+    if registered.contract.trace_rule == TraceRule.CROSS_SECTION_CUMULATIVE_MAX and result.trace_columns:
+        carry = None if previous is None else previous.checkpoint.get("cross_section_trace_state")
+        if previous is not None and carry is None:
+            raise ValueError("portfolio checkpoint lacks cross-sectional trace evidence; perform explicit maintenance")
+        if carry is not None:
+            frame = frame.with_columns(pl.max_horizontal(pl.col(name),
+                pl.lit(carry[name], dtype=pl.Int64).cast(frame.schema[name])).alias(name) for name in result.trace_columns)
+        if checkpoint is not None:
+            # Python datetime scalars lose Datetime(ns) precision. Persist
+            # physical temporal integers and restore the consumed trace dtype.
+            summary = frame.select(pl.col(name).cast(pl.Int64).max() for name in result.trace_columns).row(0, named=True)
+            if carry is not None:
+                summary = {name: max(value for value in (summary[name], carry[name]) if value is not None)
+                    if summary[name] is not None or carry[name] is not None else None for name in result.trace_columns}
+            checkpoint = {**checkpoint, "cross_section_trace_state": summary}
     if registered.contract.trace_rule == TraceRule.CUMULATIVE_MAX and result.trace_columns:
         carry = None if previous is None else previous.checkpoint.get("trace_state")
         if previous is not None and carry is None:

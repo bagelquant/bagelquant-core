@@ -8,7 +8,7 @@ Registry: `bagelquant_core.operator.portfolio.equal_weight`. Version: `1`.
 
 Peer inputs: 1 to 1 typed Nodes. Returns a deferred Node.
 
-Execution: `eager_barrier`; density: `dense_required`; traces: `parent_max`.
+Execution: `eager_barrier`; density: `dense_required`; traces: `cross_section_max`.
 
 ## Numerical signature
 

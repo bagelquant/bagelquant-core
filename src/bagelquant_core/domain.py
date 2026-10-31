@@ -213,6 +213,7 @@ class Domain:
         data: pl.LazyFrame,
         *,
         trace_columns: Sequence[str] = (),
+        _preserve_invalid_keys: bool = False,
     ) -> pl.LazyFrame:
         columns = [TIME, ASSET_ID, VALUE, *trace_columns]
         return (
@@ -220,17 +221,37 @@ class Domain:
             .join(
                 data.select(columns),
                 on=[TIME, ASSET_ID],
-                how="left",
+                how="full" if _preserve_invalid_keys else "left",
+                coalesce=True,
                 maintain_order="left",
             )
         )
 
-    def apply_membership_lazy(self, data: pl.LazyFrame) -> pl.LazyFrame:
+    def apply_membership_lazy(self, data: pl.LazyFrame, *, _preserve_invalid_keys: bool = False) -> pl.LazyFrame:
+        invalid = pl.col(TIME).is_null() | pl.col(ASSET_ID).is_null()
         if not self._is_dynamic:
-            return data.filter(
+            selected = (
                 pl.col(TIME).is_in(self._times.implode())
                 & pl.col(ASSET_ID).is_in(self._asset_ids.implode())
             )
+            return data.filter((selected | invalid) if _preserve_invalid_keys else selected)
+        if _preserve_invalid_keys:
+            # Keep malformed rows visible to deferred typed validation. A
+            # single bounded left join avoids scanning the source a second
+            # time merely to recover null keys discarded by an inner join.
+            marker = "__core_active_key"
+            columns = data.collect_schema().names()
+            while marker in columns:
+                marker += "_"
+            assert self._active_membership is not None
+            dates = self._active_membership.get_column(TIME).unique()
+            selected = pl.col(TIME).is_in(dates.implode()) & pl.col(ASSET_ID).is_in(self._asset_ids.implode())
+            # Preserve scan pushdown even though retaining invalid rows keeps
+            # the join outer. Active keys may include off-calendar dates.
+            bounded = data.filter(selected | invalid)
+            return bounded.join(self.grid_lazy().with_columns(pl.lit(True).alias(marker)),
+                on=[TIME, ASSET_ID], how="left", maintain_order="left").filter(
+                    pl.col(marker).is_not_null() | invalid).drop(marker)
         return self.grid_lazy().join(
             data,
             on=[TIME, ASSET_ID],

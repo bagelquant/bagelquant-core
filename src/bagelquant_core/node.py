@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 from datetime import date
-from .hashing import _hash_dataframe_days, hash_dataframe
+from .hashing import DATAFRAME_HASH_V1, DATAFRAME_HASH_V2, _hash_dataframe_days, hash_dataframe
 from typing import Any, Mapping, Sequence
 
 import polars as pl
@@ -108,8 +108,12 @@ class Node(NodeDefinition):
         if identity is None and isinstance(data, pl.DataFrame):
             from .computation_index import describe
             collected = frame.sort([TIME, ASSET_ID]).collect()
-            identity = "content:" + hash_dataframe(collected)
-            days = _hash_dataframe_days(collected)
+            # Untraced inputs have one fixed time/asset/value projection. Keep
+            # its original address so completed canonical history stays usable.
+            policy = DATAFRAME_HASH_V2 if traces else DATAFRAME_HASH_V1
+            identity = ("content:v2:" if traces else "content:") + hash_dataframe(collected, policy=policy)
+            # Interval metadata separately binds the declared trace order.
+            days = _hash_dataframe_days(collected, policy=DATAFRAME_HASH_V1)
             indexed = describe(domain, days=days, value_type=ValueType(value_type).value,
                                trace_columns=traces)
         panel = cls(

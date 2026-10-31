@@ -22,7 +22,7 @@ from .artifact_verification import ArtifactVerification
 from .metadata_memo import MetadataMemo, fresh_metadata_scope
 
 from .domain import Domain
-from .hashing import _hash_dataframe_days, hash_mapping
+from .hashing import DATAFRAME_HASH_V1, DATAFRAME_HASH_V2, _hash_dataframe_days, hash_mapping
 from .logical import LogicalGraphSpec
 from .materialization import (
     MaterializationKey, MaterializationLookup, MaterializationStatus, NodeMaterialization,
@@ -553,11 +553,18 @@ class CoreStore:
         original = manifest["artifacts"][name]
         if not isinstance(original, Mapping) or not {"schema", "rows", "start", "end"} <= original.keys():
             raise ValueError("artifact composition needs explicit dated-artifact metadata maintenance")
+        with self.read_transaction() as connection:
+            indexed = self._indexed_artifact(connection, manifest, name)
+        if indexed is None or indexed.get("columns") is None:
+            raise ValueError("artifact composition needs explicit original-column index maintenance")
+        columns = indexed["columns"]
         if original["schema"].get("time") != "Date" or original.get("unique_time") is not True:
             raise ValueError("artifact composition requires a unique dated original table")
         if tail is not None:
             if not isinstance(tail, pl.DataFrame) or {column: str(dtype) for column, dtype in tail.schema.items()} != original["schema"]:
                 raise ValueError("artifact composition schema differs")
+            if tail.columns != columns:
+                raise ValueError("artifact composition column order differs")
             if tail.schema.get("time") != pl.Date or tail["time"].null_count():
                 raise ValueError("artifact composition requires nonnull Date time")
             if tail["time"].n_unique() != tail.height or not tail["time"].is_sorted():
@@ -633,6 +640,8 @@ class CoreStore:
                         or item.tail is not None and item.tail.height and item.tail["time"].max() > value.panel.domain.times.max()):
                     raise ValueError("artifact composition exceeds completed output coverage")
                 original = source["artifacts"][item.name]
+                with self.read_transaction() as connection:
+                    indexed = self._indexed_artifact(connection, source, item.name)
                 artifact_sources.append((item.identity, source["content_identity"]))
                 leaves = list(original.get("$artifact_concat", [original]))
                 if item.tail is not None and item.tail.height:
@@ -641,6 +650,7 @@ class CoreStore:
                     if not self._file(leaf["$file"]).is_file() and not leaf["$file"].startswith(relative + "/"):
                         raise ValueError("original artifact file missing before publication")
                 return {"$artifact_concat": leaves, "schema": original["schema"], "unique_time": True,
+                    "columns": indexed["columns"],
                     "original_source": {"identity": item.identity, "name": item.name,
                         "source_content": source["content_identity"], "artifact_identity": hash_mapping(original)},
                     "rows": sum(leaf["rows"] for leaf in leaves),
@@ -656,6 +666,7 @@ class CoreStore:
                 result = {"$file": f"{relative}/{filename}", "sha256": _checksum(path)}
                 if dated_artifact and item.schema.get("time") == pl.Date and not item["time"].null_count():
                     result.update(schema={name: str(dtype) for name, dtype in item.schema.items()}, rows=item.height,
+                        columns=item.columns, hash_policy=DATAFRAME_HASH_V2,
                         unique_time=item["time"].n_unique() == item.height and item["time"].is_sorted(),
                         start=None if not item.height else str(item["time"].min()),
                         end=None if not item.height else str(item["time"].max()),
@@ -738,7 +749,9 @@ class CoreStore:
                     dates = calendar.filter(calendar.dt.truncate("1mo") == month)
                     frame = value.panel._validate_collected(plan.filter(pl.col("time").is_between(dates.min(), dates.max())).collect())
                     partitions.append({**encode(frame), "start": str(dates.min()), "end": str(dates.max()), "rows": frame.height})
-                    days.update(_hash_dataframe_days(frame))
+                    # The value projection and declared trace order are bound
+                    # independently by the computation index contract.
+                    days.update(_hash_dataframe_days(frame, policy=DATAFRAME_HASH_V1))
                 if not partitions:
                     partitions.append(encode(plan.collect()))
             indexed = {**domain_index, "days": days} if domain_index is not None else computation_index.describe(
@@ -1236,8 +1249,6 @@ class CoreStore:
         if not isinstance(artifact, Mapping):
             return None
         leaves = artifact.get("$artifact_concat", [artifact])
-        if all("days" in leaf and "day_rows" in leaf for leaf in leaves):
-            return artifact
         if connection.execute("SELECT 1 FROM sqlite_master WHERE name='artifact_interval_index'").fetchone():
             row = connection.execute("SELECT source_content,artifact_identity,projection_json FROM artifact_interval_index WHERE identity=? AND name=?",
                 (manifest["identity"], name)).fetchone()
@@ -1249,6 +1260,8 @@ class CoreStore:
                 if projection.get("digest") != hash_mapping(payload):
                     raise ValueError("corrupt Core artifact interval index")
                 return projection["artifact"]
+        if all("days" in leaf and "day_rows" in leaf for leaf in leaves):
+            return artifact
         if "$artifact_concat" in artifact:
             source = artifact["original_source"]
             original = self.manifest(source["identity"])
@@ -1284,8 +1297,11 @@ class CoreStore:
         original = manifest["artifacts"][plan["name"]]
         if not isinstance(original, Mapping):
             raise ValueError("Core artifact index requires an original table")
-        leaves, schema = [], None
-        for leaf in original.get("$artifact_concat", [original]):
+        with self.read_transaction() as connection:
+            retained = self._indexed_artifact(connection, manifest, plan["name"])
+        retained_leaves = [] if retained is None else retained.get("$artifact_concat", [retained])
+        leaves, schema, columns = [], None, None
+        for position, leaf in enumerate(original.get("$artifact_concat", [original])):
             check_canceled()
             path = self._file(leaf["$file"])
             from .resources import admit_parquet_materialization
@@ -1299,17 +1315,30 @@ class CoreStore:
             current_schema = {key: str(dtype) for key, dtype in frame.schema.items()}
             if schema is not None and schema != current_schema:
                 raise ValueError("Core artifact index original leaf schemas differ")
+            if columns is not None and columns != frame.columns:
+                raise ValueError("Core artifact index original leaf column orders differ")
             schema = current_schema
+            columns = frame.columns
+            # Existing projections are immutable proof policy, including
+            # original v1. Only an absent index receives a new v2 projection.
+            prior = retained_leaves[position] if position < len(retained_leaves) else leaf
+            policy = prior.get("hash_policy", DATAFRAME_HASH_V1) if "days" in prior else DATAFRAME_HASH_V2
+            days = _hash_dataframe_days(frame, policy=policy)
+            if "days" in prior and (prior["days"] != days or
+                    prior.get("columns", frame.columns) != frame.columns):
+                raise ValueError("Core artifact original interval proof differs")
             leaves.append({**leaf, "schema": schema, "rows": frame.height,
+                "hash_policy": policy, "columns": frame.columns,
                 "unique_time": frame["time"].n_unique() == frame.height and frame["time"].is_sorted(),
                 "start": None if frame.is_empty() else str(frame["time"].min()),
                 "end": None if frame.is_empty() else str(frame["time"].max()),
-                "days": _hash_dataframe_days(frame),
+                "days": days,
                 "day_rows": {str(day["time"][0]): day.height for day in frame.partition_by("time", maintain_order=True)}})
         if not leaves:
             raise ValueError("Core artifact index requires original typed leaves")
         artifact = leaves[0] if "$artifact_concat" not in original else {**original,
-            "$artifact_concat": leaves, "schema": schema, "rows": sum(leaf["rows"] for leaf in leaves)}
+            "$artifact_concat": leaves, "schema": schema, "columns": columns,
+            "rows": sum(leaf["rows"] for leaf in leaves)}
         projection = {"version": plan["version"], "source_content": plan["source_content"],
             "artifact_identity": plan["artifact_identity"], "artifact": artifact}
         projection["digest"] = hash_mapping(projection)
@@ -1345,14 +1374,33 @@ class CoreStore:
             return None
         leaves = artifact.get("$artifact_concat", [artifact])
         days = {}
+        selected_policies = []
         for leaf in leaves:
             if "days" not in leaf:
                 return None
+            selected = False
+            policy = leaf.get("hash_policy", DATAFRAME_HASH_V1)
+            if policy not in {DATAFRAME_HASH_V1, DATAFRAME_HASH_V2}:
+                raise ValueError("Unknown Core artifact hash policy")
+            columns = leaf.get("columns", artifact.get("columns"))
+            if columns is None and policy == DATAFRAME_HASH_V1:
+                # Original arbitrary-column v1 digests cannot establish named
+                # equality. Explicit byte-audited index maintenance binds order.
+                return None
+            if (not isinstance(columns, list)
+                    or len(columns) != len(leaf["schema"])
+                    or set(columns) != set(leaf["schema"])):
+                raise ValueError("Core artifact ordered schema is missing or invalid")
             for day, token in leaf["days"].items():
                 if lower.isoformat() <= day <= upper.isoformat():
+                    selected = True
                     if day in days:
                         raise ValueError("artifact interval has overlapping original coordinates")
                     days[day] = token
+            if selected or not leaf["rows"]:
+                projection = {"policy": policy, "columns": columns}
+                if projection not in selected_policies:
+                    selected_policies.append(projection)
         from .computation_index import read
         with self.read_transaction() as connection:
             indexed = read(connection, manifest)
@@ -1362,7 +1410,8 @@ class CoreStore:
         if (not indexed["calendar"] or lower.isoformat() < indexed["calendar"][0]
                 or upper.isoformat() > indexed["calendar"][-1]):
             return None
-        return hash_mapping({"version": "core.artifact.interval.v1", "name": name,
+        return hash_mapping({"version": "core.artifact.interval.v2", "name": name,
+            "projections": selected_policies,
             "schema": artifact["schema"], "start": lower.isoformat(), "end": upper.isoformat(),
             "calendar": calendar, "days": days})
 
@@ -1398,6 +1447,8 @@ class CoreStore:
             frame = plan.collect()
             if {column: str(dtype) for column, dtype in frame.schema.items()} != artifact["schema"]:
                 raise ValueError("Core artifact typed schema differs")
+            if leaf.get("columns", artifact.get("columns", frame.columns)) != frame.columns:
+                raise ValueError("Core artifact column order differs")
             if set(str(day) for day in frame["time"].unique()) != set(selected):
                 raise ValueError("Core artifact selected coordinate coverage differs")
             if frame.height != sum(leaf["day_rows"][day] for day in selected):

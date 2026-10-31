@@ -28,7 +28,7 @@ from bagelquant_core.operation_contract import (
     TraceRule,
 )
 from bagelquant_core.operator import Operator, OPERATOR_REGISTRY
-from bagelquant_core.hashing import hash_dataframe
+from bagelquant_core.hashing import DATAFRAME_HASH_V1, hash_dataframe
 from bagelquant_core.operator_state import (
     checkpoint_capture_enabled, operator_execution_calendar, operator_period_work,
     restored_operator_state, save_operator_state,
@@ -976,7 +976,9 @@ def _update_prediction_statistics(operator, wide, targets, availability, state, 
                 metric = "quantile_rank" if operator.kind == "quantile_ic_weighted" else "spearman"
                 fitted = _rank_records(sample, alpha_names, metric=metric, quantiles=operator.quantiles)
                 record["statistics"] = [float(value) if np.isfinite(value) else None for value in fitted[0][2]]
-            record.update(status="fitted", input_identity=hash_dataframe(sample))
+            # This training table has a fixed feature/target channel order.
+            # Preserve its established checkpoint evidence policy.
+            record.update(status="fitted", input_identity=hash_dataframe(sample, policy=DATAFRAME_HASH_V1))
         records[str(period)] = record
     result = {"through": str(calendar[-1]), "calendar": [str(day) for day in calendar],
               "alpha_count": len(alpha_names), "records": records, "fit_windows": {}}

@@ -16,7 +16,7 @@ from bagelquant_core.frame import (
     normalize_date_expression,
     normalize_time_series,
 )
-from bagelquant_core.hashing import hash_dataframe, hash_mapping
+from bagelquant_core.hashing import DATAFRAME_HASH_V1, hash_dataframe, hash_mapping
 
 
 def _inclusive_date_count(values: Sequence[date] | pl.Series, start: date, end: date) -> int:
@@ -100,15 +100,15 @@ class Domain:
     def _set_signature(self, identity: str | None = None) -> None:
         self._signature = identity or hash_mapping(
             {
-                "calendar": hash_dataframe(pl.DataFrame({TIME: self._times})),
+                "calendar": hash_dataframe(pl.DataFrame({TIME: self._times}), policy=DATAFRAME_HASH_V1),
                 "assets": hash_dataframe(
-                    pl.DataFrame({ASSET_ID: self._asset_ids})
+                    pl.DataFrame({ASSET_ID: self._asset_ids}), policy=DATAFRAME_HASH_V1
                 ),
                 "dynamic": self._is_dynamic,
                 "active": (
                     None
                     if self._active_membership is None
-                    else hash_dataframe(self._active_membership)
+                    else hash_dataframe(self._active_membership, policy=DATAFRAME_HASH_V1)
                 ),
             }
         )

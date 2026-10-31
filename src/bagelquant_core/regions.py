@@ -10,7 +10,7 @@ from .computation_index import describe, interval
 from .finite_work import (_run_finite_outputs, admit_finite_payload, dispatch_finite_outputs,
     finite_payload_bytes)
 from .graph_management import parents
-from .hashing import _hash_dataframe_days, hash_mapping
+from .hashing import DATAFRAME_HASH_V1, _hash_dataframe_days, hash_mapping
 from .incremental import (CANONICAL_SESSIONS, FINITE_EXECUTION_POLICY, _parent_window,
     _reference_node, _relevant_parameters, scoped_domain)
 from .materialization import MaterializationKey, NodeMaterialization, materialization_trace_identity
@@ -230,7 +230,7 @@ def execute_region(plan, context, region, guard, *, proof_rebinding=None, _memor
             typed = Node.from_domain(frame, missing_domain, identity=plan.keys[context][node].identity,
                 value_type=kind, trace_columns=traces)
             frame = typed.collect(dense=False, include_traces=True)
-            days = _hash_dataframe_days(frame)
+            days = _hash_dataframe_days(frame, policy=DATAFRAME_HASH_V1)
             tail = describe(missing_domain, days=days, value_type=typed.value_type.value, trace_columns=traces)
             if prefix is not None:
                 original = certificate["nodes"][node]["index"]

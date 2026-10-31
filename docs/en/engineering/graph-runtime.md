@@ -1,5 +1,24 @@
 # Graph, cache, lifecycle and execution
 
+Generic DataFrame content hashing defaults to `core.dataframe.v2`, which binds
+ordered column names/types to positional row values. Explicit original-policy
+hashing remains available for retained evidence. Fixed Domain/value projections
+keep their existing v1 proofs; the interval contract independently binds trace
+declarations. Untraced eager inputs retain their original fixed time/asset/value
+addresses. Automatically addressed traced inputs use `content:v2:` identities;
+caller-supplied immutable identities remain unchanged. A retained unsafe source
+binding requires explicit original-proof maintenance when the ordinary planner
+cannot prove reuse; it never permits implicit historical replay.
+
+New dated auxiliary artifacts record v2 day hashes, ordered columns and their
+hash policy. Original unmarked artifacts remain readable and auditable, but their
+unordered generic v1 hashes cannot authorize named-column equality or composition.
+They require explicit artifact-index maintenance to audit original bytes and bind
+physical column order in a separate projection. Maintenance preserves recorded
+v1 day digests while granting an order-bound v2 interval proof; it never relabels
+the original manifest. An admitted prefix proof stays unchanged when referenced
+by a new tail. Metadata schema 4 and immutable historical files are unchanged.
+
 Retained older execution-policy receipts cannot veto independently completed
 current-policy prefixes with matching relevant parameters. Reuse still requires
 current block/input/parameter proofs before any kernel runs. If only obsolete
